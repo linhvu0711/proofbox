@@ -61,7 +61,7 @@ The hash of the Base image version, the Setup script, and the Work folder's lock
 _Avoid_: cache key, digest, tag
 
 **Secret**:
-An env value from the env file the Caller passes on create. It lives only on the Caller's machine until proofbox sends it into one Sandbox at run time, and it never enters a Snapshot.
+An env value from the env file the Caller passes on create. It lives only on the Caller's machine until proofbox sends it into one Sandbox, after the Setup script has finished and any Snapshot is saved, so neither ever holds it.
 _Avoid_: credential, env var
 
 ### Driving and watching
