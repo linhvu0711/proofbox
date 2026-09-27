@@ -1,0 +1,3 @@
+# proofbox brings a pinned Tool bundle; it never installs its tools with Homebrew
+
+On one of two fresh Namespace Macs, `brew install ffmpeg-full` crashed (`undefined method '[]' for nil`), and the core `ffmpeg` bottle has no `drawtext`. A check must not fail because a package manager did. So the core defines a Tool bundle (a static ffmpeg and proofbox's own input helper) where every file has a fixed hash, and each Provider decides how the bundle reaches its Sandboxes: inside the Base image for Docker, through `nsc artifact cache-url` for Namespace macOS, before the token is deleted and before any user code arrives.
