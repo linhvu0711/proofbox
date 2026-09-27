@@ -53,7 +53,7 @@ The pinned set of proofbox's own tools a Sandbox needs (ffmpeg, the input helper
 _Avoid_: dependencies, toolchain, runtime
 
 **Snapshot**:
-A saved Sandbox made from the Base image plus a finished Setup script, found again by its Fingerprint. A Provider without Snapshots runs the Setup script on every Sandbox.
+A saved Sandbox made from the Base image plus a finished Setup script, found again by its Fingerprint, and deleted after 14 days without use. A Provider without Snapshots runs the Setup script on every Sandbox.
 _Avoid_: image, template, warm pool, cache
 
 **Fingerprint**:

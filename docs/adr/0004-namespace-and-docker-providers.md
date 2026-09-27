@@ -14,6 +14,6 @@ Namespace was the only service that gives disposable macOS machines per minute f
 
 ## Consequences
 
-- Namespace Linux runs our Base image as a Docker container on a bare Namespace host, so it reuses the Docker provider's code. A Snapshot there is an image in the workspace registry with an expiry.
+- Namespace Linux runs our Base image as a Docker container on a bare Namespace host, so it reuses the Docker provider's code. A Snapshot there is an image in the workspace registry with an expiry. Each reuse pushes the expiry to at least 14 days ahead (`nsc registry update-image-expiration --ensure-minimum 336h`), so a Snapshot unused for 14 days is deleted by Namespace itself.
 - Namespace macOS has no custom images, so the Setup script runs on every Mac.
 - The Developer plan allows 12 macOS vCPU (https://namespace.so/docs/architecture/compute/resource-limits.md), and the live workspace showed 6. Six Macs at once needs the Team plan.
