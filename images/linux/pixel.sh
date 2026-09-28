@@ -74,6 +74,29 @@ case "$cmd" in
       shot
     fi
     ;;
+  scroll)
+    # scroll X Y BUTTON STEPS GLIDE_MS SETTLE_MS SHOT
+    inside "$1" "$2"
+    glide "$1" "$2" "$5"
+    xdotool click --repeat "$4" --delay 50 "$3"
+    settle "$6"
+    if [ "$7" = "1" ]; then
+      shot
+    fi
+    ;;
+  drag)
+    # drag X1 Y1 X2 Y2 GLIDE_MS SETTLE_MS SHOT
+    inside "$1" "$2"
+    inside "$3" "$4"
+    glide "$1" "$2" "$5"
+    xdotool mousedown 1
+    glide "$3" "$4" "$5"
+    xdotool mouseup 1
+    settle "$6"
+    if [ "$7" = "1" ]; then
+      shot
+    fi
+    ;;
   *)
     printf 'pixel: unknown command %s\n' "$cmd" >&2
     exit 2

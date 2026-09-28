@@ -216,6 +216,86 @@ describe("Pixel actions", () => {
     expect(keys).toEqual(["Control_L", "s"]);
   });
 
+  it("scroll turns the wheel at the point", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, [
+      "scroll",
+      id,
+      "700",
+      "400",
+      "down",
+      "3",
+      "--pace",
+      "fast",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    expect(events.filter((event) => event.type === "ButtonPress")).toEqual([
+      { type: "ButtonPress", root: [700, 400], button: 5 },
+      { type: "ButtonPress", root: [700, 400], button: 5 },
+      { type: "ButtonPress", root: [700, 400], button: 5 },
+    ]);
+  });
+
+  it("drag presses, moves, and releases", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, [
+      "drag",
+      id,
+      "100",
+      "200",
+      "500",
+      "200",
+      "--pace",
+      "fast",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "ButtonPress" || event.type === "ButtonRelease",
+      ),
+    ).toEqual([
+      { type: "ButtonPress", root: [100, 200], button: 1 },
+      { type: "ButtonRelease", root: [500, 200], button: 1 },
+    ]);
+  });
+
+  it("a drag that ends outside the screen does nothing", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, ["drag", id, "100", "200", "1500", "200"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Point 1500,200 is outside the screen (1440x900); use x 0 to 1439 and y 0 to 899\n",
+    );
+    const events = await readXev(env, id);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "ButtonPress" || event.type === "MotionNotify",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("click --screenshot writes the screen after the click", async () => {
     // Given
     const env = makeEnv({ docker: true });
