@@ -50,6 +50,10 @@ case "$cmd" in
     ;;
   stop)
     DIR=$(readlink "$CUR")
+    steps=$(cat "$DIR/steps" 2>/dev/null || echo 0)
+    if [ "$steps" -ge 1 ]; then
+      shot "$DIR/shot-$steps.png"
+    fi
     kill -TERM "$(cat "$DIR/pid")"
     i=0
     while [ $i -lt 100 ] && kill -0 "$(cat "$DIR/pid")" 2>/dev/null; do
@@ -58,13 +62,16 @@ case "$cmd" in
     done
     date +%s.%3N > "$DIR/stop"
     rm "$CUR"
-    steps=$(cat "$DIR/steps" 2>/dev/null || echo 0)
     printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
     ;;
   mark)
-    # mark LABEL: start a new numbered step with its caption text.
+    # mark LABEL: save the closing shot of the step now ending, then start
+    # a new numbered step with its caption text.
     DIR=$(readlink "$CUR")
     n=$(cat "$DIR/steps" 2>/dev/null || echo 0)
+    if [ "$n" -ge 1 ]; then
+      shot "$DIR/shot-$n.png"
+    fi
     n=$((n + 1))
     printf '%s' "$1" > "$DIR/caption-$n.txt"
     echo "$n" > "$DIR/steps"

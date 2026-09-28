@@ -128,6 +128,22 @@ export const stopRecording = (options: {
       return yield* helperFailed(video);
     }
     yield* writeOut(options.out, video.stdout);
+    const base = options.out.replace(/\.[^./\\]+$/, "");
+    const lines = [options.out];
+    for (let k = 1; k <= info.steps; k++) {
+      const shot = yield* runHelper(
+        options.id,
+        RECORD_HELPER,
+        ["fetch", `${info.dir}/shot-${k}.png`],
+        { outcome: "no Proof video was made" },
+      );
+      if (shot.code !== 0) {
+        return yield* helperFailed(shot);
+      }
+      const path = `${base}-${k}.png`;
+      yield* writeOut(path, shot.stdout);
+      lines.push(path);
+    }
     const output = yield* CliOutput;
-    yield* output.out(`${options.out}\n`);
+    yield* output.out(`${lines.join("\n")}\n`);
   }).pipe(Effect.scoped);

@@ -135,4 +135,50 @@ describe("Recording and the Proof video", () => {
     ]);
     expect(probe.stderr).toContain("1440x972");
   });
+
+  it("each mark saves a full-size Proof screenshot next to the video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const out = join(dir, "proof.mp4");
+    const shot1 = join(dir, "proof-1.png");
+    const shot2 = join(dir, "proof-2.png");
+    expect(result.stdout).toBe(`${out}\n${shot1}\n${shot2}\n`);
+    for (const path of [shot1, shot2]) {
+      const png = readFileSync(path);
+      expect(png.readUInt32BE(16)).toBe(1440);
+      expect(png.readUInt32BE(20)).toBe(900);
+    }
+    expect(
+      Buffer.compare(readFileSync(shot1), readFileSync(shot2)),
+    ).not.toBe(0);
+  });
 });
