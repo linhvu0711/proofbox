@@ -153,6 +153,17 @@ export class SetupScriptMissingError extends Data.TaggedError(
   }
 }
 
+export class EnvFileUnreadableError extends Data.TaggedError(
+  "EnvFileUnreadableError",
+)<{
+  readonly path: string;
+  readonly reason: "not found" | "is not readable" | "is a folder";
+}> {
+  get message() {
+    return `Env file ${this.path} ${this.reason}. Nothing was created.`;
+  }
+}
+
 export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
   readonly path: string;
   readonly line: number;

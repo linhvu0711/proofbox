@@ -424,4 +424,73 @@ describe("create", () => {
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
+
+  it("create with a missing env file makes nothing", async () => {
+    // Given: an env file path that does not exist
+    const env = makeEnv();
+    const missing = join(
+      mkdtempSync(join(tmpdir(), "proofbox-env-")),
+      "none.env",
+    );
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      missing,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${missing} not found. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("create with an unreadable env file makes nothing", async () => {
+    // Given: an env file mode 000
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o000);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} is not readable. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("create with a folder as env file makes nothing", async () => {
+    // Given: a folder passed as the env file
+    const env = makeEnv();
+    const folder = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      folder,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${folder} is a folder. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
 });

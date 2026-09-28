@@ -102,7 +102,9 @@ export const runCli = (
     }
     execFile(
       process.execPath,
-      ["--disable-warning=ExperimentalWarning", "src/main.ts", ...args],
+      // `--` ends Node's own flag scan; without it Node treats a
+      // `--env-file` meant for the CLI as its own (nodejs/node#54232).
+      ["--disable-warning=ExperimentalWarning", "--", "src/main.ts", ...args],
       {
         cwd: repoRoot,
         env: childEnv,

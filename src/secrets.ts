@@ -4,6 +4,7 @@ import { Effect, Redacted } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import {
   EnvFileLineError,
+  EnvFileUnreadableError,
   ProviderError,
   SecretsSendFailedError,
 } from "./errors.ts";
@@ -62,11 +63,28 @@ export const readEnvFile = (path: string) =>
   Effect.gen(function* () {
     const text = yield* Effect.tryPromise({
       try: () => readFile(path, "utf8"),
-      catch: (cause) =>
-        new ProviderError({
-          provider: "local",
-          reason: cause instanceof Error ? cause.message : String(cause),
-        }),
+      catch: (cause) => {
+        const code =
+          typeof cause === "object" && cause !== null && "code" in cause
+            ? cause.code
+            : undefined;
+        switch (code) {
+          case "ENOENT":
+            return new EnvFileUnreadableError({ path, reason: "not found" });
+          case "EACCES":
+            return new EnvFileUnreadableError({
+              path,
+              reason: "is not readable",
+            });
+          case "EISDIR":
+            return new EnvFileUnreadableError({ path, reason: "is a folder" });
+          default:
+            return new ProviderError({
+              provider: "local",
+              reason: cause instanceof Error ? cause.message : String(cause),
+            });
+        }
+      },
     });
     return yield* parseEnvFile(path, text);
   });
