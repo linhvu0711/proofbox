@@ -1,10 +1,24 @@
-import { Clock, Duration, Effect } from "effect";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
-import { ProviderError, SandboxGoneError } from "../errors.ts";
+import {
+  ProviderError,
+  SandboxGoneError,
+  ToolBundleHashError,
+} from "../errors.ts";
+import { Progress } from "../progress.ts";
 import { type ExecOptions, SandboxInfo } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
+import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { Link } from "./ssh-link.ts";
+
+// proofbox's own Mac files: the input helper and the Pixel script.
+export const MACOS_DIR = fileURLToPath(
+  new URL("../../images/macos/", import.meta.url),
+);
 
 // A Namespace Mac has no container: the Sandbox is the Mac itself, and
 // every login lands as `runner` (uid 501) with passwordless sudo. The
@@ -75,6 +89,84 @@ export const writeMacState = (
       maxLifeAt: req.maxLifeAt,
       size: req.size,
     });
+  });
+
+// Sends a file of this repo to `remote` on the Mac, executable.
+const sendFile = (link: Link, local: string, remote: string) =>
+  Effect.gen(function* () {
+    const bytes = yield* Effect.tryPromise({
+      try: () => readFile(local),
+      catch: (cause) =>
+        fail(cause instanceof Error ? cause.message : String(cause)),
+    });
+    const events = yield* link
+      .stream(
+        `cat > ${shellJoin([remote])} && chmod 755 ${shellJoin([remote])}`,
+        { stdin: Stream.make(new Uint8Array(bytes)) },
+      )
+      .pipe(Stream.runCollect);
+    const exit = Chunk.findLast(events, (event) => event._tag === "Exit");
+    if (
+      exit._tag === "None" ||
+      exit.value._tag !== "Exit" ||
+      exit.value.code !== 0
+    ) {
+      return yield* fail(`sending ${remote} to the Mac failed`);
+    }
+  });
+
+// The macOS Tool bundle: downloads come through Namespace's cache with the
+// workload token (so this runs before the token goes), proofbox's own files
+// over the link; then every file is hashed on the Mac. No Homebrew.
+const installTools = (link: Link, id: string) =>
+  Effect.gen(function* () {
+    const tools = TOOL_BUNDLE.flatMap((tool) =>
+      tool.macos === undefined
+        ? []
+        : [{ name: tool.name, path: tool.path, source: tool.macos.arm64 }],
+    );
+    for (const tool of tools) {
+      if ("url" in tool.source) {
+        yield* step(
+          link,
+          `fetching ${tool.name}`,
+          `cd /tmp && rm -rf proofbox-tool && mkdir proofbox-tool && /opt/nsc/bin/nsc artifact cache-url ${shellJoin([tool.source.url])} --out proofbox-tool/archive.zip && unzip -o -q proofbox-tool/archive.zip -d proofbox-tool && mv proofbox-tool/${tool.name} ${shellJoin([tool.path])} && chmod 755 ${shellJoin([tool.path])}`,
+        );
+      } else {
+        yield* sendFile(link, join(MACOS_DIR, tool.source.file), tool.path);
+      }
+    }
+    const sums = yield* step(
+      link,
+      "checking the Tool bundle",
+      `shasum -a 256 ${shellJoin(tools.map((tool) => tool.path))}`,
+    );
+    for (const tool of tools) {
+      const line = sums.stdout
+        .split("\n")
+        .find((entry) => entry.endsWith(`  ${tool.path}`));
+      if (line?.split("  ")[0] !== tool.source.sha256) {
+        return yield* new ToolBundleHashError({
+          file: tool.path,
+          sandboxId: `ns:${id}`,
+        });
+      }
+    }
+  });
+
+// Everything a Mac needs before user code arrives, in order.
+export const prepareMac = (
+  link: Link,
+  req: Parameters<typeof writeMacState>[1],
+) =>
+  Effect.gen(function* () {
+    const progress = yield* Progress;
+    const info = yield* writeMacState(link, req);
+    yield* progress.step(
+      "installing the Tool bundle",
+      installTools(link, req.id),
+    );
+    return info;
   });
 
 export const readMac = (link: Link, name: string) =>

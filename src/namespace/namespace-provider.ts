@@ -32,13 +32,8 @@ import { Progress } from "../progress.ts";
 import { type Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
-import { TOOL_BUNDLE } from "../tool-bundle.ts";
-import {
-  macExec,
-  readMac,
-  writeMacDeadline,
-  writeMacState,
-} from "./mac-host.ts";
+import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
+import { macExec, prepareMac, readMac, writeMacDeadline } from "./mac-host.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
   pullSnapshot,
@@ -529,7 +524,7 @@ export const makeNamespaceProvider = (deps: {
         );
         const link = yield* deps.openLink(id, hostPaths, "cli");
         if (macos) {
-          return yield* writeMacState(link, {
+          return yield* prepareMac(link, {
             id,
             idle: req.idle,
             maxLifeAt: new Date(maxLifeSeconds * 1000),
@@ -537,7 +532,10 @@ export const makeNamespaceProvider = (deps: {
           });
         }
         const registry = yield* readTenant(link);
-        const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+        const version = yield* baseImageVersion(
+          BASE_IMAGE_DIR,
+          LINUX_TOOL_BUNDLE,
+        );
         const snapshotImage =
           req.snapshot === undefined
             ? undefined
@@ -763,7 +761,7 @@ export const makeNamespaceProvider = (deps: {
     },
     liveView,
     snapshots: {
-      baseVersion: baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE),
+      baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
       save: saveSnapshot,
     },
     create,

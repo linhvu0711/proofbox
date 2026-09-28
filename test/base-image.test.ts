@@ -8,6 +8,7 @@ import { CliOutput } from "../src/cli-output.ts";
 import { baseImageVersion, ensureBaseImage } from "../src/docker/base-image.ts";
 import type { DockerClient, DockerError } from "../src/docker/docker-client.ts";
 import { Progress } from "../src/progress.ts";
+import { LINUX_TOOL_BUNDLE } from "../src/tool-bundle.ts";
 
 const stubClient = (
   imageExists: boolean,
@@ -48,6 +49,38 @@ describe("Base image", () => {
       // Then
       expect(first).toBe("8c858f0d6b7a");
       expect(second).toBe("dda6097aecf9");
+    }),
+  );
+
+  it.effect("macOS tools leave the Linux Base image version unchanged", () =>
+    Effect.gen(function* () {
+      // Given: an image dir, and the ffmpeg entry as it was before macOS
+      const dir = mkdtempSync(join(tmpdir(), "proofbox-image-"));
+      dirs.push(dir);
+      writeFileSync(join(dir, "Dockerfile"), "FROM scratch\n");
+      const linuxOnly = [
+        {
+          name: "ffmpeg",
+          path: "/opt/proofbox/tools/ffmpeg",
+          linux: {
+            amd64: {
+              url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-25-15-37/ffmpeg-n9.0.2-8-gb135b25c19-linux64-gpl-9.0.tar.xz",
+              sha256:
+                "9a380286db8a65bfadf83b67256e58b0e8fbe0a82781375ec7fd410ebee73f02",
+            },
+            arm64: {
+              url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-25-15-37/ffmpeg-n9.0.2-8-gb135b25c19-linuxarm64-gpl-9.0.tar.xz",
+              sha256:
+                "583e6f13cdc325e4633d1d61f2d27bb8baeb234a4f75fca4e0b8f2b9aab09e60",
+            },
+          },
+        },
+      ];
+      // When
+      const now = yield* baseImageVersion(dir, LINUX_TOOL_BUNDLE);
+      const before = yield* baseImageVersion(dir, linuxOnly);
+      // Then
+      expect(now).toBe(before);
     }),
   );
 

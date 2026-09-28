@@ -14,7 +14,7 @@ import {
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, parseSize, type Size } from "../size.ts";
-import { TOOL_BUNDLE } from "../tool-bundle.ts";
+import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -335,7 +335,10 @@ export const makeDockerProvider = (options: {
       // Prove the daemon answers before anything is made — and before the
       // progress line prints, so a dead daemon reports only the error.
       const arch = yield* client.serverArch;
-      const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+      const version = yield* baseImageVersion(
+        BASE_IMAGE_DIR,
+        LINUX_TOOL_BUNDLE,
+      );
       const bundle = yield* toolBundleForArch(arch);
       const tag = options.imageTag ?? baseImageTag(version);
       yield* ensureBaseImage(

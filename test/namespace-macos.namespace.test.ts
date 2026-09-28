@@ -59,6 +59,24 @@ describe("Namespace macOS Provider", () => {
     expect(version.stdout).toMatch(/^26\./);
   });
 
+  it("the Tool bundle on the Mac has the pinned hashes", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const sums = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "shasum",
+      "-a",
+      "256",
+      "/opt/proofbox/tools/ffmpeg",
+    ]);
+    // Then
+    expect(sums.stdout).toBe(
+      "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384  /opt/proofbox/tools/ffmpeg\n",
+    );
+  });
+
   it("live and record on a Mac are refused until #15", async () => {
     // Given: the Mac from beforeAll
     // When

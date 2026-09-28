@@ -18,6 +18,7 @@ import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { HostResult, Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
+import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 
 type CreateRequest = Parameters<NscClient["create"]>[0];
 
@@ -55,7 +56,7 @@ const makeMac = (
       portForward: () => Effect.die("unused"),
     };
     const reply = (line: string) => {
-      const found = answer(line) ?? {};
+      const found = answer(line) ?? defaultAnswer(line) ?? {};
       const stdout = found.stdout ?? "";
       return {
         exitCode: found.exitCode ?? 0,
@@ -108,6 +109,22 @@ const makeMac = (
     });
     return { provider, calls, requests, commands, detached };
   });
+
+// The Mac's own answer to `shasum -a 256 <paths>`: the pinned hashes.
+const pinnedShasum = (line: string) =>
+  line
+    .slice("shasum -a 256 ".length)
+    .split(" ")
+    .map((path) => {
+      const file = TOOL_BUNDLE.find((tool) => `'${tool.path}'` === path);
+      return `${file?.macos?.arm64.sha256 ?? ""}  ${path.replaceAll("'", "")}\n`;
+    })
+    .join("");
+
+const defaultAnswer = (line: string): Answer | undefined =>
+  line.startsWith("shasum -a 256 ")
+    ? { stdout: pinnedShasum(line) }
+    : undefined;
 
 const runtimeDir = () => mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
 
@@ -207,5 +224,51 @@ describe("Namespace macOS Provider", () => {
         expect(lines.some((line) => line.includes("docker exec"))).toBe(false);
       }).pipe(withRuntime(runtime));
     },
+  );
+
+  it.effect(
+    "macOS create fetches ffmpeg through nsc artifact cache-url and checks every hash",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        expect(
+          lines.some((line) =>
+            line.includes(
+              "/opt/nsc/bin/nsc artifact cache-url 'https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip'",
+            ),
+          ),
+        ).toBe(true);
+        const shasum = lines.find((line) => line.startsWith("shasum -a 256"));
+        for (const tool of TOOL_BUNDLE.filter((tool) => tool.macos)) {
+          expect(shasum).toContain(`'${tool.path}'`);
+        }
+        expect(lines.some((line) => line.includes("brew"))).toBe(false);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("a Tool bundle file with the wrong hash deletes the Mac", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac((line) =>
+        line.startsWith("shasum -a 256")
+          ? {
+              stdout:
+                "0000000000000000000000000000000000000000000000000000000000000000  /opt/proofbox/tools/ffmpeg\n",
+            }
+          : undefined,
+      );
+      // When
+      const error = yield* Effect.flip(mac.provider.create(createMac()));
+      // Then
+      expect(error.message).toBe(
+        "Tool bundle file /opt/proofbox/tools/ffmpeg has the wrong hash; deleted ns:abc123def4567. Run create again",
+      );
+      expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+    }).pipe(withRuntime(runtimeDir())),
   );
 });

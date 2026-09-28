@@ -68,7 +68,7 @@ const fakeDocker = (options: {
       const line = argv.join(" ");
       if (argv[0] === "sha256sum") {
         const file = TOOL_BUNDLE.find((tool) => tool.path === argv[1]);
-        return ok(`${file?.linux.amd64.sha256 ?? ""}  ${argv[1]}\n`);
+        return ok(`${file?.linux?.amd64.sha256 ?? ""}  ${argv[1]}\n`);
       }
       if (line.includes("xdpyinfo")) {
         return ok();

@@ -27,10 +27,15 @@ export class ToolBundleHashError extends Data.TaggedError(
 )<{
   readonly file: string;
   readonly sandboxId: string;
-  readonly tag: string;
+  // The image that carried the file; a Mac fetches its tools itself.
+  readonly tag?: string | undefined;
 }> {
   get message() {
-    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. Run docker image rm ${this.tag} and try again`;
+    const next =
+      this.tag === undefined
+        ? "Run create again"
+        : `Run docker image rm ${this.tag} and try again`;
+    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. ${next}`;
   }
   get reason() {
     return this.message;
