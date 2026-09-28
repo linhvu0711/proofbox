@@ -6,6 +6,7 @@ printf '%s\n' "$PROOFBOX_DEADLINE" > /run/proofbox/deadline
 chmod 0755 /run/proofbox
 chmod 0644 /run/proofbox/deadline
 install -o app -g app -m 0644 /dev/null /run/proofbox/action-log.jsonl
+install -d -o app -g app -m 0755 /run/proofbox/recordings
 
 env HOME=/home/app runuser -u app -- Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
 env HOME=/home/app runuser -u app -- sh -c 'until xdpyinfo -display :99 >/dev/null 2>&1; do sleep 0.1; done; exec fluxbox' &

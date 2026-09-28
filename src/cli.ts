@@ -6,6 +6,7 @@ import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { pressKey } from "./commands/key.ts";
+import { startRecording, stopRecording } from "./commands/record.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
 import { scrollAt } from "./commands/scroll.ts";
@@ -217,6 +218,25 @@ const del = Command.make(
   ({ id }) => deleteSandbox(id),
 );
 
+const recordStart = Command.make(
+  "start",
+  { id: Args.text({ name: "id" }) },
+  ({ id }) => startRecording(id),
+);
+
+const recordStop = Command.make(
+  "stop",
+  {
+    id: Args.text({ name: "id" }),
+    out: Options.text("out"),
+  },
+  ({ id, out }) => stopRecording({ id, out }),
+);
+
+const record = Command.make("record").pipe(
+  Command.withSubcommands([recordStart, recordStop]),
+);
+
 const upload = Command.make(
   "upload",
   {
@@ -247,6 +267,7 @@ const command = Command.make("proofbox").pipe(
     list,
     del,
     upload,
+    record,
   ]),
 );
 
