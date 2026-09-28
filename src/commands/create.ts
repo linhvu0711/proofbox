@@ -3,6 +3,7 @@ import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
 import { MissingCapabilityError, UnknownProviderError } from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
+import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
 
 export const createSandbox = (options: {
@@ -43,8 +44,9 @@ export const createSandbox = (options: {
     const output = yield* CliOutput;
     const id = `${provider.name}:${info.name}`;
     const keeper = yield* KeeperClient;
-    yield* keeper
-      .start(id)
+    const progress = yield* Progress;
+    yield* progress
+      .step("starting Keeper", keeper.start(id))
       .pipe(
         Effect.catchAll(() =>
           output.err(

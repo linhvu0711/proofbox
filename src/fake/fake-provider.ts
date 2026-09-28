@@ -7,6 +7,7 @@ import { Command, CommandExecutor } from "@effect/platform";
 import { Clock, Config, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { nextDeadline } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
+import { Progress } from "../progress.ts";
 import {
   type Connection,
   type ExecEvent,
@@ -98,7 +99,7 @@ export const makeFakeProvider = (options: {
       catch: (cause) => fail(describe(cause)),
     });
 
-  const create = (req: {
+  const createWork = (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
@@ -151,6 +152,15 @@ export const makeFakeProvider = (options: {
       }
       return new SandboxInfo({ name, ...file });
     });
+
+  const create = (req: {
+    readonly os: Os;
+    readonly idle: Duration.Duration;
+    readonly maxLife: Duration.Duration;
+  }) =>
+    Effect.flatMap(Progress, (progress) =>
+      progress.step("creating fake Sandbox", createWork(req)),
+    );
 
   const get = (name: string) => readFileInfo(name);
 

@@ -8,6 +8,7 @@ import {
   type Stream,
 } from "effect";
 import type { ProviderError, SandboxGoneError } from "./errors.ts";
+import type { Progress } from "./progress.ts";
 
 export const Os = Schema.Literal("linux", "macos");
 export type Os = typeof Os.Type;
@@ -42,7 +43,7 @@ export interface Provider {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-  }) => Effect.Effect<SandboxInfo, ProviderError>;
+  }) => Effect.Effect<SandboxInfo, ProviderError, Progress>;
   readonly extend: (
     name: string,
     deadline: Date,

@@ -25,6 +25,7 @@ import {
 } from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { Progress } from "../src/progress.ts";
 import { type Provider, Providers } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
@@ -39,13 +40,16 @@ const makeProviders = () => {
     ]),
   );
 };
-const layers = () =>
-  Layer.mergeAll(
+const layers = () => {
+  const providers = makeProviders();
+  return Layer.mergeAll(
     NodeContext.layer,
     CliOutput.Test,
-    makeProviders(),
-    KeeperClient.Direct.pipe(Layer.provide(makeProviders())),
+    providers,
+    KeeperClient.Direct.pipe(Layer.provide(providers)),
+    Progress.Default.pipe(Layer.provide(CliOutput.Test)),
   );
+};
 
 const sandboxName = Effect.gen(function* () {
   const output = yield* CliOutput;

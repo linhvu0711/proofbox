@@ -7,6 +7,7 @@ import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { ProvidersLive } from "./fake/fake-provider.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
+import { Progress } from "./progress.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
@@ -40,6 +41,7 @@ const program = Effect.gen(function* () {
       KeeperClient.Default.pipe(
         Layer.provide(Layer.mergeAll(CliOutput.Default, ProvidersLive)),
       ),
+      Progress.Default.pipe(Layer.provide(CliOutput.Default)),
     ),
   ),
 );
