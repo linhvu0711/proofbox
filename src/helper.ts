@@ -1,7 +1,10 @@
 import { Effect, Stream } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import { MissingCapabilityError } from "./errors.ts";
-import { KeeperClient, type KeeperExecOptions } from "./keeper/keeper-client.ts";
+import {
+  KeeperClient,
+  type KeeperExecOptions,
+} from "./keeper/keeper-client.ts";
 import { type Os, Providers } from "./provider.ts";
 import { parseSandboxId } from "./sandbox-id.ts";
 
@@ -49,9 +52,7 @@ export const runHelper = (
         const events = yield* keeper.exec(
           rawId,
           [helper, ...argv],
-          options.stdin === undefined
-            ? undefined
-            : { stdin: options.stdin },
+          options.stdin === undefined ? undefined : { stdin: options.stdin },
         );
         return yield* events.pipe(
           Stream.runFold(

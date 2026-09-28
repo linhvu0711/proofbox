@@ -82,8 +82,6 @@ describe("render-edit", () => {
     expect(script).toContain(
       "color=c=black@0:s=48x48:r=30:d=2.3,format=rgba,geq=r='255':g='59':b='48':a='if(between(hypot(X-24,Y-24),20,24),230,0)'",
     );
-    expect(script).toContain(
-      "overlay=x=676:y=448:enable='between(t,1.5,2.3)'",
-    );
+    expect(script).toContain("overlay=x=676:y=448:enable='between(t,1.5,2.3)'");
   });
 });

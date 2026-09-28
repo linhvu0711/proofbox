@@ -178,103 +178,97 @@ describe("Recording and the Proof video", () => {
       expect(png.readUInt32BE(16)).toBe(1440);
       expect(png.readUInt32BE(20)).toBe(900);
     }
-    expect(
-      Buffer.compare(readFileSync(shot1), readFileSync(shot2)),
-    ).not.toBe(0);
+    expect(Buffer.compare(readFileSync(shot1), readFileSync(shot2))).not.toBe(
+      0,
+    );
   });
 
-  it(
-    "a 3-minute Recording with long pauses comes out under 30 s",
-    { timeout: 420_000 },
-    async () => {
-      // Given
-      const env = makeEnv({ docker: true });
-      const created = await create(env);
-      const id = created.stdout.trim();
-      const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
-      await runCli(env, ["record", "start", id]);
-      const actions = [
-        ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
-        ["key", id, "Escape", "--pace", "fast"],
-        ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
-      ];
-      for (const [index, action] of actions.entries()) {
-        await runCli(env, ["mark", id, `step ${index + 1}`]);
-        await runCli(env, action);
-        await wait(55_000);
-      }
-      // When
-      const result = await runCli(env, [
-        "record",
-        "stop",
-        id,
-        "--out",
-        join(dir, "proof.mp4"),
-      ]);
-      // Then
-      expect(result.exitCode).toBe(0);
-      const probe = await runCli(env, [
-        "exec",
-        id,
-        "--",
-        "/opt/proofbox/tools/ffmpeg",
-        "-hide_banner",
-        "-i",
-        "/run/proofbox/recordings/1/proof.mp4",
-      ]);
-      const duration = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(probe.stderr);
-      const seconds =
-        Number(duration?.[1]) * 3600 +
-        Number(duration?.[2]) * 60 +
-        Number(duration?.[3]);
-      expect(seconds).toBeLessThan(30);
-      expect(seconds).toBeGreaterThanOrEqual(9);
-    },
-  );
+  it("a 3-minute Recording with long pauses comes out under 30 s", {
+    timeout: 420_000,
+  }, async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    const actions = [
+      ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
+      ["key", id, "Escape", "--pace", "fast"],
+      ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
+    ];
+    for (const [index, action] of actions.entries()) {
+      await runCli(env, ["mark", id, `step ${index + 1}`]);
+      await runCli(env, action);
+      await wait(55_000);
+    }
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/run/proofbox/recordings/1/proof.mp4",
+    ]);
+    const duration = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(probe.stderr);
+    const seconds =
+      Number(duration?.[1]) * 3600 +
+      Number(duration?.[2]) * 60 +
+      Number(duration?.[3]);
+    expect(seconds).toBeLessThan(30);
+    expect(seconds).toBeGreaterThanOrEqual(9);
+  });
 
-  it(
-    "a Proof video over --max-size exits with its size and keeps the raw Recording",
-    { timeout: 300_000 },
-    async () => {
-      // Given
-      const env = makeEnv({ docker: true });
-      const created = await create(env);
-      const id = created.stdout.trim();
-      const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
-      const noise = await startNoise(env, id);
-      expect(noise.exitCode).toBe(0);
-      await runCli(env, ["record", "start", id]);
-      await wait(10_000);
-      // When
-      const result = await runCli(env, [
-        "record",
-        "stop",
-        id,
-        "--out",
-        join(dir, "big.mp4"),
-        "--max-size",
-        "1MB",
-      ]);
-      // Then
-      expect(result.exitCode).toBe(125);
-      expect(
-        result.stderr.match(/trying lower quality/g),
-      ).toHaveLength(2);
-      expect(result.stderr).toMatch(
-        /Proof video is \d+\.\d MB at the lowest quality, over the 1\.0 MB Size limit/,
-      );
-      expect(existsSync(join(dir, "big.mp4"))).toBe(false);
-      const raw = await runCli(env, [
-        "exec",
-        id,
-        "--",
-        "test",
-        "-s",
-        "/run/proofbox/recordings/1/raw.mkv",
-      ]);
-      expect(raw.exitCode).toBe(0);
-    },
-  );
+  it("a Proof video over --max-size exits with its size and keeps the raw Recording", {
+    timeout: 300_000,
+  }, async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    const noise = await startNoise(env, id);
+    expect(noise.exitCode).toBe(0);
+    await runCli(env, ["record", "start", id]);
+    await wait(10_000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "big.mp4"),
+      "--max-size",
+      "1MB",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr.match(/trying lower quality/g)).toHaveLength(2);
+    expect(result.stderr).toMatch(
+      /Proof video is \d+\.\d MB at the lowest quality, over the 1\.0 MB Size limit/,
+    );
+    expect(existsSync(join(dir, "big.mp4"))).toBe(false);
+    const raw = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "test",
+      "-s",
+      "/run/proofbox/recordings/1/raw.mkv",
+    ]);
+    expect(raw.exitCode).toBe(0);
+  });
 
   it("record stop --discard downloads nothing and keeps the raw Recording and the Action log", async () => {
     // Given
@@ -427,9 +421,9 @@ describe("Recording and the Proof video", () => {
     ]);
     // Then
     expect(result.exitCode).toBe(0);
-    expect(result.stderr.startsWith("proofbox: building the Proof video\n")).toBe(
-      true,
-    );
+    expect(
+      result.stderr.startsWith("proofbox: building the Proof video\n"),
+    ).toBe(true);
     expect(result.stdout).toBe(`${join(dir, "proof.mp4")}\n`);
   });
 });

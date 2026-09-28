@@ -116,12 +116,10 @@ export const planEdit = (input: PlanInput): EditPlan => {
     const holds = step > 0 || input.marks.length === 0;
 
     const stills = input.freezes
-      .map(
-        ([a, b]): readonly [number, number] => [
-          Math.max(a, start),
-          Math.min(b ?? input.duration, end),
-        ],
-      )
+      .map(([a, b]): readonly [number, number] => [
+        Math.max(a, start),
+        Math.min(b ?? input.duration, end),
+      ])
       .filter(([a, b]) => b > a);
     const changing: [number, number][] = [];
     let position = start;
@@ -190,7 +188,13 @@ export const planEdit = (input: PlanInput): EditPlan => {
         out += 3;
       } else {
         const seconds = Math.max(2, 3 - (out - outStart));
-        clips.push({ kind: "still", at: cursor, seconds, label: endLabel, step });
+        clips.push({
+          kind: "still",
+          at: cursor,
+          seconds,
+          label: endLabel,
+          step,
+        });
         out += seconds;
       }
       if (input.marks.length > 0) {

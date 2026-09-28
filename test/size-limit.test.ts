@@ -32,25 +32,27 @@ describe("Size limit", () => {
     }).pipe(Effect.provide(CliOutput.Test)),
   );
 
-  it.effect("a video still over the limit at the lowest quality is refused", () =>
-    Effect.gen(function* () {
-      // Given
-      const sizes = [12_400_000, 11_200_000, 10_600_000];
-      const crfs: number[] = [];
-      const encode = (crf: number) => {
-        crfs.push(crf);
-        return Effect.succeed(sizes[crfs.length - 1] ?? 0);
-      };
-      // When
-      const error = yield* encodeUnderLimit(encode, {
-        limit: 10_000_000,
-        raw: "/run/proofbox/recordings/1/raw.mkv",
-      }).pipe(Effect.flip);
-      // Then
-      expect(error._tag).toBe("ProofTooBigError");
-      expect(error.message).toBe(
-        "Proof video is 10.6 MB at the lowest quality, over the 10.0 MB Size limit, so nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; record a shorter walk, or raise --max-size.",
-      );
-    }).pipe(Effect.provide(CliOutput.Test)),
+  it.effect(
+    "a video still over the limit at the lowest quality is refused",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const sizes = [12_400_000, 11_200_000, 10_600_000];
+        const crfs: number[] = [];
+        const encode = (crf: number) => {
+          crfs.push(crf);
+          return Effect.succeed(sizes[crfs.length - 1] ?? 0);
+        };
+        // When
+        const error = yield* encodeUnderLimit(encode, {
+          limit: 10_000_000,
+          raw: "/run/proofbox/recordings/1/raw.mkv",
+        }).pipe(Effect.flip);
+        // Then
+        expect(error._tag).toBe("ProofTooBigError");
+        expect(error.message).toBe(
+          "Proof video is 10.6 MB at the lowest quality, over the 10.0 MB Size limit, so nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; record a shorter walk, or raise --max-size.",
+        );
+      }).pipe(Effect.provide(CliOutput.Test)),
   );
 });

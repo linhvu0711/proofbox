@@ -1,13 +1,12 @@
 import { Effect } from "effect";
-import {
-  BadMarkError,
-  NoRecordingError,
-  ProviderError,
-} from "../errors.ts";
+import { BadMarkError, NoRecordingError, ProviderError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
 import { RECORD_HELPER } from "./record.ts";
 
-export const setMark = (options: { readonly id: string; readonly label: string }) =>
+export const setMark = (options: {
+  readonly id: string;
+  readonly label: string;
+}) =>
   Effect.gen(function* () {
     if (
       options.label.length < 1 ||

@@ -8,7 +8,7 @@ import {
   ProviderError,
 } from "./errors.ts";
 import { runHelper } from "./helper.ts";
-import { type Os, Providers } from "./provider.ts";
+import type { Os } from "./provider.ts";
 
 export const PIXEL_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/pixel",

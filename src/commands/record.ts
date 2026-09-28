@@ -9,15 +9,11 @@ import {
 } from "../errors.ts";
 import { runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
-import { type Os } from "../provider.ts";
 import { Progress } from "../progress.ts";
-import {
-  nothingChanged,
-  parseProbe,
-  planEdit,
-} from "../proof/edit-plan.ts";
+import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
+import type { Os } from "../provider.ts";
 
 export const RECORD_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/record",

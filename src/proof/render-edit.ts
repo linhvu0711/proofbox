@@ -1,7 +1,6 @@
 import type { EditPlan } from "./edit-plan.ts";
 
-const num = (value: number): string =>
-  value.toFixed(3).replace(/\.?0+$/, "");
+const num = (value: number): string => value.toFixed(3).replace(/\.?0+$/, "");
 
 export const renderEdit = (
   plan: EditPlan,
@@ -64,8 +63,7 @@ export const renderEdit = (
   );
   const overlays = plan.rings.map((ring, index) => {
     const input = index === 0 ? "v" : `o${index - 1}`;
-    const output =
-      index === plan.rings.length - 1 ? "out" : `o${index}`;
+    const output = index === plan.rings.length - 1 ? "out" : `o${index}`;
     return (
       `[${input}][r${index}]overlay=x=${ring.x - half}` +
       `:y=${ring.y + bar - half}` +
