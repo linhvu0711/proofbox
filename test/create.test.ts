@@ -1,14 +1,22 @@
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupEnvs, makeEnv, makeGitFolder, runCli } from "./support/cli.ts";
+import {
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+  trackTempDir,
+} from "./support/cli.ts";
 
 const workFixture = () =>
   makeGitFolder({
@@ -24,6 +32,15 @@ const setupScript = (content: string) => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-setup-"));
   const path = join(dir, "setup.sh");
   writeFileSync(path, content);
+  return path;
+};
+
+const envFile = (content: string, mode = 0o600) => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+  trackTempDir(dir);
+  const path = join(dir, "app.env");
+  writeFileSync(path, content);
+  chmodSync(path, mode);
   return path;
 };
 
@@ -225,5 +242,313 @@ describe("create", () => {
       `Setup script ${missing} not found. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("a command run after create --env-file sees each Secret", async () => {
+    // Given: an env file with two Secrets
+    const env = makeEnv();
+    const path = envFile(
+      "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const ran = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf "%s|%s" "$API_TOKEN" "$DB_URL"',
+    ]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: sending 2 Secrets\n",
+    );
+    expect(ran.stdout).toBe("tok-5f2a9c|postgres://app:pw@db:5432/app");
+  });
+
+  it("the Setup script runs without the Secrets", async () => {
+    // Given: a Work folder, a Setup script that records its env, and an env file
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\nenv > setup-env.txt\n");
+    const path = envFile(
+      "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--work",
+      folder,
+      "--setup",
+      script,
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const name = id.replace("fake:", "");
+    const setupEnv = String(
+      readFileSync(join(env.root, name, "home", "setup-env.txt")),
+    );
+    const seen = await runCli(env, ["exec", id, "--", "printenv", "API_TOKEN"]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 4 files, removed 0 files\nproofbox: running Setup script\nproofbox: sending 2 Secrets\n",
+    );
+    expect(setupEnv).not.toContain("API_TOKEN");
+    expect(setupEnv).not.toContain("DB_URL");
+    expect(seen.stdout).toBe("tok-5f2a9c\n");
+  });
+
+  it("no Secret value reaches proofbox output or its files", async () => {
+    // Given: an env file with one Secret
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n");
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const name = id.replace("fake:", "");
+    const ran = await runCli(env, ["exec", id, "--", "true"]);
+    const leaked: Array<string> = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (
+          statSync(full).isFile() &&
+          readFileSync(full).includes("tok-5f2a9c")
+        ) {
+          leaked.push(full);
+        }
+      }
+    };
+    walk(env.root);
+    walk(env.runtime);
+    // Then
+    expect(
+      create.stdout + create.stderr + ran.stdout + ran.stderr,
+    ).not.toContain("tok-5f2a9c");
+    expect(leaked).toEqual([join(env.root, name, "secrets", "env")]);
+  });
+
+  it("create --env-file reads dotenv lines", async () => {
+    // Given: an env file using dotenv syntax
+    const env = makeEnv();
+    const path = envFile(
+      '# app secrets\nexport API_TOKEN=tok-5f2a9c\n\nDB_URL = "postgres://app:pw@db:5432/app"\nGREETING=\'hi there\'\r\nHASH=abc#def\nQUOTE=it\'s\nAPI_TOKEN=tok-later\nNOTE=abc   # staging\nQUOTED="abc # x"\nQ2="abc" # note\n',
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const ran = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf "%s|" "$API_TOKEN" "$DB_URL" "$GREETING" "$HASH" "$QUOTE" "$NOTE" "$QUOTED" "$Q2"',
+    ]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr.endsWith("proofbox: sending 8 Secrets\n")).toBe(true);
+    expect(ran.stdout).toBe(
+      "tok-later|postgres://app:pw@db:5432/app|hi there|abc#def|it's|abc|abc # x|abc|",
+    );
+  });
+
+  it("an env line with no = fails create with its line number", async () => {
+    // Given: an env file whose second line is not NAME=VALUE
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\nnot a line\n");
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 2 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("an env line with a bad name fails create without its value", async () => {
+    // Given: an env file whose third line has a name that is not a valid name
+    const env = makeEnv();
+    const path = envFile("# first\nAPI_TOKEN=tok-5f2a9c\n1BAD=tok-9d3e71\n");
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("an env line with an unclosed quote fails create with its line number", async () => {
+    // Given: an env file whose third line opens a quote it never closes
+    const env = makeEnv();
+    const path = envFile('# first\nAPI_TOKEN=tok-5f2a9c\nTOKEN="abc\n');
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("create with a missing env file makes nothing", async () => {
+    // Given: an env file path that does not exist
+    const env = makeEnv();
+    const missing = join(
+      (() => {
+        const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+        trackTempDir(dir);
+        return dir;
+      })(),
+      "none.env",
+    );
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      missing,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${missing} not found. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("create with an unreadable env file makes nothing", async () => {
+    // Given: an env file mode 000
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o000);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} is not readable. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("create with a folder as env file makes nothing", async () => {
+    // Given: a folder passed as the env file
+    const env = makeEnv();
+    const folder = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    trackTempDir(folder);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      folder,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${folder} is a folder. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("an env file other users can read gets a warning", async () => {
+    // Given: an env file mode 644
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      `proofbox: env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n` +
+        "proofbox: creating fake Sandbox\n" +
+        "proofbox: starting Keeper\n" +
+        "proofbox: sending 1 Secret\n",
+    );
   });
 });

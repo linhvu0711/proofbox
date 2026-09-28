@@ -2,16 +2,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  cleanupEnvs,
-  makeEnv,
-  registerTempDir,
-  runCli,
-} from "./support/cli.ts";
+import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 
 const makeHome = (config?: string): string => {
   const home = mkdtempSync(join(tmpdir(), "proofbox-home-"));
-  registerTempDir(home);
+  trackTempDir(home);
   if (config !== undefined) {
     const dir = join(home, ".config", "proofbox");
     mkdirSync(dir, { recursive: true });

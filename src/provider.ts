@@ -23,7 +23,12 @@ export type Os = typeof Os.Type;
 
 export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const Capability = Schema.Literal("os:linux", "os:macos", "live-view");
+export const Capability = Schema.Literal(
+  "os:linux",
+  "os:macos",
+  "live-view",
+  "desktop",
+);
 export type Capability = typeof Capability.Type;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
@@ -102,6 +107,7 @@ export interface Provider {
     ProviderError | ProviderUnavailableError
   >;
   readonly stateDir: (name: string) => string;
+  readonly secretsDir: (name: string) => string;
   readonly connect: (
     name: string,
   ) => Effect.Effect<

@@ -1,7 +1,12 @@
 import { Command } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Stream } from "effect";
-import { ProviderError, UploadFailedError } from "../errors.ts";
+import {
+  ProviderError,
+  UploadFailedError,
+  WorkFileGrewError,
+} from "../errors.ts";
+import { tarFileBytes } from "./tar-file-bytes.ts";
 
 const local = (cause: unknown) =>
   new ProviderError({
@@ -13,7 +18,11 @@ export const packFiles = (
   folder: string,
   id: string,
   paths: ReadonlyArray<string>,
-): Stream.Stream<Uint8Array, ProviderError | UploadFailedError> =>
+  limit: number,
+): Stream.Stream<
+  Uint8Array,
+  ProviderError | UploadFailedError | WorkFileGrewError
+> =>
   Stream.unwrapScoped(
     Effect.gen(function* () {
       const list = new TextEncoder().encode(paths.join("\0"));
@@ -34,7 +43,18 @@ export const packFiles = (
           Command.stdin(Stream.make(list)),
         ),
       ).pipe(Effect.mapError(local));
-      const outputs = process.stdout.pipe(Stream.mapError(local));
+      // The size check ran on the list; a file that grew since then reaches
+      // tar at its new size, so the limit is held again on the file bytes
+      // the tar headers state as they go out.
+      const fileBytes = tarFileBytes();
+      const outputs = process.stdout.pipe(
+        Stream.mapError(local),
+        Stream.mapEffect((chunk) =>
+          fileBytes(chunk) > limit
+            ? Effect.fail(new WorkFileGrewError({ limit }))
+            : Effect.succeed(chunk),
+        ),
+      );
       const drained = Stream.fromEffect(
         Stream.runDrain(process.stderr).pipe(Effect.mapError(local)),
       ).pipe(Stream.drain);

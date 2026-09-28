@@ -1,9 +1,11 @@
+import { posix } from "node:path";
 import { Duration, Effect, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { deadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
+import { withSecrets } from "../secrets.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
@@ -17,7 +19,10 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       { concurrency: 2 },
     );
     const keeper = yield* KeeperClient;
-    const events = yield* keeper.exec(rawId, argv);
+    const events = yield* keeper.exec(
+      rawId,
+      withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
+    );
     let exitCode: number | undefined;
     const idle = Duration.seconds(info.idleSeconds);
     const push = deadlinePush(provider, id.name, info);

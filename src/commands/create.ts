@@ -14,6 +14,7 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
+import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
@@ -26,6 +27,7 @@ export const createSandbox = (options: {
   readonly maxLife?: string | undefined;
   readonly work?: string | undefined;
   readonly setup?: string | undefined;
+  readonly envFile?: string | undefined;
   readonly maxSize?: string | undefined;
   readonly size?: string | undefined;
 }) =>
@@ -80,10 +82,15 @@ export const createSandbox = (options: {
                       cause instanceof Error ? cause.message : String(cause),
                   }),
           });
+    const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
+    const secrets =
+      options.envFile === undefined
+        ? undefined
+        : yield* readEnvFile(options.envFile);
     const files =
       options.work === undefined
         ? undefined
-        : yield* readWorkFolder(options.work, maxSize ?? MAX_SIZE_DEFAULT);
+        : yield* readWorkFolder(options.work, workLimit);
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
     if (size !== undefined && provider.sizes !== "any") {
@@ -122,10 +129,14 @@ export const createSandbox = (options: {
     // and this covers every other way the steps fail.
     yield* Effect.gen(function* () {
       if (options.work !== undefined && files !== undefined) {
-        yield* sendWorkFolder(id, options.work, files);
+        yield* sendWorkFolder(id, options.work, files, workLimit);
       }
       if (script !== undefined) {
         yield* runSetupScript(id, script);
+      }
+      // #13 saves the Snapshot here; the Secrets go in only after it.
+      if (secrets !== undefined) {
+        yield* sendSecrets(id, secrets);
       }
     }).pipe(
       Effect.tapError(() =>

@@ -47,9 +47,35 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
 export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   readonly flag: string;
   readonly value: string;
+  readonly units: ReadonlyArray<string>;
+  readonly example: string;
 }> {
   get message() {
-    return `Bad --${this.flag} "${this.value}": use a whole number with s, m, or h, for example 15m`;
+    const list =
+      this.units.length <= 2
+        ? this.units.join(" or ")
+        : `${this.units.slice(0, -1).join(", ")}, or ${this.units[this.units.length - 1]}`;
+    return `Bad --${this.flag} "${this.value}": use a whole number with ${list}, for example ${this.example}`;
+  }
+}
+
+export class OutFileError extends Data.TaggedError("OutFileError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Could not write ${this.path}: ${this.reason}. Check the folder exists and try again.`;
+  }
+}
+
+export class OutsideScreenError extends Data.TaggedError("OutsideScreenError")<{
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}> {
+  get message() {
+    return `Point ${this.x},${this.y} is outside the screen (${this.width}x${this.height}); use x 0 to ${this.width - 1} and y 0 to ${this.height - 1}`;
   }
 }
 
@@ -71,6 +97,17 @@ export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
   }
 }
 
+export class SecretsSendFailedError extends Data.TaggedError(
+  "SecretsSendFailedError",
+)<{
+  readonly id: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Sending Secrets to ${this.id} failed: sh exited ${this.code}. This Sandbox was deleted; create again.`;
+  }
+}
+
 export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
   readonly value: string;
 }> {
@@ -87,6 +124,14 @@ export class WorkFolderTooBigError extends Data.TaggedError(
 }> {
   get message() {
     return `Work folder is ${formatMb(this.bytes)} MB, over the ${formatMb(this.limit)} MB limit, so nothing was sent. Git-ignore the big files, or raise the limit with --max-size.`;
+  }
+}
+
+export class WorkFileGrewError extends Data.TaggedError("WorkFileGrewError")<{
+  readonly limit: number;
+}> {
+  get message() {
+    return `A Work file grew while uploading, so the upload stopped past the ${formatMb(this.limit)} MB limit. Run it again, or raise the limit with --max-size.`;
   }
 }
 
@@ -117,6 +162,26 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
   }
   get reason() {
     return this.message;
+  }
+}
+
+export class EnvFileUnreadableError extends Data.TaggedError(
+  "EnvFileUnreadableError",
+)<{
+  readonly path: string;
+  readonly reason: "not found" | "is not readable" | "is a folder";
+}> {
+  get message() {
+    return `Env file ${this.path} ${this.reason}. Nothing was created.`;
+  }
+}
+
+export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
+  readonly path: string;
+  readonly line: number;
+}> {
+  get message() {
+    return `Env file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
   }
 }
 
@@ -180,6 +245,14 @@ export class BadConfigError extends Data.TaggedError("BadConfigError")<{
 }> {
   get message() {
     return `Bad config ${this.path}: ${this.reason}; use JSON like {"linux": "docker", "macos": "namespace"}`;
+  }
+}
+
+export class BadStepsError extends Data.TaggedError("BadStepsError")<{
+  readonly steps: number;
+}> {
+  get message() {
+    return `Bad steps ${this.steps}: scroll needs at least 1`;
   }
 }
 

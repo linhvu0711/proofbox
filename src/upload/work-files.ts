@@ -25,15 +25,21 @@ const hasCode = (cause: unknown, code: string) =>
   "code" in cause &&
   cause.code === code;
 
+// The size comes from the same read as the hash, so both describe one
+// version of a file that changes while it is listed.
 const hashFile = (path: string) =>
   Effect.tryPromise({
     try: () =>
-      new Promise<string>((resolve, reject) => {
+      new Promise<{ sha256: string; size: number }>((resolve, reject) => {
         const hash = createHash("sha256");
+        let size = 0;
         const stream = createReadStream(path);
         stream.on("error", reject);
-        stream.on("data", (chunk) => hash.update(chunk));
-        stream.on("end", () => resolve(hash.digest("hex")));
+        stream.on("data", (chunk) => {
+          hash.update(chunk);
+          size += chunk.length;
+        });
+        stream.on("end", () => resolve({ sha256: hash.digest("hex"), size }));
       }),
     catch: local,
   });
@@ -64,18 +70,18 @@ const workFile = (folder: string, path: string) =>
     if (stat === undefined || stat.isDirectory()) {
       return undefined;
     }
-    const sha256 = stat.isSymbolicLink()
-      ? yield* hashLink(full)
+    const read = stat.isSymbolicLink()
+      ? { sha256: yield* hashLink(full), size: stat.size }
       : stat.isFile()
         ? yield* hashFile(full)
         : undefined;
-    if (sha256 === undefined) {
+    if (read === undefined) {
       return undefined;
     }
     return {
       path,
-      size: stat.size,
-      sha256,
+      size: read.size,
+      sha256: read.sha256,
       executable: (stat.mode & 0o111) !== 0,
     } satisfies WorkFile;
   });

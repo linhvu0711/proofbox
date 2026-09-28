@@ -49,7 +49,7 @@ export const cleanupEnvs = () => {
   }
 };
 
-export const registerTempDir = (dir: string): void => {
+export const trackTempDir = (dir: string): void => {
   made.push(dir);
 };
 
@@ -111,7 +111,9 @@ export const runCli = (
     }
     execFile(
       process.execPath,
-      ["--disable-warning=ExperimentalWarning", "src/main.ts", ...args],
+      // `--` ends Node's own flag scan; without it Node treats a
+      // `--env-file` meant for the CLI as its own (nodejs/node#54232).
+      ["--disable-warning=ExperimentalWarning", "--", "src/main.ts", ...args],
       // The Namespace Provider's create builds the Base image on a fresh
       // host, which can run for minutes, and on failure may still need a
       // few seconds to delete the host before the process exits.

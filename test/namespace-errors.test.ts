@@ -2,12 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  cleanupEnvs,
-  makeEnv,
-  registerTempDir,
-  runCli,
-} from "./support/cli.ts";
+import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 import { makeFakeNsc } from "./support/fake-nsc.ts";
 
 const CREATE = ["create", "--os", "linux", "--provider", "namespace"];
@@ -167,7 +162,7 @@ esac`);
     // Given: a PATH with no ssh and an nsc stub that answers port-forward
     // with a Listening line, then waits on stdin
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
-    registerTempDir(binDir);
+    trackTempDir(binDir);
     const fake = makeFakeNsc(`case "$1 $2" in
 "instance port-forward")
   printf 'Listening on 127.0.0.1:4321\\n'

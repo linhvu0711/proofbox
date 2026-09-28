@@ -448,7 +448,7 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
-    capabilities: new Set(["os:linux", "live-view"]),
+    capabilities: new Set(["os:linux", "live-view", "desktop"]),
     sizes: SIZES,
     liveView,
     create,
@@ -457,6 +457,7 @@ export const makeNamespaceProvider = (deps: {
     delete: del,
     extend,
     stateDir: () => "/var/lib/proofbox",
+    secretsDir: () => "/run/proofbox/secrets",
     connect,
     memoryKills,
   };

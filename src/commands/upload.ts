@@ -6,6 +6,7 @@ import { withDeadlinePush } from "../deadline.ts";
 import {
   ProviderError,
   UploadFailedError,
+  type WorkFileGrewError,
   WorkFolderTooBigError,
 } from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
@@ -102,7 +103,10 @@ const runInSandbox = (
   keeper: KeeperClient,
   rawId: string,
   argv: ReadonlyArray<string>,
-  stdin?: Stream.Stream<Uint8Array, ProviderError | UploadFailedError>,
+  stdin?: Stream.Stream<
+    Uint8Array,
+    ProviderError | UploadFailedError | WorkFileGrewError
+  >,
 ) =>
   Effect.gen(function* () {
     const events = yield* keeper.exec(
@@ -144,6 +148,7 @@ export const sendWorkFolder = (
   rawId: string,
   folder: string,
   files: ReadonlyArray<WorkFile>,
+  maxSize: number,
 ) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
@@ -251,7 +256,7 @@ export const sendWorkFolder = (
                 keeper,
                 rawId,
                 ["tar", "-x", "-f", "-"],
-                packFiles(folder, rawId, diff.send),
+                packFiles(folder, rawId, diff.send, maxSize),
               );
             }
             if (
@@ -291,9 +296,7 @@ export const uploadWorkFolder = (args: {
   maxSize?: number | undefined;
 }) =>
   Effect.gen(function* () {
-    const files = yield* readWorkFolder(
-      args.folder,
-      args.maxSize ?? MAX_SIZE_DEFAULT,
-    );
-    yield* sendWorkFolder(args.id, args.folder, files);
+    const maxSize = args.maxSize ?? MAX_SIZE_DEFAULT;
+    const files = yield* readWorkFolder(args.folder, maxSize);
+    yield* sendWorkFolder(args.id, args.folder, files, maxSize);
   }).pipe(Effect.scoped);

@@ -12,24 +12,69 @@ export const idleDefault = (os: Os): Duration.Duration =>
 
 export const MAX_LIFE_DEFAULT = Duration.hours(3);
 
-const SPAN_PATTERN = /^([1-9][0-9]*)(s|m|h)$/;
+export interface SpanSpec {
+  readonly units: ReadonlyArray<"ms" | "s" | "m" | "h">;
+  readonly zero: boolean;
+  readonly example: string;
+}
+
+export const IDLE_SPAN: SpanSpec = {
+  units: ["s", "m", "h"],
+  zero: false,
+  example: "15m",
+};
+
+export const PACE_SPAN: SpanSpec = {
+  units: ["ms", "s"],
+  zero: true,
+  example: "400ms",
+};
+
+const spanPattern = (spec: SpanSpec): RegExp => {
+  // Longest unit first so "ms" wins over "s".
+  const units = [...spec.units].sort((a, b) => b.length - a.length).join("|");
+  const number = spec.zero ? "0|[1-9][0-9]*" : "[1-9][0-9]*";
+  return new RegExp(`^(${number})(${units})$`);
+};
 
 export const parseSpan = (
   flag: string,
   value: string,
+  spec: SpanSpec = IDLE_SPAN,
 ): Effect.Effect<Duration.Duration, BadSpanError> => {
-  const match = SPAN_PATTERN.exec(value);
+  const match = spanPattern(spec).exec(value);
   if (match === null) {
-    return Effect.fail(new BadSpanError({ flag, value }));
+    return Effect.fail(
+      new BadSpanError({
+        flag,
+        value,
+        units: spec.units,
+        example: spec.example,
+      }),
+    );
   }
   const count = Number(match[1]);
-  const unit = match[2] === "s" ? 1_000 : match[2] === "m" ? 60_000 : 3_600_000;
+  const unit =
+    match[2] === "ms"
+      ? 1
+      : match[2] === "s"
+        ? 1_000
+        : match[2] === "m"
+          ? 60_000
+          : 3_600_000;
   const millis = count * unit;
   if (
     !Number.isFinite(millis) ||
     Number.isNaN(new Date(Date.now() + millis).getTime())
   ) {
-    return Effect.fail(new BadSpanError({ flag, value }));
+    return Effect.fail(
+      new BadSpanError({
+        flag,
+        value,
+        units: spec.units,
+        example: spec.example,
+      }),
+    );
   }
   return Effect.succeed(Duration.millis(millis));
 };
