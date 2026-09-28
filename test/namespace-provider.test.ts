@@ -29,8 +29,6 @@ const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
       Effect.as("abc123def4567"),
     ),
   destroy: (id) => Ref.update(calls, (all) => [...all, `destroy ${id}`]),
-  ensureImageExpiry: (image, hours) =>
-    Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
   extend: () => Effect.die("unused"),
   list: () => Effect.succeed([]),
   portForward: () => Effect.die("unused"),
@@ -282,11 +280,13 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: a Snapshot pull that answers, and a RepoDigests line for it
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const commands: string[] = [];
         const ran: { image?: string | undefined } = {};
         const provider = makeProvider(
           calls,
           fakeDocker({ ran }),
           (commandLine) => {
+            commands.push(commandLine);
             if (commandLine.startsWith("docker pull ")) {
               return { exitCode: 0, stdout: "", stderr: "" };
             }
@@ -313,8 +313,8 @@ describe("Namespace Provider", () => {
           "nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
         );
         expect(info.snapshot).toBe("22d0cf15eb8e");
-        expect(yield* Ref.get(calls)).toContain(
-          "ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336",
+        expect(commands).toContain(
+          "/nsc/bin/nsc registry update-image-expiration proofbox-snapshot-linux@sha256:ab12 --ensure-minimum 336h </dev/null",
         );
       }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
@@ -323,11 +323,13 @@ describe("Namespace Provider", () => {
     Effect.gen(function* () {
       // Given: a Snapshot pull whose registry knows no such manifest
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const commands: string[] = [];
       const ran: { image?: string | undefined } = {};
       const provider = makeProvider(
         calls,
         fakeDocker({ ran }),
         (commandLine) => {
+          commands.push(commandLine);
           if (commandLine.startsWith("docker pull ")) {
             return {
               exitCode: 1,
@@ -350,10 +352,9 @@ describe("Namespace Provider", () => {
         /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
       );
       expect(info.snapshot).toBeUndefined();
-      const seen = yield* Ref.get(calls);
-      expect(seen.some((call) => call.startsWith("ensureImageExpiry"))).toBe(
-        false,
-      );
+      expect(
+        commands.some((line) => line.includes("update-image-expiration")),
+      ).toBe(false);
       const output = yield* CliOutput;
       expect(
         Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
@@ -429,8 +430,8 @@ describe("Namespace Provider", () => {
         expect(commands).toContain(
           "docker commit proofbox-abc123 nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e && docker push nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
         );
-        expect(yield* Ref.get(calls)).toContain(
-          "ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336",
+        expect(commands).toContain(
+          "/nsc/bin/nsc registry update-image-expiration proofbox-snapshot-linux@sha256:ab12 --ensure-minimum 336h </dev/null",
         );
       }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
@@ -439,7 +440,9 @@ describe("Namespace Provider", () => {
     Effect.gen(function* () {
       // Given: a Snapshot registry that refuses the push
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const commands: string[] = [];
       const provider = makeProvider(calls, fakeDocker({}), (commandLine) => {
+        commands.push(commandLine);
         if (commandLine.includes("docker push")) {
           return {
             exitCode: 1,
@@ -461,10 +464,9 @@ describe("Namespace Provider", () => {
       expect(error.message).toBe(
         "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
       );
-      const seen = yield* Ref.get(calls);
-      expect(seen.some((call) => call.startsWith("ensureImageExpiry"))).toBe(
-        false,
-      );
+      expect(
+        commands.some((line) => line.includes("update-image-expiration")),
+      ).toBe(false);
     }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
 });

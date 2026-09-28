@@ -53,10 +53,6 @@ export interface NscClient {
     readonly cidfile: string;
   }) => Effect.Effect<string, NscError | ProviderLimitError>;
   readonly destroy: (id: string) => Effect.Effect<void, NscError>;
-  readonly ensureImageExpiry: (
-    image: string,
-    hours: number,
-  ) => Effect.Effect<void, NscError>;
   readonly extend: (
     id: string,
     seconds: number,
@@ -309,24 +305,6 @@ export const makeNscClient = (
       }
     });
 
-  const ensureImageExpiry = (image: string, hours: number) =>
-    Effect.gen(function* () {
-      const result = yield* capture([
-        "registry",
-        "update-image-expiration",
-        image,
-        "--ensure-minimum",
-        `${hours}h`,
-      ]);
-      if (result.exitCode !== 0) {
-        return yield* mapExit(
-          "registry update-image-expiration",
-          undefined,
-          result,
-        );
-      }
-    });
-
   const extend = (id: string, seconds: number) =>
     Effect.gen(function* () {
       const result = yield* capture([
@@ -437,7 +415,6 @@ export const makeNscClient = (
     checkLogin,
     create,
     destroy,
-    ensureImageExpiry,
     extend,
     list,
     portForward,

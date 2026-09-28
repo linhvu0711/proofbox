@@ -28,6 +28,7 @@ import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
+  ensureImageExpiry,
   pullSnapshot,
   pushSnapshot,
   snapshotRef,
@@ -454,7 +455,7 @@ export const makeNamespaceProvider = (deps: {
             // Each reuse pushes the image's own expiry out to 14 days, so
             // Namespace deletes only Snapshots nobody used for 14 days.
             yield* snapshotRef(link, tag).pipe(
-              Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, 336)),
+              Effect.flatMap((ref) => ensureImageExpiry(link, ref, 336)),
               Effect.catchAll((error) =>
                 progress.warn(
                   `could not set the Snapshot expiry (${error.message})`,
@@ -640,8 +641,9 @@ export const makeNamespaceProvider = (deps: {
     liveView,
     snapshots: {
       baseVersion: baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE),
-      // docker commit + push run on the host; the expiry call runs the
-      // Caller's nsc on the pushed image's RepoDigests name.
+      // docker commit, push and the expiry call all run on the host; a
+      // link that dies right after create is retried rather than losing
+      // the Snapshot.
       save: (name, fp) =>
         withCliLink(name, (link) =>
           Effect.gen(function* () {
@@ -650,13 +652,20 @@ export const makeNamespaceProvider = (deps: {
             yield* pushSnapshot(link, containerOf(name), tag);
             const progress = yield* Progress;
             yield* snapshotRef(link, tag).pipe(
-              Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, 336)),
+              Effect.flatMap((ref) => ensureImageExpiry(link, ref, 336)),
               Effect.catchAll((error) =>
                 progress.warn(
                   `could not set the Snapshot expiry (${error.message})`,
                 ),
               ),
             );
+          }),
+        ).pipe(
+          Effect.retry({
+            while: (error) => error._tag === "ProviderUnavailableError",
+            schedule: Schedule.spaced(Duration.seconds(1)).pipe(
+              Schedule.upTo(Duration.seconds(30)),
+            ),
           }),
         ),
     },

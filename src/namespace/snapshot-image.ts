@@ -33,6 +33,22 @@ export const pushSnapshot = (link: Link, container: string, tag: string) =>
     }
   });
 
+// The expiry call runs the host's own nsc: the instance token under
+// /var/run/nsc/token.json is the only credential the workspace registry
+// accepts; the Caller's login may be a compute-only CI token. stdin is
+// closed because table output wants a tty.
+export const ensureImageExpiry = (link: Link, ref: string, hours: number) =>
+  Effect.gen(function* () {
+    const result = yield* link.run(
+      `/nsc/bin/nsc registry update-image-expiration ${ref} --ensure-minimum ${hours}h </dev/null`,
+    );
+    if (result.exitCode !== 0) {
+      return yield* fail(
+        `nsc registry update-image-expiration failed: ${result.stderr.trim()}`,
+      );
+    }
+  });
+
 // The digest a pushed image got, as `<repo>@sha256:<digest>` — the form
 // `nsc registry update-image-expiration` takes.
 export const snapshotRef = (link: Link, tag: string) =>
