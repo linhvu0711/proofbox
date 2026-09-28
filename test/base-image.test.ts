@@ -5,14 +5,8 @@ import { it } from "@effect/vitest";
 import { Chunk, Effect, Fiber, Layer, Ref, Stream, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import {
-  baseImageVersion,
-  ensureBaseImage,
-} from "../src/docker/base-image.ts";
-import type {
-  DockerClient,
-  DockerError,
-} from "../src/docker/docker-client.ts";
+import { baseImageVersion, ensureBaseImage } from "../src/docker/base-image.ts";
+import type { DockerClient, DockerError } from "../src/docker/docker-client.ts";
 import { Progress } from "../src/progress.ts";
 
 const stubClient = (

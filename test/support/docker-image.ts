@@ -1,6 +1,7 @@
 import { CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
+import { CliOutput } from "../../src/cli-output.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -9,7 +10,6 @@ import {
   toolBundleArgs,
   toolBundleForArch,
 } from "../../src/docker/base-image.ts";
-import { CliOutput } from "../../src/cli-output.ts";
 import { makeDockerClient } from "../../src/docker/docker-client.ts";
 import { Progress } from "../../src/progress.ts";
 import { TOOL_BUNDLE } from "../../src/tool-bundle.ts";
