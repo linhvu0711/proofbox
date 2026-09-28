@@ -25,9 +25,13 @@ export const openLive = (rawId: string) =>
     yield* output.err("proofbox: Live view open; press Ctrl-C to close\n");
     const idle = Duration.seconds(info.idleSeconds);
     const push = deadlinePush(provider, id.name, info);
-    // The Live view stays open until Ctrl-C interrupts the loop.
-    yield* Effect.repeat(
-      push,
-      Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+    // The Live view stays open until Ctrl-C interrupts the loop or the
+    // port-forward dies — a dead forward means the address is useless.
+    yield* Effect.raceFirst(
+      Effect.repeat(
+        push,
+        Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+      ),
+      view.gone,
     );
   }).pipe(Effect.scoped);

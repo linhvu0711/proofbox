@@ -85,11 +85,17 @@ export interface Provider {
     void,
     SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
-  // Scoped: the Live view stays up until the scope closes.
-  readonly liveView?: (
-    name: string,
-  ) => Effect.Effect<
-    { readonly address: string; readonly password: string },
+  // Scoped: the Live view stays up until the scope closes. `gone` resolves
+  // with a Provider error if the view's link dies while it is open.
+  readonly liveView?: (name: string) => Effect.Effect<
+    {
+      readonly address: string;
+      readonly password: string;
+      readonly gone: Effect.Effect<
+        never,
+        SandboxGoneError | ProviderError | ProviderUnavailableError
+      >;
+    },
     SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope
   >;

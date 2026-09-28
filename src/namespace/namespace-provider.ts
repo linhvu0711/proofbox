@@ -212,21 +212,6 @@ export const makeNamespaceProvider = (deps: {
       const staged = yield* paths(`new-${process.pid}`);
       const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
       const cidfile = join(staged.dir, `ns-new-${process.pid}.cid`);
-      yield* Effect.tryPromise({
-        try: () =>
-          exec("ssh-keygen", [
-            "-q",
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-C",
-            "proofbox",
-            "-f",
-            keyBase,
-          ]).then(() => {}),
-        catch: (cause) => fail(`ssh-keygen failed: ${describe(cause)}`),
-      });
       // Whatever part of the make is left — key files, the host — leaves
       // nothing behind on a failed create.
       const createToken = makeSandboxName();
@@ -252,13 +237,29 @@ export const makeNamespaceProvider = (deps: {
       });
       return yield* Effect.gen(function* () {
         const progress = yield* Progress;
+        yield* Effect.tryPromise({
+          try: () =>
+            exec("ssh-keygen", [
+              "-q",
+              "-t",
+              "ed25519",
+              "-N",
+              "",
+              "-C",
+              "proofbox",
+              "-f",
+              keyBase,
+            ]).then(() => {}),
+          catch: (cause) => fail(`ssh-keygen failed: ${describe(cause)}`),
+        });
+        const durationSeconds = Math.min(
+          Duration.toSeconds(req.idle) + 60,
+          Duration.toSeconds(req.maxLife),
+        );
         const id = yield* nsc
           .create({
             machineType: `linux/amd64:${formatSize(size)}`,
-            durationSeconds: Math.min(
-              Duration.toSeconds(req.idle) + 60,
-              Duration.toSeconds(req.maxLife),
-            ),
+            durationSeconds,
             sshKeyFile: `${keyBase}.pub`,
             labels: {
               "proofbox.os": "linux",
@@ -290,6 +291,14 @@ export const makeNamespaceProvider = (deps: {
             ),
           );
         hostId = id;
+        // Provisioning can outlast the create duration (a cold image build):
+        // keep the host's own Deadline ahead until the Sandbox takes over.
+        yield* Effect.forkScoped(
+          Effect.repeat(
+            nsc.extend(id, durationSeconds).pipe(Effect.ignore),
+            Schedule.spaced(Duration.seconds(15)),
+          ),
+        );
         const hostPaths = yield* paths(id);
         yield* Effect.tryPromise({
           try: async () => {
@@ -411,12 +420,14 @@ export const makeNamespaceProvider = (deps: {
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
       // A live call right after a memory kill can hit a host that is still
-      // reclaiming; give x11vnc a few tries before giving up.
+      // reclaiming; give x11vnc a few tries before giving up. Sessions share
+      // the one x11vnc (each drops a marker; the last one out stops it) and
+      // the newest password is what the next viewer connection needs.
       const startX11vnc = docker
         .execText(container, "app", [
           "sh",
           "-c",
-          'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && { x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
+          'mkdir -p ~/.vnc /tmp/proofbox-live && touch "/tmp/proofbox-live/$1" && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && { pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
           "sh",
           password,
         ])
@@ -438,11 +449,21 @@ export const makeNamespaceProvider = (deps: {
       );
       yield* Effect.addFinalizer(() =>
         docker
-          .execText(container, "app", ["pkill", "-x", "x11vnc"])
+          .execText(container, "app", [
+            "sh",
+            "-c",
+            'rm -f "/tmp/proofbox-live/$1"; [ -z "$(ls -A /tmp/proofbox-live)" ] && pkill -x x11vnc; true',
+            "sh",
+            password,
+          ])
           .pipe(Effect.ignore),
       );
-      const port = yield* nsc.portForward(name, 5900);
-      return { address: `127.0.0.1:${port}`, password };
+      const forward = yield* nsc.portForward(name, 5900);
+      return {
+        address: `127.0.0.1:${forward.port}`,
+        password,
+        gone: forward.gone,
+      };
     });
 
   return {

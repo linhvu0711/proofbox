@@ -184,7 +184,9 @@ export const makeOpenLink = (
       const bringup = Effect.gen(function* () {
         const attemptScope = yield* Scope.make();
         return yield* Effect.gen(function* () {
-          const localPort = yield* nsc.portForward(id, 22);
+          const localPort = yield* nsc
+            .portForward(id, 22)
+            .pipe(Effect.map((forward) => forward.port));
           // The forward binds its local port before the tunnel to the host
           // is up; a connection that lands first is reset, which also drops
           // the listener, so give the tunnel a beat before the master dials.

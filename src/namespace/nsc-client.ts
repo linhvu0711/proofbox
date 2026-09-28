@@ -5,6 +5,7 @@ import {
   Deferred,
   Effect,
   Fiber,
+  Option,
   Ref,
   Schema,
   type Scope,
@@ -59,11 +60,16 @@ export interface NscClient {
   readonly list: (
     labels: Readonly<Record<string, string>>,
   ) => Effect.Effect<ReadonlyArray<NscInstance>, NscError>;
-  // Scoped: the forwarded port lives until the scope closes.
+  // Scoped: the forwarded port lives until the scope closes. `gone` resolves
+  // with the forward's failure if the process exits after its port is up.
   readonly portForward: (
     id: string,
     port: number,
-  ) => Effect.Effect<number, NscError, Scope.Scope>;
+  ) => Effect.Effect<
+    { readonly port: number; readonly gone: Effect.Effect<never, NscError> },
+    NscError,
+    Scope.Scope
+  >;
 }
 
 const describe = (cause: unknown) =>
@@ -235,7 +241,17 @@ export const makeNscClient = (
               process.kill("SIGINT"),
               () => undefined,
             );
-            yield* finished;
+            // An nsc that ignores SIGINT must not hang the create: give it
+            // a beat, then kill it outright.
+            const exited = yield* finished.pipe(
+              Effect.timeoutOption("5 seconds"),
+            );
+            if (Option.isNone(exited)) {
+              yield* Effect.orElseSucceed(
+                process.kill("SIGKILL"),
+                () => undefined,
+              );
+            }
           }
           const [out, err, exitCode] = yield* Effect.all(
             [Fiber.join(outBytes), Fiber.join(errBytes), finished],
@@ -391,7 +407,8 @@ export const makeNscClient = (
           }),
         ),
       );
-      return yield* Effect.raceFirst(Deferred.await(listening), gone);
+      const bound = yield* Effect.raceFirst(Deferred.await(listening), gone);
+      return { port: bound, gone };
     });
 
   return {
