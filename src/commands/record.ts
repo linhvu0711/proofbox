@@ -2,6 +2,7 @@ import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   NoRecordingError,
+  NothingChangedError,
   ProviderError,
   RecordingRunningError,
   StopFlagsError,
@@ -9,7 +10,11 @@ import {
 import { runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
-import { parseProbe, planEdit } from "../proof/edit-plan.ts";
+import {
+  nothingChanged,
+  parseProbe,
+  planEdit,
+} from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 
@@ -100,6 +105,12 @@ export const stopRecording = (options: {
       return yield* helperFailed(probed);
     }
     const probe = parseProbe(probed.stdout.toString("utf8"));
+    if (nothingChanged(probe)) {
+      return yield* new NothingChangedError({
+        id: options.id,
+        raw: `${info.dir}/raw.mkv`,
+      });
+    }
     const actionLog = yield* runHelper(
       options.id,
       RECORD_HELPER,

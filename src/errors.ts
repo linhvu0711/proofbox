@@ -160,6 +160,17 @@ export class NoRecordingError extends Data.TaggedError("NoRecordingError")<{
   }
 }
 
+export class NothingChangedError extends Data.TaggedError(
+  "NothingChangedError",
+)<{
+  readonly id: string;
+  readonly raw: string;
+}> {
+  get message() {
+    return `Recording on ${this.id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at ${this.raw}; check the app is on screen and record again.`;
+  }
+}
+
 export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
   readonly both: boolean;
 }> {

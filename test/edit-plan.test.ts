@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { labelText, parseProbe, planEdit } from "../src/proof/edit-plan.ts";
+import {
+  labelText,
+  nothingChanged,
+  parseProbe,
+  planEdit,
+} from "../src/proof/edit-plan.ts";
 
 describe("edit-plan", () => {
   it("a Recording with no Step marks is one step with no caption", () => {
@@ -189,5 +194,26 @@ describe("edit-plan", () => {
         [116, undefined],
       ],
     });
+  });
+
+  it("a Recording with under 1 s of change is found as nothing changed", () => {
+    // Given
+    const still = { duration: 6.03, freezes: [[0, undefined] as const] };
+    const moving = parseProbe(
+      [
+        "  Duration: 00:02:52.13, start: 0.000000, bitrate: 812 kb/s",
+        "[freezedetect @ 0x5f] lavfi.freezedetect.freeze_start: 2",
+        "[freezedetect @ 0x5f] lavfi.freezedetect.freeze_end: 58.5",
+        "[freezedetect @ 0x5f] lavfi.freezedetect.freeze_start: 59",
+        "[freezedetect @ 0x5f] lavfi.freezedetect.freeze_end: 115.5",
+        "[freezedetect @ 0x5f] lavfi.freezedetect.freeze_start: 116",
+      ].join("\n"),
+    );
+    // When
+    const stillResult = nothingChanged(still);
+    const movingResult = nothingChanged(moving);
+    // Then
+    expect(stillResult).toBe(true);
+    expect(movingResult).toBe(false);
   });
 });

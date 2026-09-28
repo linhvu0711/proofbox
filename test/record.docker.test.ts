@@ -373,4 +373,28 @@ describe("Recording and the Proof video", () => {
       `No Recording is running on ${id}; run record start first\n`,
     );
   });
+
+  it("a Recording where nothing changed on screen makes no video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(6000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "still.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+    );
+    expect(readdirSync(dir)).toEqual([]);
+  });
 });
