@@ -1,3 +1,5 @@
+Read `CODING_STANDARDS.md` before you write or review code.
+
 <!-- embed-source:start -->
 ## Embedded library source
 
