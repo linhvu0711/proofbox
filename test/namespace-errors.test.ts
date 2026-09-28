@@ -132,6 +132,37 @@ esac`);
     ).toEqual([]);
   });
 
+  it("create --size 16x32 asks nsc for a 16x32 host", async () => {
+    // Given: a fake nsc whose create answers a valid host id
+    const fake = makeFakeNsc(`case "$1" in
+auth) exit 0 ;;
+create)
+  prev=""; cidfile=""
+  for a in "$@"; do
+    [ "$prev" = "--cidfile" ] && cidfile="$a"
+    prev="$a"
+  done
+  [ -n "$cidfile" ] && echo abc123def4567 > "$cidfile"
+  printf '{"instance_id":"abc123def4567"}\\n' ;;
+instance) printf 'Failed: rpc error\\n' >&2; exit 1 ;;
+list) printf 'null\\n' ;;
+destroy) exit 0 ;;
+esac`);
+    const env = makeEnv();
+    // When
+    await runCli(env, [...CREATE, "--size", "16x32"], {
+      set: { PROOFBOX_NSC: fake.path },
+    });
+    // Then: whatever the run does next, nsc was asked for a 16x32 host
+    expect(
+      logLines(fake.log).some(
+        (line) =>
+          line.startsWith("create ") &&
+          line.includes("--machine_type linux/amd64:16x32"),
+      ),
+    ).toBe(true);
+  });
+
   it("exec with no ssh on PATH says to install an OpenSSH client", async () => {
     // Given: a PATH with no ssh and an nsc stub that answers port-forward
     // with a Listening line, then waits on stdin

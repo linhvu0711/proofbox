@@ -206,32 +206,32 @@ describe("Namespace Provider", () => {
     ).toBe(true);
   });
 
-  it("at 16x32 the memory error says it is the largest size", async () => {
-    // Given: a 16x32 Sandbox (container limit 31 GB)
+  it("a 16x32 host over the workspace cap is refused and leaves nothing", async () => {
+    // Given: this workspace caps one host at 8x16
     const env = makeEnv({ docker: true, namespace: true });
-    const created = await create(env, ["--size", "16x32"]);
-    const id = created.stdout.trim();
-    const host = id.slice("ns:".length);
-    const entry = (await liveList()).find((item) => item.cluster_id === host);
-    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
-    expect(shape.virtual_cpu).toBe(16);
-    expect(shape.memory_megabytes).toBe(32768);
+    const before = await liveIds();
     // When
     const result = await runCli(env, [
-      "exec",
-      id,
-      "--",
-      "sh",
-      "-c",
-      "head -c 33000m /dev/zero | tail",
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "namespace",
+      "--size",
+      "16x32",
     ]);
     // Then
-    expect(result.exitCode).toBe(122);
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr.startsWith("Namespace refused the Sandbox: ")).toBe(
+      true,
+    );
+    expect(result.stderr).toContain("maximum 8x16");
     expect(
       result.stderr.endsWith(
-        "Sandbox ran out of memory (16x32). 16x32 is the largest size.\n",
+        "nothing was created. Delete a Sandbox or use a smaller --size\n",
       ),
     ).toBe(true);
+    expect(await liveIds()).toEqual(before);
   });
 
   it("the host is deleted at its Deadline with no Caller alive", async () => {

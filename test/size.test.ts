@@ -139,4 +139,17 @@ describe("--size", () => {
       "Sandbox ran out of memory (no size limit). The host has no free memory left.",
     );
   });
+
+  it("outOfMemoryMessage at 16x32 says it is the largest size", () => {
+    // Given: the Namespace sizes
+    const offered = [
+      { cpu: 4, ramGb: 8 },
+      { cpu: 8, ramGb: 16 },
+      { cpu: 16, ramGb: 32 },
+    ];
+    // Then
+    expect(outOfMemoryMessage({ cpu: 16, ramGb: 32 }, offered)).toBe(
+      "Sandbox ran out of memory (16x32). 16x32 is the largest size.",
+    );
+  });
 });
