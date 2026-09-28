@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { posix } from "node:path";
 import { Effect, Redacted } from "effect";
+import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
   EnvFileLineError,
@@ -59,33 +60,43 @@ export const parseEnvFile = (path: string, text: string) =>
     return secrets;
   });
 
+const envFileError = (path: string) => (cause: unknown) => {
+  const code =
+    typeof cause === "object" && cause !== null && "code" in cause
+      ? cause.code
+      : undefined;
+  switch (code) {
+    case "ENOENT":
+      return new EnvFileUnreadableError({ path, reason: "not found" });
+    case "EACCES":
+      return new EnvFileUnreadableError({ path, reason: "is not readable" });
+    case "EISDIR":
+      return new EnvFileUnreadableError({ path, reason: "is a folder" });
+    default:
+      return new ProviderError({
+        provider: "local",
+        reason: cause instanceof Error ? cause.message : String(cause),
+      });
+  }
+};
+
 export const readEnvFile = (path: string) =>
   Effect.gen(function* () {
+    const onError = envFileError(path);
     const text = yield* Effect.tryPromise({
       try: () => readFile(path, "utf8"),
-      catch: (cause) => {
-        const code =
-          typeof cause === "object" && cause !== null && "code" in cause
-            ? cause.code
-            : undefined;
-        switch (code) {
-          case "ENOENT":
-            return new EnvFileUnreadableError({ path, reason: "not found" });
-          case "EACCES":
-            return new EnvFileUnreadableError({
-              path,
-              reason: "is not readable",
-            });
-          case "EISDIR":
-            return new EnvFileUnreadableError({ path, reason: "is a folder" });
-          default:
-            return new ProviderError({
-              provider: "local",
-              reason: cause instanceof Error ? cause.message : String(cause),
-            });
-        }
-      },
+      catch: onError,
     });
+    const info = yield* Effect.tryPromise({
+      try: () => stat(path),
+      catch: onError,
+    });
+    if ((info.mode & 0o077) !== 0) {
+      const output = yield* CliOutput;
+      yield* output.err(
+        `proofbox: env file ${path} is mode ${(info.mode & 0o777).toString(8)}, so other users can read it; run chmod 600 ${path}\n`,
+      );
+    }
     return yield* parseEnvFile(path, text);
   });
 

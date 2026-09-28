@@ -493,4 +493,28 @@ describe("create", () => {
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
+
+  it("an env file other users can read gets a warning", async () => {
+    // Given: an env file mode 644
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      `proofbox: env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n` +
+        "proofbox: creating fake Sandbox\n" +
+        "proofbox: starting Keeper\n" +
+        "proofbox: sending 1 Secret\n",
+    );
+  });
 });
