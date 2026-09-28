@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { readXev, startXev } from "./support/xev.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -61,5 +62,54 @@ describe("Pixel actions", () => {
     );
     expect(bytes.readUInt32BE(16)).toBe(1440);
     expect(bytes.readUInt32BE(20)).toBe(900);
+  });
+
+  it("click presses the left button at the point", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, ["click", id, "700", "400"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    const events = await readXev(env, id);
+    const presses = events.filter((event) => event.type === "ButtonPress");
+    expect(presses).toEqual([
+      { type: "ButtonPress", root: [700, 400], button: 1 },
+    ]);
+  });
+
+  it("click --screenshot writes the screen after the click", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
+    // When
+    const result = await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--screenshot",
+      out,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const bytes = readFileSync(out);
+    expect(bytes.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    expect(bytes.readUInt32BE(16)).toBe(1440);
+    expect(bytes.readUInt32BE(20)).toBe(900);
+    const events = await readXev(env, id);
+    const presses = events.filter((event) => event.type === "ButtonPress");
+    expect(presses).toEqual([
+      { type: "ButtonPress", root: [700, 400], button: 1 },
+    ]);
   });
 });

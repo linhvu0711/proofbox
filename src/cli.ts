@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Option } from "effect";
+import { clickAt } from "./commands/click.ts";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
@@ -34,6 +35,31 @@ const exec = Command.make(
   ({ id, command }) => execInSandbox(id, command),
 );
 
+const actionOptions = {
+  screenshot: Options.text("screenshot").pipe(Options.optional),
+};
+
+const click = Command.make(
+  "click",
+  {
+    id: Args.text({ name: "id" }),
+    x: Args.integer({ name: "x" }),
+    y: Args.integer({ name: "y" }),
+    button: Options.choice("button", ["left", "middle", "right"]).pipe(
+      Options.withDefault("left"),
+    ),
+    ...actionOptions,
+  },
+  ({ id, x, y, button, screenshot }) =>
+    clickAt({
+      id,
+      x,
+      y,
+      button,
+      screenshot: Option.getOrUndefined(screenshot),
+    }),
+);
+
 const screenshot = Command.make(
   "screenshot",
   {
@@ -56,7 +82,7 @@ const del = Command.make(
 );
 
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, screenshot, list, del]),
+  Command.withSubcommands([create, exec, screenshot, click, list, del]),
 );
 
 export const cli = Command.run(command, {

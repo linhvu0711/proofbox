@@ -14,6 +14,13 @@ export const PIXEL_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/pixel",
 };
 
+export const PACE_HUMAN = {
+  glideMs: 400,
+  letterMs: 80,
+  typeMaxMs: 3000,
+  settleMs: 700,
+};
+
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
@@ -23,7 +30,11 @@ export const writeOut = (path: string, bytes: Uint8Array) =>
     catch: (cause) => new OutFileError({ path, reason: describe(cause) }),
   });
 
-export const runPixel = (rawId: string, helperArgv: ReadonlyArray<string>) =>
+export const runPixel = (
+  rawId: string,
+  helperArgv: ReadonlyArray<string>,
+  options: { readonly screenshot?: string | undefined } = {},
+) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
     const id = yield* parseSandboxId(rawId, [...providers.keys()]);
@@ -86,5 +97,9 @@ export const runPixel = (rawId: string, helperArgv: ReadonlyArray<string>) =>
           .trim()}`,
       });
     }
-    return Buffer.concat(collected.stdout);
+    const bytes = Buffer.concat(collected.stdout);
+    if (options.screenshot !== undefined) {
+      yield* writeOut(options.screenshot, bytes);
+    }
+    return bytes;
   });
