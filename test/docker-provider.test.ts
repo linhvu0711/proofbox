@@ -55,12 +55,7 @@ describe("Docker not running", () => {
     // Given
     const env = makeEnv();
     // When
-    const result = await runCli(env, [
-      "exec",
-      "docker:abc123",
-      "--",
-      "true",
-    ]);
+    const result = await runCli(env, ["exec", "docker:abc123", "--", "true"]);
     // Then
     expect(result.stderr).toBe(NOT_RUNNING);
     expect(result.exitCode).toBe(125);

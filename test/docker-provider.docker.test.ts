@@ -118,7 +118,12 @@ describe("Docker Provider", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     const tag = (
-      await docker(["inspect", containerOf(id), "--format", "{{.Config.Image}}"])
+      await docker([
+        "inspect",
+        containerOf(id),
+        "--format",
+        "{{.Config.Image}}",
+      ])
     ).trim();
     const version = (
       await docker([
@@ -137,7 +142,7 @@ describe("Docker Provider", () => {
       .split("\n")
       .find((line) => line.startsWith(`${id} `) || line.startsWith(id));
     expect(row).toMatch(
-      /^docker:[a-z0-9]{6}  linux  base [0-9a-f]{12}  deadline \S+  max life \S+$/,
+      /^docker:[a-z0-9]{6} {2}linux {2}base [0-9a-f]{12} {2}deadline \S+ {2}max life \S+$/,
     );
     expect(row).toContain(`base ${version}`);
     const rows = JSON.parse(json.stdout) as ReadonlyArray<{

@@ -69,9 +69,7 @@ describe("Provider registry", () => {
       { unset: ["PROOFBOX_FAKE_ROOT"] },
     );
     // Then
-    expect(result.stderr).toBe(
-      'Unknown Provider "nope": use one of: docker\n',
-    );
+    expect(result.stderr).toBe('Unknown Provider "nope": use one of: docker\n');
     expect(result.exitCode).toBe(125);
   });
 
