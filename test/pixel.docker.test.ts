@@ -171,9 +171,9 @@ describe("Pixel actions", () => {
       "Point 1440,100 is outside the screen (1440x900); use x 0 to 1439 and y 0 to 899\n",
     );
     const events = await readXev(env, id);
-    expect(
-      events.filter((event) => event.type === "ButtonPress"),
-    ).toHaveLength(0);
+    expect(events.filter((event) => event.type === "ButtonPress")).toHaveLength(
+      0,
+    );
   });
 
   it("click --screenshot writes the screen after the click", async () => {

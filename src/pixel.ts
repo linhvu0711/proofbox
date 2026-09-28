@@ -162,15 +162,13 @@ export const runPixel = (
         .split(" ")
         .map(Number);
       const points = options.points ?? [];
-      const [x, y] =
-        points.find(
-          ([px, py]) =>
-            width !== undefined &&
-            height !== undefined &&
-            (px < 0 || py < 0 || px >= width || py >= height),
-        ) ??
-        points[0] ??
-        [0, 0];
+      const [x, y] = points.find(
+        ([px, py]) =>
+          width !== undefined &&
+          height !== undefined &&
+          (px < 0 || py < 0 || px >= width || py >= height),
+      ) ??
+        points[0] ?? [0, 0];
       return yield* new OutsideScreenError({
         x,
         y,
