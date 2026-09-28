@@ -47,9 +47,35 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
 export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   readonly flag: string;
   readonly value: string;
+  readonly units: ReadonlyArray<string>;
+  readonly example: string;
 }> {
   get message() {
-    return `Bad --${this.flag} "${this.value}": use a whole number with s, m, or h, for example 15m`;
+    const list =
+      this.units.length <= 2
+        ? this.units.join(" or ")
+        : `${this.units.slice(0, -1).join(", ")}, or ${this.units[this.units.length - 1]}`;
+    return `Bad --${this.flag} "${this.value}": use a whole number with ${list}, for example ${this.example}`;
+  }
+}
+
+export class OutFileError extends Data.TaggedError("OutFileError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Could not write ${this.path}: ${this.reason}. Check the folder exists and try again.`;
+  }
+}
+
+export class OutsideScreenError extends Data.TaggedError("OutsideScreenError")<{
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}> {
+  get message() {
+    return `Point ${this.x},${this.y} is outside the screen (${this.width}x${this.height}); use x 0 to ${this.width - 1} and y 0 to ${this.height - 1}`;
   }
 }
 
@@ -151,9 +177,18 @@ export class MissingCapabilityError extends Data.TaggedError(
 )<{
   readonly provider: string;
   readonly capability: string;
+  readonly outcome: string;
 }> {
   get message() {
-    return `Provider ${this.provider} lacks the Capability ${this.capability}; nothing was created`;
+    return `Provider ${this.provider} lacks the Capability ${this.capability}; ${this.outcome}`;
+  }
+}
+
+export class BadStepsError extends Data.TaggedError("BadStepsError")<{
+  readonly steps: number;
+}> {
+  get message() {
+    return `Bad steps ${this.steps}: scroll needs at least 1`;
   }
 }
 

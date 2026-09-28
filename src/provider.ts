@@ -21,7 +21,7 @@ export type Os = typeof Os.Type;
 
 export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const Capability = Schema.Literal("os:linux", "os:macos");
+export const Capability = Schema.Literal("os:linux", "os:macos", "desktop");
 export type Capability = typeof Capability.Type;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
