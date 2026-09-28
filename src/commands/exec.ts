@@ -1,6 +1,7 @@
 import { Clock, Duration, Effect, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { nextDeadline } from "../deadline.ts";
+import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 
@@ -28,12 +29,13 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       ),
     );
     yield* push;
-    const connection = yield* provider.connect(id.name);
+    const keeper = yield* KeeperClient;
+    const events = yield* keeper.exec(rawId, argv);
     const pushWhileRunning = Effect.repeat(
       push,
       Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
     );
-    yield* connection.exec(argv).pipe(
+    yield* events.pipe(
       Stream.runForEach((event) => {
         switch (event._tag) {
           case "Stdout":

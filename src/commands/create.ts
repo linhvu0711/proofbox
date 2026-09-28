@@ -1,7 +1,8 @@
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
 import { MissingCapabilityError, UnknownProviderError } from "../errors.ts";
+import { KeeperClient } from "../keeper/keeper-client.ts";
 import { type Os, Providers } from "../provider.ts";
 
 export const createSandbox = (options: {
@@ -40,5 +41,16 @@ export const createSandbox = (options: {
       maxLife,
     });
     const output = yield* CliOutput;
-    yield* output.out(`${provider.name}:${info.name}\n`);
+    const id = `${provider.name}:${info.name}`;
+    const keeper = yield* KeeperClient;
+    yield* keeper
+      .start(id)
+      .pipe(
+        Effect.catchAll(() =>
+          output.err(
+            "proofbox: Keeper did not start; commands still work, only slower\n",
+          ),
+        ),
+      );
+    yield* output.out(`${id}\n`);
   });
