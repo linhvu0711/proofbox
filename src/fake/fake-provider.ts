@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  cp,
   mkdir,
   readdir,
   readFile,
@@ -48,6 +49,14 @@ const hasCode = (cause: unknown, code: string) =>
 export const makeFakeProvider = (options: {
   readonly root: string;
   readonly watch: "process" | "none";
+  // Snapshots live in their own folder, one entry per Fingerprint; `fail`
+  // makes a save ("push") or a start from one ("pull") fail.
+  readonly snapshots?:
+    | {
+        readonly root: string;
+        readonly fail?: "push" | "pull" | undefined;
+      }
+    | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -257,6 +266,39 @@ export const makeFakeProvider = (options: {
       yield* writeFileInfo(name, file);
     });
 
+  // Copy into a temp entry and rename it over the old one, so a create
+  // that starts from the Snapshot never sees a half-written one.
+  const saveSnapshot = (name: string, fingerprint: string) =>
+    Effect.gen(function* () {
+      const snapshots = options.snapshots;
+      if (snapshots === undefined) {
+        return yield* fail("this fake Provider keeps no Snapshots");
+      }
+      yield* readFileInfo(name);
+      const dir = join(root, name);
+      const entry = join(snapshots.root, fingerprint);
+      const temp = join(snapshots.root, `.new-${fingerprint}`);
+      yield* Effect.tryPromise({
+        try: async () => {
+          await rm(temp, { recursive: true, force: true });
+          await mkdir(temp, { recursive: true });
+          await cp(join(dir, "home"), join(temp, "home"), { recursive: true });
+          await cp(join(dir, "state"), join(temp, "state"), {
+            recursive: true,
+          });
+          await rm(entry, { recursive: true, force: true });
+          await rename(temp, entry);
+        },
+        catch: (cause) => fail(describe(cause)),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.tryPromise(() =>
+            rm(temp, { recursive: true, force: true }),
+          ).pipe(Effect.ignore),
+        ),
+      );
+    });
+
   const connect = (name: string) =>
     Effect.gen(function* () {
       const executor = yield* CommandExecutor.CommandExecutor;
@@ -319,13 +361,23 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
-    capabilities: new Set(["os:linux"]),
+    capabilities: new Set(
+      options.snapshots === undefined ? ["os:linux"] : ["os:linux", "snapshot"],
+    ),
     sizes: [
       { cpu: 4, ramGb: 8 },
       { cpu: 8, ramGb: 16 },
       { cpu: 16, ramGb: 32 },
     ],
     create,
+    ...(options.snapshots === undefined
+      ? {}
+      : {
+          snapshots: {
+            baseVersion: Effect.succeed("fake"),
+            save: saveSnapshot,
+          },
+        }),
     get,
     list,
     delete: del,

@@ -33,9 +33,24 @@ export const ProvidersLive = Layer.effect(
         catch: (cause) =>
           new ProviderError({ provider: "fake", reason: String(cause) }),
       });
+      const snapshotsRoot = yield* Config.option(
+        Config.string("PROOFBOX_FAKE_SNAPSHOTS"),
+      );
+      const snapshotFail = yield* Config.option(
+        Config.literal("push", "pull")("PROOFBOX_FAKE_SNAPSHOT_FAIL"),
+      );
       providers.set(
         "fake",
-        fake.makeFakeProvider({ root: fakeRoot.value, watch: "process" }),
+        fake.makeFakeProvider({
+          root: fakeRoot.value,
+          watch: "process",
+          snapshots: Option.isSome(snapshotsRoot)
+            ? {
+                root: snapshotsRoot.value,
+                fail: Option.getOrUndefined(snapshotFail),
+              }
+            : undefined,
+        }),
       );
     }
     return providers;
