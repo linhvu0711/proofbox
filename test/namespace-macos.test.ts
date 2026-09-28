@@ -271,4 +271,64 @@ describe("Namespace macOS Provider", () => {
       expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
     }).pipe(withRuntime(runtimeDir())),
   );
+
+  it.effect("macOS create runs the prepare steps in order", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const at = (text: string) =>
+        lines.findIndex((line) => line.includes(text));
+      expect(at("nsc artifact cache-url")).toBeGreaterThanOrEqual(0);
+      expect(at("nsc artifact cache-url")).toBeLessThan(
+        at("rm -f /var/run/nsc/token.json"),
+      );
+      expect(at("rm -f /var/run/nsc/token.json")).toBeLessThan(
+        at("test ! -e /var/run/nsc/token.json"),
+      );
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create refuses and deletes the Mac when the token file is still there",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("test ! -e /var/run/nsc/token.json")
+            ? { exitCode: 1 }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:abc123def4567 can reach the Namespace workload token (the token file); deleted the host and refused the Sandbox",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create refuses and deletes the Mac when the Docker config is still there",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("test ! -e /Users/runner/.docker/config.json")
+            ? { exitCode: 1 }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:abc123def4567 can reach the Namespace workload token (the Docker config token); deleted the host and refused the Sandbox",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
 });

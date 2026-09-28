@@ -77,6 +77,21 @@ describe("Namespace macOS Provider", () => {
     );
   });
 
+  it("the workload token and the Docker config are gone", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "test -e /var/run/nsc/token.json || test -e /Users/runner/.docker/config.json",
+    ]);
+    // Then
+    expect(found.exitCode).toBe(1);
+  });
+
   it("live and record on a Mac are refused until #15", async () => {
     // Given: the Mac from beforeAll
     // When

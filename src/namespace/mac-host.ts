@@ -6,6 +6,7 @@ import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import {
   ProviderError,
   SandboxGoneError,
+  TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
 import { Progress } from "../progress.ts";
@@ -154,6 +155,34 @@ const installTools = (link: Link, id: string) =>
     }
   });
 
+// `runner` has passwordless sudo, so the workload token must be gone before
+// any user code runs (ADR 0009); then each way to it is checked.
+const dropToken = (link: Link, id: string) =>
+  Effect.gen(function* () {
+    yield* step(
+      link,
+      "deleting the workload token",
+      "sudo -n rm -f /var/run/nsc/token.json /Users/runner/.docker/config.json",
+    );
+    const checks = [
+      ["test ! -e /var/run/nsc/token.json", "the token file"],
+      [
+        "test ! -e /Users/runner/.docker/config.json",
+        "the Docker config token",
+      ],
+      [
+        "! curl -s -m 3 -o /dev/null http://169.254.169.42/",
+        "the token service",
+      ],
+    ] as const;
+    for (const [commandLine, what] of checks) {
+      const result = yield* link.run(commandLine);
+      if (result.exitCode !== 0) {
+        return yield* new TokenExposedError({ id: `ns:${id}`, what });
+      }
+    }
+  });
+
 // Everything a Mac needs before user code arrives, in order.
 export const prepareMac = (
   link: Link,
@@ -165,6 +194,10 @@ export const prepareMac = (
     yield* progress.step(
       "installing the Tool bundle",
       installTools(link, req.id),
+    );
+    yield* progress.step(
+      "checking the Namespace token is out of reach",
+      dropToken(link, req.id),
     );
     return info;
   });
