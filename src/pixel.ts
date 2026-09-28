@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { Duration, Effect, Stream } from "effect";
+import { Duration, Effect, Schema, Stream } from "effect";
 import { PACE_SPAN, parseSpan, withDeadlinePush } from "./deadline.ts";
 import {
   type BadSpanError,
@@ -15,6 +15,17 @@ import { parseSandboxId } from "./sandbox-id.ts";
 export const PIXEL_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/pixel",
 };
+
+export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";
+
+export const ActionLogLine = Schema.Struct({
+  t: Schema.Number,
+  kind: Schema.Literal("screenshot", "click", "type", "key", "scroll", "drag"),
+  x: Schema.Number.pipe(Schema.int()),
+  y: Schema.Number.pipe(Schema.int()),
+  toX: Schema.optional(Schema.Number.pipe(Schema.int())),
+  toY: Schema.optional(Schema.Number.pipe(Schema.int())),
+});
 
 export const PACE_HUMAN = {
   glideMs: 400,

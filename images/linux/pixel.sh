@@ -37,6 +37,20 @@ settle() {
   sleep "$(awk "BEGIN { print $1 / 1000 }")"
 }
 
+LOG=/run/proofbox/action-log.jsonl
+
+# log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
+# before the press, the first letter or key, or the capture.
+log() {
+  t=$(date +%s.%3N)
+  eval "$(xdotool getmouselocation --shell)"
+  if [ $# -ge 3 ]; then
+    printf '{"t":%s,"kind":"%s","x":%s,"y":%s,"toX":%s,"toY":%s}\n' "$t" "$1" "$X" "$Y" "$2" "$3" >> "$LOG"
+  else
+    printf '{"t":%s,"kind":"%s","x":%s,"y":%s}\n' "$t" "$1" "$X" "$Y" >> "$LOG"
+  fi
+}
+
 # shot: write a full-size PNG of the desktop to stdout.
 shot() {
   /opt/proofbox/tools/ffmpeg -loglevel error -f x11grab -video_size "${W}x${H}" -i "$DISPLAY" -frames:v 1 -f image2pipe -vcodec png -
@@ -46,12 +60,14 @@ cmd=${1:-}
 [ $# -gt 0 ] && shift
 case "$cmd" in
   screenshot)
+    log screenshot
     shot
     ;;
   click)
     # click X Y BUTTON GLIDE_MS SETTLE_MS SHOT
     inside "$1" "$2"
     glide "$1" "$2" "$4"
+    log click
     xdotool click "$3"
     settle "$5"
     if [ "$6" = "1" ]; then
@@ -60,6 +76,7 @@ case "$cmd" in
     ;;
   type)
     # type LETTER_MS SETTLE_MS SHOT TEXT
+    log type
     xdotool type --delay "$1" "$4"
     settle "$2"
     if [ "$3" = "1" ]; then
@@ -68,6 +85,7 @@ case "$cmd" in
     ;;
   key)
     # key KEYS SETTLE_MS SHOT
+    log key
     xdotool key "$1"
     settle "$2"
     if [ "$3" = "1" ]; then
@@ -78,6 +96,7 @@ case "$cmd" in
     # scroll X Y BUTTON STEPS GLIDE_MS SETTLE_MS SHOT
     inside "$1" "$2"
     glide "$1" "$2" "$5"
+    log scroll
     xdotool click --repeat "$4" --delay 50 "$3"
     settle "$6"
     if [ "$7" = "1" ]; then
@@ -89,6 +108,7 @@ case "$cmd" in
     inside "$1" "$2"
     inside "$3" "$4"
     glide "$1" "$2" "$5"
+    log drag "$3" "$4"
     xdotool mousedown 1
     glide "$3" "$4" "$5"
     xdotool mouseup 1

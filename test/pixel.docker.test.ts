@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { readXev, startXev } from "./support/xev.ts";
 
@@ -294,6 +296,59 @@ describe("Pixel actions", () => {
           event.type === "ButtonPress" || event.type === "MotionNotify",
       ),
     ).toHaveLength(0);
+  });
+
+  it("each action adds a line to the Action log", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-shot-"));
+    const startSec = Date.now() / 1000;
+    // When
+    for (const argv of [
+      ["screenshot", id, "--out", join(dir, "a.png")],
+      ["click", id, "700", "400"],
+      ["type", id, "ab"],
+      ["key", id, "Return"],
+      ["scroll", id, "700", "400", "down", "2"],
+      ["drag", id, "100", "200", "500", "200"],
+    ]) {
+      const args =
+        argv[0] === "screenshot" ? argv : [...argv, "--pace", "fast"];
+      const result = await runCli(env, args);
+      expect(result.exitCode).toBe(0);
+    }
+    const endSec = Date.now() / 1000;
+    const cat = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/action-log.jsonl",
+    ]);
+    const lines = cat.stdout
+      .trim()
+      .split("\n")
+      .map((line) =>
+        Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(line),
+      );
+    // Then
+    expect(lines.map(({ t: _t, ...rest }) => rest)).toEqual([
+      { kind: "screenshot", x: 720, y: 450 },
+      { kind: "click", x: 700, y: 400 },
+      { kind: "type", x: 700, y: 400 },
+      { kind: "key", x: 700, y: 400 },
+      { kind: "scroll", x: 700, y: 400 },
+      { kind: "drag", x: 100, y: 200, toX: 500, toY: 200 },
+    ]);
+    let previous = startSec;
+    for (const line of lines) {
+      expect(line.t).toBeGreaterThanOrEqual(startSec);
+      expect(line.t).toBeLessThanOrEqual(endSec);
+      expect(line.t).toBeGreaterThanOrEqual(previous);
+      previous = line.t;
+    }
   });
 
   it("click --screenshot writes the screen after the click", async () => {
