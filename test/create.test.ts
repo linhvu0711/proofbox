@@ -359,7 +359,7 @@ describe("create", () => {
     // Given: an env file using dotenv syntax
     const env = makeEnv();
     const path = envFile(
-      "# app secrets\nexport API_TOKEN=tok-5f2a9c\n\nDB_URL = \"postgres://app:pw@db:5432/app\"\nGREETING='hi there'\r\nHASH=abc#def\nQUOTE=it's\nAPI_TOKEN=tok-later\n",
+      '# app secrets\nexport API_TOKEN=tok-5f2a9c\n\nDB_URL = "postgres://app:pw@db:5432/app"\nGREETING=\'hi there\'\r\nHASH=abc#def\nQUOTE=it\'s\nAPI_TOKEN=tok-later\nNOTE=abc   # staging\nQUOTED="abc # x"\nQ2="abc" # note\n',
     );
     // When
     const create = await runCli(env, [
@@ -378,13 +378,13 @@ describe("create", () => {
       "--",
       "sh",
       "-c",
-      'printf "%s|" "$API_TOKEN" "$DB_URL" "$GREETING" "$HASH" "$QUOTE"',
+      'printf "%s|" "$API_TOKEN" "$DB_URL" "$GREETING" "$HASH" "$QUOTE" "$NOTE" "$QUOTED" "$Q2"',
     ]);
     // Then
     expect(create.exitCode).toBe(0);
-    expect(create.stderr.endsWith("proofbox: sending 5 Secrets\n")).toBe(true);
+    expect(create.stderr.endsWith("proofbox: sending 8 Secrets\n")).toBe(true);
     expect(ran.stdout).toBe(
-      "tok-later|postgres://app:pw@db:5432/app|hi there|abc#def|it's|",
+      "tok-later|postgres://app:pw@db:5432/app|hi there|abc#def|it's|abc|abc # x|abc|",
     );
   });
 

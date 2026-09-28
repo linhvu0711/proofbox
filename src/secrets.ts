@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { posix } from "node:path";
-import { Effect, Redacted } from "effect";
+import { Effect, Redacted, Schema } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
@@ -15,12 +15,13 @@ import { writeSandboxFile } from "./sandbox-file.ts";
 import { parseSandboxId } from "./sandbox-id.ts";
 import { shellJoin } from "./shell.ts";
 
-export interface Secret {
-  readonly name: string;
-  readonly value: Redacted.Redacted<string>;
-}
-
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export const Secret = Schema.Struct({
+  name: Schema.String.pipe(Schema.pattern(NAME)),
+  value: Schema.RedactedFromSelf(Schema.String),
+});
+export type Secret = typeof Secret.Type;
 
 export const parseEnvFile = (path: string, text: string) =>
   Effect.gen(function* () {
@@ -40,14 +41,23 @@ export const parseEnvFile = (path: string, text: string) =>
       if (at === -1 || !NAME.test(name)) {
         return yield* new EnvFileLineError({ path, line: lineNumber });
       }
-      let value = line.slice(at + 1).trim();
-      const quote = value.at(0);
-      if (
-        value.length >= 2 &&
-        (quote === '"' || quote === "'") &&
-        value.endsWith(quote)
-      ) {
-        value = value.slice(1, -1);
+      const rawValue = line.slice(at + 1);
+      const trimmed = rawValue.trimStart();
+      const quote = trimmed.at(0);
+      const close =
+        quote === '"' || quote === "'" ? trimmed.indexOf(quote, 1) : -1;
+      let value: string;
+      if (close !== -1) {
+        // A quoted value keeps its `#`; after the closing quote only a
+        // comment may follow (Docker Compose's rule).
+        if (!/^\s*(?:#.*)?$/.test(trimmed.slice(close + 1))) {
+          return yield* new EnvFileLineError({ path, line: lineNumber });
+        }
+        value = trimmed.slice(1, close);
+      } else {
+        // An unquoted value ends at a space or tab followed by `#`.
+        const cut = rawValue.search(/[ \t]#/);
+        value = (cut === -1 ? rawValue : rawValue.slice(0, cut)).trim();
       }
       const secret: Secret = { name, value: Redacted.make(value) };
       const existing = secrets.findIndex((known) => known.name === name);
