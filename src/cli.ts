@@ -36,7 +36,9 @@ const create = Command.make(
 const exec = Command.make(
   "exec",
   {
-    id: Args.text({ name: "id" }),
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
     command: Args.text({ name: "command" }).pipe(Args.atLeast(1)),
   },
   ({ id, command }) => execInSandbox(id, command),
@@ -51,7 +53,9 @@ const list = Command.make(
 const live = Command.make(
   "live",
   {
-    id: Args.text({ name: "id" }),
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
   },
   ({ id }) => openLive(id),
 );
@@ -59,7 +63,9 @@ const live = Command.make(
 const del = Command.make(
   "delete",
   {
-    id: Args.text({ name: "id" }),
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
   },
   ({ id }) => deleteSandbox(id),
 );

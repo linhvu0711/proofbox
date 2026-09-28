@@ -11,7 +11,7 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "abc123", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Bad Sandbox id "abc123": use the form <provider>:<name>, for example fake:abc123\n',
+      'Bad Sandbox id "abc123": use the form <provider>:<name>, for example ns:abc123\n',
     );
     expect(result.exitCode).toBe(125);
   });
@@ -23,7 +23,7 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "fake:", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Bad Sandbox id "fake:": use the form <provider>:<name>, for example fake:abc123\n',
+      'Bad Sandbox id "fake:": use the form <provider>:<name>, for example ns:abc123\n',
     );
     expect(result.exitCode).toBe(125);
   });

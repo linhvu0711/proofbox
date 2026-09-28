@@ -31,8 +31,7 @@ export const createSandbox = (options: {
 }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const providerName =
-      options.provider ?? (yield* providerForOs(options.os));
+    const providerName = options.provider ?? (yield* providerForOs(options.os));
     const provider = providers.get(providerName);
     if (provider === undefined) {
       return yield* new UnknownProviderError({

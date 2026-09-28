@@ -19,9 +19,9 @@ export const providerForOs = (os: Os) =>
     const home = yield* Config.string("HOME");
     const path = join(home, ".config", "proofbox", "config");
     const bad = (reason: string) => new BadConfigError({ path, reason });
-    const text = yield* Effect.tryPromise(() =>
-      readFile(path, "utf8"),
-    ).pipe(Effect.orElseSucceed(() => undefined));
+    const text = yield* Effect.tryPromise(() => readFile(path, "utf8")).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
     if (text === undefined) {
       return "namespace";
     }

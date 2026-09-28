@@ -187,7 +187,7 @@ export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
   get message() {
-    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example fake:abc123`;
+    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example ns:abc123`;
   }
 }
 
