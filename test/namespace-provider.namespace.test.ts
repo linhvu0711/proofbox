@@ -1,10 +1,22 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  type CliEnv,
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+} from "./support/cli.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
@@ -113,6 +125,56 @@ describe("Namespace Provider", () => {
     expect(created.stdout).toMatch(/^ns:[a-z0-9]+\n$/);
     expect(dimensions.stdout).toContain("1440x900 pixels");
     expect(chromium.stdout).toMatch(/^Chromium \d+\./);
+  });
+
+  it("a second create reuses the Snapshot, skips the Setup script, and holds no Secret", async () => {
+    // Given: a real account, a Work folder whose lockfile marks this run,
+    // a Setup script, and a Secret in an env file
+    const env = makeEnv({ docker: true, namespace: true });
+    const folder = makeGitFolder({
+      committed: {
+        "a.txt": "a\n",
+        "pnpm-lock.yaml": `lockfileVersion: '9.0'\n# run ${Date.now()}\n`,
+      },
+    });
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshot-"));
+    const setup = join(dir, "setup.sh");
+    writeFileSync(setup, "#!/bin/sh\necho ran >> runs.txt\n");
+    const envPath = join(dir, "env");
+    writeFileSync(envPath, "API_TOKEN=tok-5f2a9c\n", { mode: 0o600 });
+    // When: a first create saves the Snapshot, a second reuses it
+    const first = await create(env, [
+      "--work",
+      folder,
+      "--setup",
+      setup,
+      "--env-file",
+      envPath,
+    ]);
+    const fp = /Snapshot saved, Fingerprint ([0-9a-f]{12})/.exec(
+      first.stderr,
+    )?.[1];
+    const second = await create(env, ["--work", folder, "--setup", setup]);
+    const id = second.stdout.trim();
+    const runs = await runCli(env, ["exec", id, "--", "cat", "runs.txt"]);
+    const grep = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "if grep -rqsF tok-5f2a9c / --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev; then echo found; else echo clean; fi",
+    ]);
+    // Then
+    expect(first.exitCode).toBe(0);
+    expect(fp).toMatch(/^[0-9a-f]{12}$/);
+    expect(second.exitCode).toBe(0);
+    expect(second.stderr).toContain(
+      `proofbox: Snapshot reused, Fingerprint ${fp}\n`,
+    );
+    expect(second.stderr).not.toContain("proofbox: running Setup script");
+    expect(runs.stdout).toBe("ran\n");
+    expect(grep.stdout).toBe("clean\n");
   });
 
   it("exec runs as the app user", async () => {

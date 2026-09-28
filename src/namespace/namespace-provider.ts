@@ -27,6 +27,12 @@ import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NscClient } from "./nsc-client.ts";
+import {
+  pullSnapshot,
+  pushSnapshot,
+  snapshotRef,
+  snapshotTag,
+} from "./snapshot-image.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
 const SIZES: ReadonlyArray<Size> = [
@@ -66,6 +72,21 @@ export const makeNamespaceProvider = (deps: {
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
   const containerOf = (name: string) => `proofbox-${name.slice(0, 6)}`;
 
+  // The tenant names the workspace registry the Snapshot images live in.
+  const readTenant = (link: Link) =>
+    Effect.gen(function* () {
+      const tenant = yield* link.run(
+        `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
+      );
+      const registry = tenant.stdout.trim();
+      if (tenant.exitCode !== 0 || registry === "") {
+        return yield* fail(
+          "could not read the Namespace tenant on the host",
+        );
+      }
+      return registry;
+    });
+
   // Link bring-up can outlast a short host Deadline, so every open first
   // bumps the host's own lifetime — detached, since nsc needs no link.
   const openLink = (name: string, owner: "cli" | "keeper") =>
@@ -79,12 +100,13 @@ export const makeNamespaceProvider = (deps: {
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
   // call so the Keeper's ControlMaster path stays the Keeper's alone.
-  const withCliLink = <A, E>(
+  const withCliLink = <A, E, R>(
     name: string,
-    use: (link: Link) => Effect.Effect<A, E>,
+    use: (link: Link) => Effect.Effect<A, E, R>,
   ): Effect.Effect<
     A,
-    E | ProviderError | ProviderUnavailableError | SandboxGoneError
+    E | ProviderError | ProviderUnavailableError | SandboxGoneError,
+    R
   > =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -148,6 +170,7 @@ export const makeNamespaceProvider = (deps: {
         deadline: info.deadline,
         maxLifeAt: info.maxLifeAt,
         base: info.base,
+        snapshot: info.snapshot,
         size: info.size,
       });
     });
@@ -263,6 +286,7 @@ export const makeNamespaceProvider = (deps: {
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
     readonly name?: string | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
       yield* nsc.checkLogin.pipe(
@@ -402,23 +426,51 @@ export const makeNamespaceProvider = (deps: {
           ),
         );
         const link = yield* deps.openLink(id, hostPaths, "cli");
-        const tenant = yield* link.run(
-          `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
-        );
-        const registry = tenant.stdout.trim();
-        if (tenant.exitCode !== 0 || registry === "") {
-          return yield* fail("could not read the Namespace tenant on the host");
-        }
+        const registry = yield* readTenant(link);
         const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+        let imageTag = `nscr.io/${registry}/${baseImageTag(version)}`;
+        // Publish the VNC port for the Live view; the host has only a
+        // private address, and nsc forwards onto that address, so the
+        // publish must cover it — loopback binds are unreachable.
+        let runArgs: ReadonlyArray<string> = ["-p", "5900:5900"];
+        if (req.snapshot !== undefined) {
+          const tag = snapshotTag(registry, req.snapshot);
+          const pulled = yield* progress
+            .step("pulling the Snapshot", pullSnapshot(link, tag))
+            .pipe(
+              Effect.catchTag("ProviderError", (error) =>
+                progress
+                  .warn(
+                    `could not pull the Snapshot (${error.message}); running the Setup script`,
+                  )
+                  .pipe(Effect.as("missing" as const)),
+              ),
+            );
+          if (pulled === "pulled") {
+            imageTag = tag;
+            runArgs = [
+              ...runArgs,
+              "--label",
+              `proofbox.snapshot=${req.snapshot}`,
+            ];
+            // Each reuse pushes the image's own expiry out to 14 days, so
+            // Namespace deletes only Snapshots nobody used for 14 days.
+            yield* snapshotRef(link, tag).pipe(
+              Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, 336)),
+              Effect.catchAll((error) =>
+                progress.warn(
+                  `could not set the Snapshot expiry (${error.message})`,
+                ),
+              ),
+            );
+          }
+        }
         const inner = makeDockerProvider({
           client: deps.dockerFor(link),
-          imageTag: `nscr.io/${registry}/${baseImageTag(version)}`,
+          imageTag,
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
-          // Publish the VNC port for the Live view; the host has only a
-          // private address, and nsc forwards onto that address, so the
-          // publish must cover it — loopback binds are unreachable.
-          runArgs: ["-p", "5900:5900"],
+          runArgs,
           brand: brandFor(id),
         });
         const info = yield* inner.create({
@@ -466,6 +518,7 @@ export const makeNamespaceProvider = (deps: {
           deadline: info.deadline,
           maxLifeAt: info.maxLifeAt,
           base: info.base,
+          snapshot: info.snapshot,
           size: info.size,
         });
       }).pipe(
@@ -584,9 +637,31 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
-    capabilities: new Set(["os:linux", "live-view", "desktop"]),
+    capabilities: new Set(["os:linux", "live-view", "desktop", "snapshot"]),
     sizes: SIZES,
     liveView,
+    snapshots: {
+      baseVersion: baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE),
+      // docker commit + push run on the host; the expiry call runs the
+      // Caller's nsc on the pushed image's RepoDigests name.
+      save: (name, fp) =>
+        withCliLink(name, (link) =>
+          Effect.gen(function* () {
+            const tenant = yield* readTenant(link);
+            const tag = snapshotTag(tenant, fp);
+            yield* pushSnapshot(link, containerOf(name), tag);
+            const progress = yield* Progress;
+            yield* snapshotRef(link, tag).pipe(
+              Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, 336)),
+              Effect.catchAll((error) =>
+                progress.warn(
+                  `could not set the Snapshot expiry (${error.message})`,
+                ),
+              ),
+            );
+          }),
+        ),
+    },
     create,
     get,
     list,
