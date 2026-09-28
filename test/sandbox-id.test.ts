@@ -40,6 +40,16 @@ describe("Sandbox id", () => {
     expect(result.exitCode).toBe(125);
   });
 
+  it("help shows an ns Sandbox id", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["delete", "--help"]);
+    // Then
+    expect(result.stdout).toContain("a Sandbox id, for example ns:abc123");
+    expect(result.stdout).not.toContain("fake:");
+  });
+
   it("exec on a name the Provider does not hold says it is gone", async () => {
     // Given
     const env = makeEnv();
