@@ -1,16 +1,14 @@
 import { writeFile } from "node:fs/promises";
-import { Duration, Effect, Schema, Stream } from "effect";
-import { PACE_SPAN, parseSpan, withDeadlinePush } from "./deadline.ts";
+import { Duration, Effect, Schema } from "effect";
+import { PACE_SPAN, parseSpan } from "./deadline.ts";
 import {
   type BadSpanError,
-  MissingCapabilityError,
   OutFileError,
   OutsideScreenError,
   ProviderError,
 } from "./errors.ts";
-import { KeeperClient } from "./keeper/keeper-client.ts";
-import { type Os, Providers } from "./provider.ts";
-import { parseSandboxId } from "./sandbox-id.ts";
+import { runHelper } from "./helper.ts";
+import type { Os } from "./provider.ts";
 
 export const PIXEL_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/pixel",
@@ -20,11 +18,20 @@ export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";
 
 export const ActionLogLine = Schema.Struct({
   t: Schema.Number,
-  kind: Schema.Literal("screenshot", "click", "type", "key", "scroll", "drag"),
+  kind: Schema.Literal(
+    "screenshot",
+    "click",
+    "type",
+    "key",
+    "scroll",
+    "drag",
+    "mark",
+  ),
   x: Schema.Number.pipe(Schema.int()),
   y: Schema.Number.pipe(Schema.int()),
   toX: Schema.optional(Schema.Number.pipe(Schema.int())),
   toY: Schema.optional(Schema.Number.pipe(Schema.int())),
+  step: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
 
 export const PACE_HUMAN = {
@@ -113,63 +120,11 @@ export const runPixel = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
-    if (!provider.capabilities.has("desktop")) {
-      return yield* new MissingCapabilityError({
-        provider: provider.name,
-        capability: "desktop",
-        outcome: "no action was taken",
-      });
-    }
-    const info = yield* provider.get(id.name);
-    const helper = PIXEL_HELPER[info.os];
-    if (helper === undefined) {
-      return yield* new MissingCapabilityError({
-        provider: provider.name,
-        capability: "desktop",
-        outcome: "no action was taken",
-      });
-    }
-    const keeper = yield* KeeperClient;
-    const collected = yield* withDeadlinePush(
-      provider,
-      id.name,
-      info,
-    )(
-      Effect.gen(function* () {
-        const events = yield* keeper.exec(rawId, [helper, ...helperArgv]);
-        return yield* events.pipe(
-          Stream.runFold(
-            {
-              stdout: [] as Uint8Array[],
-              stderr: [] as Uint8Array[],
-              code: undefined as number | undefined,
-            },
-            (acc, event) => {
-              switch (event._tag) {
-                case "Stdout":
-                  acc.stdout.push(event.bytes);
-                  return acc;
-                case "Stderr":
-                  acc.stderr.push(event.bytes);
-                  return acc;
-                case "Exit":
-                  return { ...acc, code: event.code };
-              }
-            },
-          ),
-        );
-      }),
-    );
+    const collected = yield* runHelper(rawId, PIXEL_HELPER, helperArgv, {
+      outcome: "no action was taken",
+    });
     if (collected.code === 3) {
-      const [width, height] = Buffer.concat(collected.stdout)
+      const [width, height] = collected.stdout
         .toString("utf8")
         .trim()
         .split(" ")
@@ -191,15 +146,12 @@ export const runPixel = (
     }
     if (collected.code !== 0) {
       return yield* new ProviderError({
-        provider: id.provider,
-        reason: `input helper failed: ${Buffer.concat(collected.stderr)
-          .toString("utf8")
-          .trim()}`,
+        provider: collected.provider,
+        reason: `input helper failed: ${collected.stderr}`,
       });
     }
-    const bytes = Buffer.concat(collected.stdout);
     if (options.screenshot !== undefined) {
-      yield* writeOut(options.screenshot, bytes);
+      yield* writeOut(options.screenshot, collected.stdout);
     }
-    return bytes;
+    return collected.stdout;
   });

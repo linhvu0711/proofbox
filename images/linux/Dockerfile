@@ -7,6 +7,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash app
 RUN mkdir -p /var/lib/proofbox && chown app:app /var/lib/proofbox
 COPY --chmod=0755 init.sh /opt/proofbox/init.sh
 COPY --chmod=0755 pixel.sh /opt/proofbox/pixel
+COPY --chmod=0755 record.sh /opt/proofbox/record
 ENV DISPLAY=:99
 ARG BASE_VERSION
 LABEL proofbox.base-version=$BASE_VERSION
