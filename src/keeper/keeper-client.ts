@@ -8,6 +8,7 @@ import {
   ProviderError,
   type ProviderUnavailableError,
   type UploadFailedError,
+  type WorkFileGrewError,
 } from "../errors.ts";
 import { type ExecEvent, type ExecOptions, Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
@@ -23,16 +24,20 @@ const codeOf = (cause: unknown) =>
 const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 
 // The Caller side may send a stream whose failure is an upload error, not a
-// ProviderError (packFiles can fail with UploadFailedError); when that stream
-// feeds a real Connection.exec it is narrowed back to ProviderError.
+// ProviderError (packFiles can fail with UploadFailedError or
+// WorkFileGrewError); when that stream feeds a real Connection.exec it is
+// narrowed back to ProviderError.
+type StdinError = ProviderError | UploadFailedError | WorkFileGrewError;
+
 export interface KeeperExecOptions {
-  readonly stdin?: Stream.Stream<Uint8Array, ProviderError | UploadFailedError>;
+  readonly stdin?: Stream.Stream<Uint8Array, StdinError>;
 }
 
 export type KeeperExecError =
   | ProviderError
   | ProviderUnavailableError
-  | UploadFailedError;
+  | UploadFailedError
+  | WorkFileGrewError;
 
 const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
   options?.stdin === undefined
@@ -234,9 +239,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                 : { exec: [...argv], stdin: true },
             ),
           );
-          const feederError = yield* Ref.make<
-            ProviderError | UploadFailedError | undefined
-          >(undefined);
+          const feederError = yield* Ref.make<StdinError | undefined>(
+            undefined,
+          );
           if (options?.stdin !== undefined) {
             const stdin = options.stdin;
             yield* Effect.forkScoped(

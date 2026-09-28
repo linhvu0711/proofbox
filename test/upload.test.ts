@@ -8,8 +8,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanupEnvs, makeEnv, makeGitFolder, runCli } from "./support/cli.ts";
+import { NodeContext } from "@effect/platform-node";
+import { it } from "@effect/vitest";
+import { ConfigProvider, Effect, Layer } from "effect";
+import { afterEach, describe, expect } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { readWorkFolder, sendWorkFolder } from "../src/commands/upload.ts";
+import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { Progress } from "../src/progress.ts";
+import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type CliEnv,
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+} from "./support/cli.ts";
 
 const homeFiles = (home: string): string[] => {
   const out: string[] = [];
@@ -26,6 +41,45 @@ const homeFiles = (home: string): string[] => {
   walk(home);
   return out.sort();
 };
+
+const grewMessage =
+  "A Work file grew while uploading, so the upload stopped past the 1.0 MB limit. Run it again, or raise the limit with --max-size.";
+
+// In-process upload services on the fake Provider under env.root; keeper
+// picks the Keeper socket path or the direct path.
+const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
+  const providers = Layer.succeed(
+    Providers,
+    new Map<string, Provider>([
+      ["fake", makeFakeProvider({ root: env.root, watch: "none" })],
+    ]),
+  );
+  const base = Layer.mergeAll(
+    NodeContext.layer,
+    CliOutput.Test,
+    providers,
+    Layer.succeed(Progress, new Progress({ step: (_label, effect) => effect })),
+  );
+  return (
+    keeper === "socket" ? KeeperClient.Default : KeeperClient.Direct
+  ).pipe(Layer.provideMerge(base));
+};
+
+const withRuntime = (env: CliEnv) =>
+  Effect.withConfigProvider(
+    ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", env.runtime]])),
+  );
+
+// A git folder whose big.bin passed a 1 MB check at 500 kB, then grew to
+// 5 MB before the send.
+const grownFolder = Effect.gen(function* () {
+  const folder = makeGitFolder({
+    committed: { "a.txt": "a\n", "big.bin": "x".repeat(500_000) },
+  });
+  const files = yield* readWorkFolder(folder, 1_000_000);
+  writeFileSync(join(folder, "big.bin"), "x".repeat(5_000_000));
+  return { folder, files };
+});
 
 describe("upload", () => {
   afterEach(cleanupEnvs);
@@ -443,4 +497,66 @@ describe("upload", () => {
     );
     expect(readdirSync(join(env.root, name, "home"))).toEqual([]);
   });
+
+  it.scopedLive(
+    "a grown Work file fails the upload with its own message through the Keeper",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Sandbox with its Keeper running; big.bin grew after the
+        // size check
+        const env = makeEnv();
+        const created = yield* Effect.promise(() =>
+          runCli(env, ["create", "--os", "linux", "--provider", "fake"]),
+        );
+        const id = created.stdout.trim();
+        const { folder, files } = yield* grownFolder;
+        // When
+        const error = yield* Effect.flip(
+          sendWorkFolder(id, folder, files, 1_000_000).pipe(
+            Effect.provide(uploadLayers(env, "socket")),
+            withRuntime(env),
+          ),
+        );
+        // Then
+        expect(error.message).toBe(grewMessage);
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.scopedLive(
+    "an upload after a stopped one sends every Work file again",
+    () =>
+      Effect.gen(function* () {
+        // Given: a.txt and big.bin uploaded; big.bin changed, then grew after
+        // the next size check, and that send stopped
+        const env = makeEnv();
+        const created = yield* Effect.promise(() =>
+          runCli(env, ["create", "--os", "linux", "--provider", "fake"]),
+        );
+        const id = created.stdout.trim();
+        const folder = makeGitFolder({
+          committed: { "a.txt": "a\n", "big.bin": "y".repeat(400_000) },
+        });
+        const first = yield* Effect.promise(() =>
+          runCli(env, ["upload", id, folder]),
+        );
+        expect(first.exitCode).toBe(0);
+        writeFileSync(join(folder, "big.bin"), "x".repeat(500_000));
+        const files = yield* readWorkFolder(folder, 1_000_000);
+        writeFileSync(join(folder, "big.bin"), "x".repeat(5_000_000));
+        yield* Effect.flip(
+          sendWorkFolder(id, folder, files, 1_000_000).pipe(
+            Effect.provide(uploadLayers(env, "socket")),
+            withRuntime(env),
+          ),
+        );
+        // When
+        const result = yield* Effect.promise(() =>
+          runCli(env, ["upload", id, folder]),
+        );
+        // Then
+        expect(result.stderr).toBe(
+          "proofbox: uploading Work folder\nproofbox: sent 2 files, removed 0 files\n",
+        );
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
 });

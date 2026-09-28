@@ -77,10 +77,11 @@ export const createSandbox = (options: {
                       cause instanceof Error ? cause.message : String(cause),
                   }),
           });
+    const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const files =
       options.work === undefined
         ? undefined
-        : yield* readWorkFolder(options.work, maxSize ?? MAX_SIZE_DEFAULT);
+        : yield* readWorkFolder(options.work, workLimit);
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
     if (size !== undefined && provider.sizes !== "any") {
@@ -119,7 +120,7 @@ export const createSandbox = (options: {
     // and this covers every other way the steps fail.
     yield* Effect.gen(function* () {
       if (options.work !== undefined && files !== undefined) {
-        yield* sendWorkFolder(id, options.work, files);
+        yield* sendWorkFolder(id, options.work, files, workLimit);
       }
       if (script !== undefined) {
         yield* runSetupScript(id, script);

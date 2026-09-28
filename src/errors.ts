@@ -90,6 +90,14 @@ export class WorkFolderTooBigError extends Data.TaggedError(
   }
 }
 
+export class WorkFileGrewError extends Data.TaggedError("WorkFileGrewError")<{
+  readonly limit: number;
+}> {
+  get message() {
+    return `A Work file grew while uploading, so the upload stopped past the ${formatMb(this.limit)} MB limit. Run it again, or raise the limit with --max-size.`;
+  }
+}
+
 export class SetupNeedsWorkError extends Data.TaggedError(
   "SetupNeedsWorkError",
 )<Record<never, never>> {
