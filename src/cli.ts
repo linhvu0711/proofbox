@@ -4,8 +4,10 @@ import { clickAt } from "./commands/click.ts";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
+import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
+import { typeText } from "./commands/type.ts";
 
 const create = Command.make(
   "create",
@@ -72,6 +74,46 @@ const click = Command.make(
     }),
 );
 
+const type = Command.make(
+  "type",
+  {
+    id: Args.text({ name: "id" }),
+    text: Args.text({ name: "text" }),
+    ...actionOptions,
+  },
+  ({ id, text, screenshot, pace, glide, letter, typeMax, settle }) =>
+    typeText({
+      id,
+      text,
+      screenshot: Option.getOrUndefined(screenshot),
+      pace,
+      glide: Option.getOrUndefined(glide),
+      letter: Option.getOrUndefined(letter),
+      typeMax: Option.getOrUndefined(typeMax),
+      settle: Option.getOrUndefined(settle),
+    }),
+);
+
+const key = Command.make(
+  "key",
+  {
+    id: Args.text({ name: "id" }),
+    keys: Args.text({ name: "keys" }),
+    ...actionOptions,
+  },
+  ({ id, keys, screenshot, pace, glide, letter, typeMax, settle }) =>
+    pressKey({
+      id,
+      keys,
+      screenshot: Option.getOrUndefined(screenshot),
+      pace,
+      glide: Option.getOrUndefined(glide),
+      letter: Option.getOrUndefined(letter),
+      typeMax: Option.getOrUndefined(typeMax),
+      settle: Option.getOrUndefined(settle),
+    }),
+);
+
 const screenshot = Command.make(
   "screenshot",
   {
@@ -94,7 +136,16 @@ const del = Command.make(
 );
 
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, screenshot, click, list, del]),
+  Command.withSubcommands([
+    create,
+    exec,
+    screenshot,
+    click,
+    type,
+    key,
+    list,
+    del,
+  ]),
 );
 
 export const cli = Command.run(command, {

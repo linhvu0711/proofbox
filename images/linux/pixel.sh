@@ -58,6 +58,22 @@ case "$cmd" in
       shot
     fi
     ;;
+  type)
+    # type LETTER_MS SETTLE_MS SHOT TEXT
+    xdotool type --delay "$1" "$4"
+    settle "$2"
+    if [ "$3" = "1" ]; then
+      shot
+    fi
+    ;;
+  key)
+    # key KEYS SETTLE_MS SHOT
+    xdotool key "$1"
+    settle "$2"
+    if [ "$3" = "1" ]; then
+      shot
+    fi
+    ;;
   *)
     printf 'pixel: unknown command %s\n' "$cmd" >&2
     exit 2

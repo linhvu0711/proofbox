@@ -176,6 +176,46 @@ describe("Pixel actions", () => {
     );
   });
 
+  it("type sends each letter", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, ["type", id, "hello", "--pace", "fast"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    const clickAt = events.findIndex((event) => event.type === "ButtonPress");
+    const keys = events
+      .slice(clickAt + 1)
+      .filter((event) => event.type === "KeyPress")
+      .map((event) => event.keysym);
+    expect(keys).toEqual(["h", "e", "l", "l", "o"]);
+  });
+
+  it("key sends a key combo", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, ["key", id, "ctrl+s", "--pace", "fast"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    const clickAt = events.findIndex((event) => event.type === "ButtonPress");
+    const keys = events
+      .slice(clickAt + 1)
+      .filter((event) => event.type === "KeyPress")
+      .map((event) => event.keysym);
+    expect(keys).toEqual(["Control_L", "s"]);
+  });
+
   it("click --screenshot writes the screen after the click", async () => {
     // Given
     const env = makeEnv({ docker: true });
