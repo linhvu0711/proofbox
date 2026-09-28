@@ -19,8 +19,19 @@ export const providerForOs = (os: Os) =>
     const home = yield* Config.string("HOME");
     const path = join(home, ".config", "proofbox", "config");
     const bad = (reason: string) => new BadConfigError({ path, reason });
-    const text = yield* Effect.tryPromise(() => readFile(path, "utf8")).pipe(
-      Effect.orElseSucceed(() => undefined),
+    // Only a missing file means no config; anything unreadable is a bad one.
+    const text = yield* Effect.tryPromise({
+      try: () => readFile(path, "utf8"),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.catchAll((cause) =>
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "ENOENT"
+          ? Effect.succeed(undefined)
+          : Effect.fail(bad("could not be read")),
+      ),
     );
     if (text === undefined) {
       return "namespace";

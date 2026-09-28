@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -81,6 +81,22 @@ describe("Provider config", () => {
     // Then
     expect(result.stderr).toBe(
       `Bad config ${home}/.config/proofbox/config: unknown key "linx"; use JSON like {"linux": "docker", "macos": "namespace"}\n`,
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("a config file that cannot be read is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome('{"linux": "fake"}');
+    chmodSync(join(home, ".config", "proofbox", "config"), 0);
+    // When
+    const result = await runCli(env, ["create", "--os", "linux"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      `Bad config ${home}/.config/proofbox/config: could not be read; use JSON like {"linux": "docker", "macos": "namespace"}\n`,
     );
     expect(result.exitCode).toBe(125);
   });
