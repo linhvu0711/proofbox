@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir, rename, rm, writeFile } from "node:fs/promises";
+import { readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
@@ -189,20 +189,31 @@ export const makeNamespaceProvider = (deps: {
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
       const entries = await readdir(dir).catch(() => [] as string[]);
+      // Only files at least ten minutes old are pruned: an ns-new-* staging
+      // key belongs to a create in flight, and a host registered moments ago
+      // can still be ahead of the nsc list snapshot.
+      const stale = async (file: string) => {
+        const info = await stat(join(dir, file)).catch(() => null);
+        return info !== null && Date.now() - info.mtimeMs > 600_000;
+      };
       await Promise.all(
         entries
           .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
-          .filter((name): name is string => name !== undefined)
+          .filter(
+            (name): name is string =>
+              name !== undefined && !name.startsWith("new-"),
+          )
           .filter((name) => !alive.has(name))
-          .map((name) =>
-            Promise.all(
+          .map(async (name) => {
+            if (!(await stale(`ns-${name}.key`))) return;
+            await Promise.all(
               [".key", ".key.pub", ".max-life", ".ctl", ".sock"].map((suffix) =>
                 rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
                   () => {},
                 ),
               ),
-            ),
-          ),
+            );
+          }),
       ).then(() => {});
     });
     const infos = yield* Effect.forEach(
@@ -367,6 +378,13 @@ export const makeNamespaceProvider = (deps: {
           catch: (cause) =>
             fail(`could not store the host key: ${describe(cause)}`),
         });
+        // The host's own Deadline starts when nsc finishes creating it, so
+        // it can sit later than the Max life; a detached process destroys
+        // the host at the absolute Max life.
+        yield* deps.spawnDetached("namespace", "namespace/expire-main", [
+          id,
+          String(maxLifeSeconds),
+        ]);
         // Provisioning can outlast the create duration (a cold image build):
         // keep the host's own Deadline ahead until the Sandbox takes over,
         // but never past the Max life.
