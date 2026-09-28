@@ -372,17 +372,30 @@ describe("upload", () => {
     ]);
   });
 
-  it("a Work file name that is not UTF-8 refuses the upload", async () => {
+  it("a Work file name that is not UTF-8 refuses the upload", async (ctx) => {
     // Given: the fixture uploaded once; an untracked file whose name holds
     // a byte that is not valid UTF-8
     const { env, id, name, folder } = await uploadOnce();
-    writeFileSync(
-      Buffer.concat([
-        Buffer.from(`${folder}/`),
-        Buffer.from([0x62, 0x61, 0x64, 0xff]),
-      ]),
-      "x\n",
-    );
+    try {
+      writeFileSync(
+        Buffer.concat([
+          Buffer.from(`${folder}/`),
+          Buffer.from([0x62, 0x61, 0x64, 0xff]),
+        ]),
+        "x\n",
+      );
+    } catch (error) {
+      // Some file systems, like APFS on macOS, refuse such a name, so no
+      // Work folder there can hold one.
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "EILSEQ"
+      ) {
+        ctx.skip("the file system refuses a name that is not UTF-8");
+      }
+      throw error;
+    }
     // When
     const result = await runCli(env, ["upload", id, folder]);
     // Then: the upload refuses rather than silently skip the file
