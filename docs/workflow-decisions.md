@@ -38,6 +38,7 @@ Settled 2026-09-27 in the workflow grill: how `/ship`, `/implement`, and `/land-
     - no Project config yet: `/implement` drafts it (OS from the repo, a Setup script from the lockfiles), shows it, and asks for the env file path once. It never writes a secret;
     - the Setup script fails in the Sandbox: the agent fixes the script and shows the change in the report;
     - Mac limit reached: wait, and tell the user once that it is waiting;
+    - the Sandbox runs out of memory: create it again one Sandbox size up (proofbox names the next size), save that size in the Project config so the next run starts there, and show it in the report, for example `Size: Linux 8x16 (raised from 4x8, out of memory)`. No question to the user. Out of memory at the largest size: stop and ask, since the app is the likely cause;
     - Namespace down or the account suspended: stop, tell the user, and suggest `via devin`;
     - the Proof video is still over 10 MB after proofbox lowers the quality: stop and ask;
     - `gh pr edit --attach` fails: the user pastes the files into the PR by hand, as today.
