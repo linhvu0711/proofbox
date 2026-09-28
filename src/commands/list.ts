@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { Providers, type SandboxInfo } from "../provider.ts";
+import { Providers } from "../provider.ts";
 
 const formatTime = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 
