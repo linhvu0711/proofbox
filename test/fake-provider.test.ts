@@ -44,6 +44,42 @@ describe("fake Provider", () => {
     }),
   );
 
+  it.effect("get reads a whole Sandbox while an extend rewrites it", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox
+      const root = makeRoot();
+      const fake = makeFakeProvider({ root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      // When: many extends and gets run at the same time
+      const deadline = new Date(Duration.toMillis(Duration.minutes(20)));
+      yield* Effect.all(
+        [
+          Effect.forEach(
+            Array.from({ length: 200 }),
+            () => fake.extend(sandbox.name, deadline),
+            { discard: true },
+          ),
+          Effect.forEach(
+            Array.from({ length: 200 }),
+            () => fake.get(sandbox.name),
+            { discard: true },
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      // Then: no get failed, and no temp file is left behind
+      expect(readdirSync(join(root, sandbox.name))).not.toContainEqual(
+        expect.stringMatching(/\.tmp$/),
+      );
+    }),
+  );
+
   it.effect("fake exec feeds stdin to the command", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox
