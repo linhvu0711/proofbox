@@ -21,6 +21,8 @@ const dispatch = (argv: ReadonlyArray<string>) => {
   return cli(argv);
 };
 
+const providersLive = ProvidersLive.pipe(Layer.provide(NodeContext.layer));
+
 const program = Effect.gen(function* () {
   const output = yield* CliOutput;
   yield* dispatch(process.argv).pipe(
@@ -37,9 +39,9 @@ const program = Effect.gen(function* () {
     Layer.mergeAll(
       NodeContext.layer,
       CliOutput.Default,
-      ProvidersLive,
+      providersLive,
       KeeperClient.Default.pipe(
-        Layer.provide(Layer.mergeAll(CliOutput.Default, ProvidersLive)),
+        Layer.provide(Layer.mergeAll(CliOutput.Default, providersLive)),
       ),
       Progress.Default.pipe(Layer.provide(CliOutput.Default)),
     ),

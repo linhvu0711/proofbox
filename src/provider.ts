@@ -7,7 +7,11 @@ import {
   type Scope,
   type Stream,
 } from "effect";
-import type { ProviderError, SandboxGoneError } from "./errors.ts";
+import type {
+  ProviderError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+} from "./errors.ts";
 import type { Progress } from "./progress.ts";
 
 export const Os = Schema.Literal("linux", "macos");
@@ -35,7 +39,7 @@ export type ExecEvent =
 export interface Connection {
   readonly exec: (
     argv: ReadonlyArray<string>,
-  ) => Stream.Stream<ExecEvent, ProviderError>;
+  ) => Stream.Stream<ExecEvent, ProviderError | ProviderUnavailableError>;
 }
 
 export interface Provider {
@@ -45,23 +49,36 @@ export interface Provider {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-  }) => Effect.Effect<SandboxInfo, ProviderError, Progress>;
+  }) => Effect.Effect<
+    SandboxInfo,
+    ProviderError | ProviderUnavailableError,
+    Progress
+  >;
   readonly extend: (
     name: string,
     deadline: Date,
-  ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
+  ) => Effect.Effect<
+    SandboxInfo,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
   readonly get: (
     name: string,
-  ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
+  ) => Effect.Effect<
+    SandboxInfo,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
   readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
   readonly delete: (
     name: string,
-  ) => Effect.Effect<"deleted" | "gone", ProviderError>;
+  ) => Effect.Effect<
+    "deleted" | "gone",
+    ProviderError | ProviderUnavailableError
+  >;
   readonly connect: (
     name: string,
   ) => Effect.Effect<
     Connection,
-    SandboxGoneError | ProviderError,
+    SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
 }

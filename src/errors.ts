@@ -9,6 +9,17 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
   }
 }
 
+export class ProviderUnavailableError extends Data.TaggedError(
+  "ProviderUnavailableError",
+)<{
+  readonly provider: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return this.reason;
+  }
+}
+
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   readonly id: string;
 }> {
