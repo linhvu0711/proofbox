@@ -50,6 +50,7 @@ export interface Provider {
   readonly get: (
     name: string,
   ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
+  readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
   readonly connect: (
     name: string,
   ) => Effect.Effect<

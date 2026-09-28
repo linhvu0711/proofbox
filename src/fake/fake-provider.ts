@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
@@ -150,6 +150,29 @@ export const makeFakeProvider = (options: {
 
   const get = (name: string) => readFileInfo(name);
 
+  const list = Effect.gen(function* () {
+    const entries = yield* Effect.tryPromise({
+      try: () =>
+        readdir(root, { withFileTypes: true }).catch((cause) =>
+          hasCode(cause, "ENOENT")
+            ? Promise.resolve([])
+            : Promise.reject(cause),
+        ),
+      catch: (cause) => fail(describe(cause)),
+    });
+    const names = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    return yield* Effect.forEach(
+      names,
+      (name) =>
+        readFileInfo(name).pipe(
+          Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
+        ),
+      { discard: false },
+    ).pipe(Effect.map((infos) => infos.filter((info) => info !== undefined)));
+  });
+
   const extend = (name: string, deadline: Date) =>
     Effect.gen(function* () {
       const info = yield* readFileInfo(name);
@@ -209,6 +232,7 @@ export const makeFakeProvider = (options: {
     capabilities: new Set(["os:linux"]),
     create,
     get,
+    list,
     extend,
     connect,
   };

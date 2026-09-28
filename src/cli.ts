@@ -2,6 +2,7 @@ import { Args, Command, Options } from "@effect/cli";
 import { Option } from "effect";
 import { createSandbox } from "./commands/create.ts";
 import { execInSandbox } from "./commands/exec.ts";
+import { listSandboxes } from "./commands/list.ts";
 
 const create = Command.make(
   "create",
@@ -29,8 +30,14 @@ const exec = Command.make(
   ({ id, command }) => execInSandbox(id, command),
 );
 
+const list = Command.make(
+  "list",
+  { json: Options.boolean("json") },
+  ({ json }) => listSandboxes({ json }),
+);
+
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec]),
+  Command.withSubcommands([create, exec, list]),
 );
 
 export const cli = Command.run(command, {
