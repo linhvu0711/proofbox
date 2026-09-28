@@ -2,7 +2,11 @@ import { resolve } from "node:path";
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
-import { type ProviderError, UploadFailedError } from "../errors.ts";
+import {
+  type ProviderError,
+  UploadFailedError,
+  WorkFolderTooBigError,
+} from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
@@ -13,11 +17,19 @@ import {
   hashListPath,
   toHashList,
 } from "../upload/hash-list.ts";
+import { MAX_SIZE_DEFAULT } from "../upload/max-size.ts";
 import { packFiles } from "../upload/pack.ts";
 import { listWorkFiles, type WorkFile } from "../upload/work-files.ts";
 
-export const readWorkFolder = (folder: string) =>
-  listWorkFiles(resolve(folder));
+export const readWorkFolder = (folder: string, maxSize: number) =>
+  Effect.gen(function* () {
+    const files = yield* listWorkFiles(resolve(folder));
+    const bytes = files.reduce((total, file) => total + file.size, 0);
+    if (bytes > maxSize) {
+      return yield* new WorkFolderTooBigError({ bytes, limit: maxSize });
+    }
+    return files;
+  });
 
 const runInSandbox = (
   keeper: KeeperClient,
@@ -147,8 +159,15 @@ export const sendWorkFolder = (
     );
   });
 
-export const uploadWorkFolder = (args: { id: string; folder: string }) =>
+export const uploadWorkFolder = (args: {
+  id: string;
+  folder: string;
+  maxSize?: number | undefined;
+}) =>
   Effect.gen(function* () {
-    const files = yield* readWorkFolder(args.folder);
+    const files = yield* readWorkFolder(
+      args.folder,
+      args.maxSize ?? MAX_SIZE_DEFAULT,
+    );
     yield* sendWorkFolder(args.id, args.folder, files);
   }).pipe(Effect.scoped);

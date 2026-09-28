@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import { formatMb } from "./upload/max-size.ts";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;
@@ -41,6 +42,25 @@ export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
 }> {
   get message() {
     return `Upload to ${this.id} failed: ${this.command} exited ${this.code}. Run upload again; it sends every file.`;
+  }
+}
+
+export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
+  readonly value: string;
+}> {
+  get message() {
+    return `Bad --max-size "${this.value}": use a whole number with MB or GB, for example 800MB`;
+  }
+}
+
+export class WorkFolderTooBigError extends Data.TaggedError(
+  "WorkFolderTooBigError",
+)<{
+  readonly bytes: number;
+  readonly limit: number;
+}> {
+  get message() {
+    return `Work folder is ${formatMb(this.bytes)} MB, over the ${formatMb(this.limit)} MB limit, so nothing was sent. Git-ignore the big files, or raise the limit with --max-size.`;
   }
 }
 

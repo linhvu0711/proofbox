@@ -180,6 +180,37 @@ describe("upload", () => {
     }
   });
 
+  it("an upload over --max-size is refused before anything is sent", async () => {
+    // Given: a Sandbox and a git folder with one 2 MB file
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.replace("fake:", "");
+    const folder = makeGitFolder({
+      committed: { "big.bin": "x".repeat(2_000_000) },
+    });
+    // When
+    const result = await runCli(env, [
+      "upload",
+      id,
+      folder,
+      "--max-size",
+      "1MB",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Work folder is 2.0 MB, over the 1.0 MB limit, so nothing was sent. Git-ignore the big files, or raise the limit with --max-size.\n",
+    );
+    expect(readdirSync(join(env.root, name, "home"))).toEqual([]);
+  });
+
   it("upload of a folder that is not a git repo exits 125 and says so", async () => {
     // Given: a Sandbox and a folder with a file but no git repo
     const env = makeEnv();

@@ -1,10 +1,11 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
+import { parseMaxSize } from "./upload/max-size.ts";
 
 const create = Command.make(
   "create",
@@ -49,8 +50,16 @@ const upload = Command.make(
   {
     id: Args.text({ name: "id" }),
     folder: Args.text({ name: "folder" }),
+    maxSize: Options.text("max-size").pipe(Options.optional),
   },
-  ({ id, folder }) => uploadWorkFolder({ id, folder }),
+  ({ id, folder, maxSize }) =>
+    Effect.gen(function* () {
+      const limit = yield* maxSize.pipe(
+        Option.map(parseMaxSize),
+        Option.getOrElse(() => Effect.succeed(undefined)),
+      );
+      yield* uploadWorkFolder({ id, folder, maxSize: limit });
+    }),
 );
 
 const command = Command.make("proofbox").pipe(
