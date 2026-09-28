@@ -11,6 +11,57 @@
       "trailingCommas": "all"
     }
   },
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": {
+            "filenameCases": ["kebab-case"]
+          }
+        },
+        "useNamingConvention": {
+          "level": "error",
+          "options": {
+            "conventions": [
+              {
+                "selector": {
+                  "kind": "classProperty",
+                  "modifiers": ["static"]
+                },
+                "formats": ["camelCase", "PascalCase"]
+              },
+              {
+                "selector": {
+                  "kind": "objectLiteralProperty"
+                },
+                "formats": ["camelCase", "CONSTANT_CASE"],
+                "match": "_?(.+)"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "error"
+          },
+          "style": {
+            "noProcessEnv": "error"
+          }
+        }
+      }
+    }
+  ],
   "files": {
     "includes": ["**", "!!dist", "!!repos"]
   }
