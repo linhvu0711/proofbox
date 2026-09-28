@@ -395,9 +395,7 @@ export const makeFakeProvider = (options: {
     name: "fake",
     idPrefix: "fake",
     capabilities: new Set<Capability>(
-      options.snapshots === undefined
-        ? ["os:linux"]
-        : ["os:linux", "snapshot"],
+      options.snapshots === undefined ? ["os:linux"] : ["os:linux", "snapshot"],
     ),
     sizes: [
       { cpu: 4, ramGb: 8 },

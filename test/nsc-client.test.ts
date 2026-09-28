@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
+import { CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { CommandExecutor } from "@effect/platform";
 import { ConfigProvider, Effect } from "effect";
 import { describe, expect } from "vitest";
 import { makeNscClient } from "../src/namespace/nsc-client.ts";

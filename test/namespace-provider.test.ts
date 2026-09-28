@@ -30,10 +30,7 @@ const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
     ),
   destroy: (id) => Ref.update(calls, (all) => [...all, `destroy ${id}`]),
   ensureImageExpiry: (image, hours) =>
-    Ref.update(calls, (all) => [
-      ...all,
-      `ensureImageExpiry ${image} ${hours}`,
-    ]),
+    Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
   extend: () => Effect.die("unused"),
   list: () => Effect.succeed([]),
   portForward: () => Effect.die("unused"),
@@ -124,9 +121,9 @@ const liveLayers = (warnings?: Ref.Ref<ReadonlyArray<string>>) =>
 const makeProvider = (
   calls: Ref.Ref<ReadonlyArray<string>>,
   docker: DockerClient,
-  run?: (commandLine: string) =>
-    | { exitCode: number; stdout: string; stderr: string }
-    | undefined,
+  run?: (
+    commandLine: string,
+  ) => { exitCode: number; stdout: string; stderr: string } | undefined,
 ) =>
   makeNamespaceProvider({
     nsc: fakeNsc(calls),
@@ -322,92 +319,86 @@ describe("Namespace Provider", () => {
       }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
 
-  it.effect(
-    "create from an unknown Fingerprint runs the Base image",
-    () =>
-      Effect.gen(function* () {
-        // Given: a Snapshot pull whose registry knows no such manifest
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const ran: { image?: string | undefined } = {};
-        const provider = makeProvider(
-          calls,
-          fakeDocker({ ran }),
-          (commandLine) => {
-            if (commandLine.startsWith("docker pull ")) {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: "Error response from daemon: manifest unknown\n",
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        );
-        // When
-        const info = yield* provider.create({
+  it.effect("create from an unknown Fingerprint runs the Base image", () =>
+    Effect.gen(function* () {
+      // Given: a Snapshot pull whose registry knows no such manifest
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: { image?: string | undefined } = {};
+      const provider = makeProvider(
+        calls,
+        fakeDocker({ ran }),
+        (commandLine) => {
+          if (commandLine.startsWith("docker pull ")) {
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: "Error response from daemon: manifest unknown\n",
+            };
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      );
+      // When
+      const info = yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+        snapshot: "22d0cf15eb8e",
+      });
+      // Then
+      expect(ran.image).toMatch(
+        /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
+      );
+      expect(info.snapshot).toBeUndefined();
+      const seen = yield* Ref.get(calls);
+      expect(seen.some((call) => call.startsWith("ensureImageExpiry"))).toBe(
+        false,
+      );
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).not.toContain("could not");
+    }).pipe(runtimeDir, Effect.provide(liveLayers())),
+  );
+
+  it.effect("a failed Snapshot pull warns and runs the Base image", () =>
+    Effect.gen(function* () {
+      // Given: a Snapshot pull that fails with a network error
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const warnings = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: { image?: string | undefined } = {};
+      const provider = makeProvider(
+        calls,
+        fakeDocker({ ran }),
+        (commandLine) => {
+          if (commandLine.startsWith("docker pull ")) {
+            return {
+              exitCode: 1,
+              stdout: "",
+              stderr: "dial tcp: i/o timeout\n",
+            };
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      );
+      // When
+      const info = yield* provider
+        .create({
           os: "linux",
           idle: Duration.minutes(15),
           maxLife: Duration.hours(3),
           snapshot: "22d0cf15eb8e",
-        });
-        // Then
-        expect(ran.image).toMatch(
-          /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
-        );
-        expect(info.snapshot).toBeUndefined();
-        const seen = yield* Ref.get(calls);
-        expect(
-          seen.some((call) => call.startsWith("ensureImageExpiry")),
-        ).toBe(false);
-        const output = yield* CliOutput;
-        expect(
-          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(
-            "",
-          ),
-        ).not.toContain("could not");
-      }).pipe(runtimeDir, Effect.provide(liveLayers())),
-  );
-
-  it.effect(
-    "a failed Snapshot pull warns and runs the Base image",
-    () =>
-      Effect.gen(function* () {
-        // Given: a Snapshot pull that fails with a network error
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const warnings = yield* Ref.make<ReadonlyArray<string>>([]);
-        const ran: { image?: string | undefined } = {};
-        const provider = makeProvider(
-          calls,
-          fakeDocker({ ran }),
-          (commandLine) => {
-            if (commandLine.startsWith("docker pull ")) {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: "dial tcp: i/o timeout\n",
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        );
-        // When
-        const info = yield* provider
-          .create({
-            os: "linux",
-            idle: Duration.minutes(15),
-            maxLife: Duration.hours(3),
-            snapshot: "22d0cf15eb8e",
-          })
-          .pipe(Effect.provide(liveLayers(warnings)));
-        // Then
-        expect(ran.image).toMatch(
-          /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
-        );
-        expect(info.snapshot).toBeUndefined();
-        expect(yield* Ref.get(warnings)).toEqual([
-          "could not pull the Snapshot (Provider namespace failed: docker pull failed: dial tcp: i/o timeout); running the Setup script",
-        ]);
-      }).pipe(runtimeDir),
+        })
+        .pipe(Effect.provide(liveLayers(warnings)));
+      // Then
+      expect(ran.image).toMatch(
+        /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
+      );
+      expect(info.snapshot).toBeUndefined();
+      expect(yield* Ref.get(warnings)).toEqual([
+        "could not pull the Snapshot (Provider namespace failed: docker pull failed: dial tcp: i/o timeout); running the Setup script",
+      ]);
+    }).pipe(runtimeDir),
   );
 
   it.effect(
@@ -417,22 +408,17 @@ describe("Namespace Provider", () => {
         // Given: a Snapshot registry that accepts the push
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const commands: string[] = [];
-        const provider = makeProvider(
-          calls,
-          fakeDocker({}),
-          (commandLine) => {
-            commands.push(commandLine);
-            if (commandLine.includes("docker image inspect")) {
-              return {
-                exitCode: 0,
-                stdout:
-                  "nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n",
-                stderr: "",
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        );
+        const provider = makeProvider(calls, fakeDocker({}), (commandLine) => {
+          commands.push(commandLine);
+          if (commandLine.includes("docker image inspect")) {
+            return {
+              exitCode: 0,
+              stdout: "nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n",
+              stderr: "",
+            };
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        });
         // When
         const snapshots = provider.snapshots;
         if (snapshots === undefined) {
@@ -449,43 +435,36 @@ describe("Namespace Provider", () => {
       }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
 
-  it.effect(
-    "a failed push fails save with the docker error",
-    () =>
-      Effect.gen(function* () {
-        // Given: a Snapshot registry that refuses the push
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(
-          calls,
-          fakeDocker({}),
-          (commandLine) => {
-            if (commandLine.includes("docker push")) {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr:
-                  "denied: requested access to the resource is denied\n",
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        );
-        // When
-        const snapshots = provider.snapshots;
-        if (snapshots === undefined) {
-          return yield* Effect.die("provider has no snapshots member");
+  it.effect("a failed push fails save with the docker error", () =>
+    Effect.gen(function* () {
+      // Given: a Snapshot registry that refuses the push
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), (commandLine) => {
+        if (commandLine.includes("docker push")) {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: "denied: requested access to the resource is denied\n",
+          };
         }
-        const error = yield* Effect.flip(
-          snapshots.save("abc123def4567", "22d0cf15eb8e"),
-        );
-        // Then
-        expect(error.message).toBe(
-          "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
-        );
-        const seen = yield* Ref.get(calls);
-        expect(
-          seen.some((call) => call.startsWith("ensureImageExpiry")),
-        ).toBe(false);
-      }).pipe(runtimeDir, Effect.provide(liveLayers())),
+        return { exitCode: 0, stdout: "", stderr: "" };
+      });
+      // When
+      const snapshots = provider.snapshots;
+      if (snapshots === undefined) {
+        return yield* Effect.die("provider has no snapshots member");
+      }
+      const error = yield* Effect.flip(
+        snapshots.save("abc123def4567", "22d0cf15eb8e"),
+      );
+      // Then
+      expect(error.message).toBe(
+        "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
+      );
+      const seen = yield* Ref.get(calls);
+      expect(seen.some((call) => call.startsWith("ensureImageExpiry"))).toBe(
+        false,
+      );
+    }).pipe(runtimeDir, Effect.provide(liveLayers())),
   );
 });

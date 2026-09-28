@@ -162,9 +162,11 @@ export const createSandbox = (options: {
         yield* progress
           .step(
             "saving the Snapshot",
-            withDeadlinePush(provider, info.name, info)(
-              snapshots.save(info.name, fp),
-            ),
+            withDeadlinePush(
+              provider,
+              info.name,
+              info,
+            )(snapshots.save(info.name, fp)),
           )
           .pipe(
             Effect.zipRight(

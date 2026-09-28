@@ -135,10 +135,7 @@ describe("Snapshots", () => {
     expect(second.stderr).toBe(
       "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: Snapshot saved, Fingerprint 6a421451fe60\n",
     );
-    expect(readdirSync(dir).sort()).toEqual([
-      "22d0cf15eb8e",
-      "6a421451fe60",
-    ]);
+    expect(readdirSync(dir).sort()).toEqual(["22d0cf15eb8e", "6a421451fe60"]);
   });
 
   it("a failed Snapshot push warns and create still succeeds", async () => {

@@ -80,9 +80,7 @@ export const makeNamespaceProvider = (deps: {
       );
       const registry = tenant.stdout.trim();
       if (tenant.exitCode !== 0 || registry === "") {
-        return yield* fail(
-          "could not read the Namespace tenant on the host",
-        );
+        return yield* fail("could not read the Namespace tenant on the host");
       }
       return registry;
     });
