@@ -7,12 +7,10 @@ const fail = (reason: string) =>
 
 // The Fingerprint lands unquoted in docker commands on the host — only the
 // 12-hex form ever reaches a shell.
-export const snapshotTag = (tenant: string, fp: string) => {
-  if (!/^[0-9a-f]{12}$/.test(fp)) {
-    throw new Error(`bad Fingerprint "${fp}": expected 12 hex characters`);
-  }
-  return `nscr.io/${tenant}/proofbox-snapshot-linux:${fp}`;
-};
+export const snapshotTag = (tenant: string, fp: string) =>
+  /^[0-9a-f]{12}$/.test(fp)
+    ? Effect.succeed(`nscr.io/${tenant}/proofbox-snapshot-linux:${fp}`)
+    : Effect.fail(fail(`bad Fingerprint "${fp}": expected 12 hex characters`));
 
 export const pullSnapshot = (link: Link, tag: string) =>
   Effect.gen(function* () {

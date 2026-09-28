@@ -433,7 +433,7 @@ export const makeNamespaceProvider = (deps: {
         // publish must cover it — loopback binds are unreachable.
         let runArgs: ReadonlyArray<string> = ["-p", "5900:5900"];
         if (req.snapshot !== undefined) {
-          const tag = snapshotTag(registry, req.snapshot);
+          const tag = yield* snapshotTag(registry, req.snapshot);
           const pullMissed = (error: { readonly message: string }) =>
             progress
               .warn(
@@ -655,7 +655,7 @@ export const makeNamespaceProvider = (deps: {
         withCliLink(name, (link) =>
           Effect.gen(function* () {
             const tenant = yield* readTenant(link);
-            const tag = snapshotTag(tenant, fp);
+            const tag = yield* snapshotTag(tenant, fp);
             yield* pushSnapshot(link, containerOf(name), tag);
             const progress = yield* Progress;
             yield* snapshotRef(link, tag).pipe(
