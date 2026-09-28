@@ -270,12 +270,17 @@ export const makeFakeProvider = (options: {
           const target = join(snapshots.root, fp);
           await rm(staging, { recursive: true, force: true });
           await mkdir(staging, { recursive: true });
-          await cp(join(dir, "home"), join(staging, "home"), {
-            recursive: true,
-          });
-          await cp(join(dir, "state"), join(staging, "state"), {
-            recursive: true,
-          });
+          try {
+            await cp(join(dir, "home"), join(staging, "home"), {
+              recursive: true,
+            });
+            await cp(join(dir, "state"), join(staging, "state"), {
+              recursive: true,
+            });
+          } catch (cause) {
+            await rm(staging, { recursive: true, force: true });
+            throw cause;
+          }
           // A save is a no-op once the Fingerprint is published — its
           // content is keyed by the hash, so an existing dir is already
           // the same Snapshot; a lost rename race drops our staging.

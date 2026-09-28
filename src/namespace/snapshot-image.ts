@@ -5,8 +5,14 @@ import type { Link } from "./ssh-link.ts";
 const fail = (reason: string) =>
   new ProviderError({ provider: "namespace", reason });
 
-export const snapshotTag = (tenant: string, fp: string) =>
-  `nscr.io/${tenant}/proofbox-snapshot-linux:${fp}`;
+// The Fingerprint lands unquoted in docker commands on the host — only the
+// 12-hex form ever reaches a shell.
+export const snapshotTag = (tenant: string, fp: string) => {
+  if (!/^[0-9a-f]{12}$/.test(fp)) {
+    throw new Error(`bad Fingerprint "${fp}": expected 12 hex characters`);
+  }
+  return `nscr.io/${tenant}/proofbox-snapshot-linux:${fp}`;
+};
 
 export const pullSnapshot = (link: Link, tag: string) =>
   Effect.gen(function* () {
