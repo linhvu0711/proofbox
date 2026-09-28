@@ -15,7 +15,10 @@ const makeRoot = () => {
   return join(parent, "root");
 };
 
-const noProgress = new Progress({ step: (_label, effect) => effect });
+const noProgress = new Progress({
+  step: (_label, effect) => effect,
+  warn: () => Effect.void,
+});
 
 describe("fake Provider", () => {
   afterEach(() => {

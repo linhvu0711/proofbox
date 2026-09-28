@@ -21,6 +21,7 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
         );
         return yield* effect.pipe(Effect.raceFirst(heartbeat));
       });
-    return { step };
+    const warn = (text: string) => output.err(`proofbox: ${text}\n`);
+    return { step, warn };
   }),
 }) {}

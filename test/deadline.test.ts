@@ -54,6 +54,7 @@ const layers = () => {
       Progress,
       new Progress({
         step: (_label, effect) => effect,
+        warn: () => Effect.void,
       }),
     ),
   );

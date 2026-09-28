@@ -99,7 +99,13 @@ const liveLayers = () =>
   Layer.mergeAll(
     CliOutput.Test,
     // A heartbeat-less Progress, like test/deadline.test.ts.
-    Layer.succeed(Progress, new Progress({ step: (_label, effect) => effect })),
+    Layer.succeed(
+      Progress,
+      new Progress({
+        step: (_label, effect) => effect,
+        warn: () => Effect.void,
+      }),
+    ),
   );
 
 const makeProvider = (

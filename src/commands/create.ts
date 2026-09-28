@@ -159,13 +159,23 @@ export const createSandbox = (options: {
         }
       }
       if (fp !== undefined && !reused && snapshots !== undefined) {
-        yield* progress.step(
-          "saving the Snapshot",
-          withDeadlinePush(provider, info.name, info)(
-            snapshots.save(info.name, fp),
-          ),
-        );
-        yield* output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`);
+        yield* progress
+          .step(
+            "saving the Snapshot",
+            withDeadlinePush(provider, info.name, info)(
+              snapshots.save(info.name, fp),
+            ),
+          )
+          .pipe(
+            Effect.zipRight(
+              output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`),
+            ),
+            Effect.catchAll((error) =>
+              output.err(
+                `proofbox: could not save the Snapshot (${error.message}); the next create runs the Setup script again\n`,
+              ),
+            ),
+          );
       }
       if (secrets !== undefined) {
         yield* sendSecrets(id, secrets);

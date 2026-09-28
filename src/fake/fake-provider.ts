@@ -186,24 +186,31 @@ export const makeFakeProvider = (options: {
       });
       let pulled: string | undefined;
       if (options.snapshots !== undefined && req.snapshot !== undefined) {
-        const entry = join(options.snapshots.root, req.snapshot);
-        const found = yield* Effect.tryPromise({
-          try: async () => {
-            if (!existsSync(entry)) {
-              return false;
-            }
-            await cp(join(entry, "home"), join(dir, "home"), {
-              recursive: true,
-            });
-            await cp(join(entry, "state"), join(dir, "state"), {
-              recursive: true,
-            });
-            return true;
-          },
-          catch: (cause) => fail(describe(cause)),
-        });
-        if (found) {
-          pulled = req.snapshot;
+        if (options.snapshots.fail === "pull") {
+          const progress = yield* Progress;
+          yield* progress.warn(
+            `could not pull the Snapshot (${fail("pull refused").message}); running the Setup script`,
+          );
+        } else {
+          const entry = join(options.snapshots.root, req.snapshot);
+          const found = yield* Effect.tryPromise({
+            try: async () => {
+              if (!existsSync(entry)) {
+                return false;
+              }
+              await cp(join(entry, "home"), join(dir, "home"), {
+                recursive: true,
+              });
+              await cp(join(entry, "state"), join(dir, "state"), {
+                recursive: true,
+              });
+              return true;
+            },
+            catch: (cause) => fail(describe(cause)),
+          });
+          if (found) {
+            pulled = req.snapshot;
+          }
         }
       }
       const file = new SandboxFile({
@@ -247,6 +254,9 @@ export const makeFakeProvider = (options: {
       const snapshots = options.snapshots;
       if (snapshots === undefined) {
         return;
+      }
+      if (snapshots.fail === "push") {
+        return yield* fail("push refused");
       }
       yield* Effect.tryPromise({
         try: async () => {

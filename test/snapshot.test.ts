@@ -141,6 +141,45 @@ describe("Snapshots", () => {
     ]);
   });
 
+  it("a failed Snapshot push warns and create still succeeds", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFolder();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    const result = await create(env, folder, script, {
+      PROOFBOX_FAKE_SNAPSHOTS: dir,
+      PROOFBOX_FAKE_SNAPSHOT_FAIL: "push",
+    });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
+    expect(result.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: could not save the Snapshot (Provider fake failed: push refused); the next create runs the Setup script again\n",
+    );
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("a failed Snapshot pull warns and runs the Setup script", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFolder();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    const result = await create(env, folder, script, {
+      PROOFBOX_FAKE_SNAPSHOTS: dir,
+      PROOFBOX_FAKE_SNAPSHOT_FAIL: "pull",
+    });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: could not pull the Snapshot (Provider fake failed: pull refused); running the Setup script\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: Snapshot saved, Fingerprint 22d0cf15eb8e\n",
+    );
+    expect(readdirSync(dir)).toEqual(["22d0cf15eb8e"]);
+  });
+
   it("a Provider without Snapshots runs the Setup script on every create", async () => {
     // Given: no PROOFBOX_FAKE_SNAPSHOTS
     const env = makeEnv();
