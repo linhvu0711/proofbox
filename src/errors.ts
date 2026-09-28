@@ -49,6 +49,26 @@ export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   }
 }
 
+export class BadSizeError extends Data.TaggedError("BadSizeError")<{
+  readonly value: string;
+}> {
+  get message() {
+    return `Bad --size "${this.value}": use <cpu>x<ram> in whole numbers, for example 4x8`;
+  }
+}
+
+export class SizeNotOfferedError extends Data.TaggedError(
+  "SizeNotOfferedError",
+)<{
+  readonly provider: string;
+  readonly size: string;
+  readonly offered: ReadonlyArray<string>;
+}> {
+  get message() {
+    return `Provider ${this.provider} does not offer the size ${this.size}; use one of: ${this.offered.join(", ")}`;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{

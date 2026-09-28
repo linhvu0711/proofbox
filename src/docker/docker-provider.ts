@@ -8,6 +8,7 @@ import {
 import { Progress } from "../progress.ts";
 import { Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
+import { formatSize, parseSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
   BASE_IMAGE_DIR,
@@ -27,6 +28,7 @@ const Labels = Schema.Struct({
   "proofbox.idle-seconds": Schema.NumberFromString,
   "proofbox.max-life-at": Schema.Date,
   "proofbox.base-version": Schema.optional(Schema.String),
+  "proofbox.size": Schema.optional(Schema.String),
 });
 
 export const makeDockerProvider = (options: {
@@ -63,6 +65,13 @@ export const makeDockerProvider = (options: {
           `could not read the Deadline: ${read.stderr.trim() || read.stdout.trim()}`,
         );
       }
+      const sizeLabel = labels["proofbox.size"];
+      const size =
+        sizeLabel === undefined
+          ? undefined
+          : yield* parseSize(sizeLabel).pipe(
+              Effect.mapError((error) => fail(error.message)),
+            );
       return new SandboxInfo({
         name,
         os: labels["proofbox.os"],
@@ -71,6 +80,7 @@ export const makeDockerProvider = (options: {
         deadline: new Date(seconds * 1000),
         maxLifeAt: labels["proofbox.max-life-at"],
         base: labels["proofbox.base-version"],
+        size,
       });
     });
 
@@ -148,6 +158,7 @@ export const makeDockerProvider = (options: {
       readonly tag: string;
       readonly bundle: ReadonlyArray<ToolBundleFile>;
     },
+    size?: Size,
   ) =>
     Effect.gen(function* () {
       const { version, tag, bundle } = image;
@@ -185,6 +196,18 @@ export const makeDockerProvider = (options: {
           `proofbox.max-life-at=${maxLifeAt.toISOString()}`,
           "--label",
           `proofbox.base-version=${version}`,
+          ...(size === undefined
+            ? []
+            : [
+                "--cpus",
+                String(size.cpu),
+                "--memory",
+                `${size.ramGb}g`,
+                "--memory-swap",
+                `${size.ramGb}g`,
+                "--label",
+                `proofbox.size=${formatSize(size)}`,
+              ]),
           "--env",
           `PROOFBOX_DEADLINE=${Math.floor(firstDeadline.getTime() / 1000)}`,
           "--env",
@@ -243,6 +266,7 @@ export const makeDockerProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size;
   }) =>
     Effect.gen(function* () {
       // Prove the daemon answers before anything is made — and before the
@@ -259,7 +283,7 @@ export const makeDockerProvider = (options: {
       const progress = yield* Progress;
       return yield* progress.step(
         "creating docker Sandbox",
-        createWork(req, { version, tag, bundle }),
+        createWork(req, { version, tag, bundle }, req.size),
       );
     });
 
@@ -276,6 +300,7 @@ export const makeDockerProvider = (options: {
   return {
     name: "docker",
     capabilities: new Set(["os:linux"]),
+    sizes: "any",
     create,
     get,
     list,

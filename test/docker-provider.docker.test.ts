@@ -278,6 +278,38 @@ describe("Docker Provider", () => {
       }).pipe(Effect.provide(NodeContext.layer)),
   );
 
+  it("create --size 2x3 gives the container 2 CPUs and 3 GB", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    // When
+    const created = await create(env, ["--size", "2x3"]);
+    const container = containerOf(created.stdout.trim());
+    const inspected = await docker([
+      "inspect",
+      "-f",
+      "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}",
+      container,
+    ]);
+    // Then
+    expect(inspected).toBe("2000000000 3221225472\n");
+  });
+
+  it("create with no --size gives the container no limit", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    // When
+    const created = await create(env);
+    const container = containerOf(created.stdout.trim());
+    const inspected = await docker([
+      "inspect",
+      "-f",
+      "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}",
+      container,
+    ]);
+    // Then
+    expect(inspected).toBe("0 0\n");
+  });
+
   it("delete removes the container", async () => {
     // Given
     const env = makeEnv({ docker: true });

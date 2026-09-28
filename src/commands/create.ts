@@ -1,16 +1,22 @@
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
-import { MissingCapabilityError, UnknownProviderError } from "../errors.ts";
+import {
+  MissingCapabilityError,
+  SizeNotOfferedError,
+  UnknownProviderError,
+} from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
+import { formatSize, parseSize } from "../size.ts";
 
 export const createSandbox = (options: {
   readonly os: Os;
   readonly provider: string;
   readonly idle?: string | undefined;
   readonly maxLife?: string | undefined;
+  readonly size?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
@@ -36,10 +42,25 @@ export const createSandbox = (options: {
       options.maxLife === undefined
         ? MAX_LIFE_DEFAULT
         : yield* parseSpan("max-life", options.maxLife);
+    const size =
+      options.size === undefined ? undefined : yield* parseSize(options.size);
+    if (size !== undefined && provider.sizes !== "any") {
+      const offered = provider.sizes.some(
+        (listed) => listed.cpu === size.cpu && listed.ramGb === size.ramGb,
+      );
+      if (!offered) {
+        return yield* new SizeNotOfferedError({
+          provider: provider.name,
+          size: formatSize(size),
+          offered: provider.sizes.map(formatSize),
+        });
+      }
+    }
     const info = yield* provider.create({
       os: options.os,
       idle,
       maxLife,
+      size,
     });
     const output = yield* CliOutput;
     const id = `${provider.name}:${info.name}`;

@@ -14,6 +14,7 @@ import type {
   ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
+import { Size } from "./size.ts";
 
 export const Os = Schema.Literal("linux", "macos");
 export type Os = typeof Os.Type;
@@ -31,6 +32,7 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   base: Schema.optional(Schema.String),
+  size: Schema.optional(Size),
 }) {}
 
 export type ExecEvent =
@@ -47,10 +49,12 @@ export interface Connection {
 export interface Provider {
   readonly name: string;
   readonly capabilities: ReadonlySet<Capability>;
+  readonly sizes: "any" | ReadonlyArray<Size>;
   readonly create: (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size | undefined;
   }) => Effect.Effect<
     SandboxInfo,
     ProviderError | ProviderUnavailableError | ToolBundleHashError,

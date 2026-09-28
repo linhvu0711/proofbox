@@ -16,6 +16,7 @@ import {
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
+import { Size } from "../size.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 
 export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
@@ -24,6 +25,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
+  size: Schema.optional(Size),
 }) {}
 
 export const describe = (cause: unknown) =>
@@ -72,6 +74,7 @@ export const makeFakeProvider = (options: {
         idleSeconds: file.idleSeconds,
         deadline: file.deadline,
         maxLifeAt: file.maxLifeAt,
+        size: file.size,
       });
       const current = yield* now;
       if (info.deadline.getTime() <= current.getTime()) {
@@ -98,6 +101,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -149,6 +153,7 @@ export const makeFakeProvider = (options: {
           maxLifeAt,
         }),
         maxLifeAt,
+        size: req.size,
       });
       yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
@@ -165,6 +170,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),
@@ -220,6 +226,7 @@ export const makeFakeProvider = (options: {
         idleSeconds: info.idleSeconds,
         deadline,
         maxLifeAt: info.maxLifeAt,
+        size: info.size,
       });
       yield* writeFileInfo(name, file);
       return yield* readFileInfo(name);
@@ -268,6 +275,11 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     capabilities: new Set(["os:linux"]),
+    sizes: [
+      { cpu: 4, ramGb: 8 },
+      { cpu: 8, ramGb: 16 },
+      { cpu: 16, ramGb: 32 },
+    ],
     create,
     get,
     list,
