@@ -258,4 +258,20 @@ describe("edit-plan", () => {
     expect(stillResult).toBe(true);
     expect(movingResult).toBe(false);
   });
+
+  it("instant changes between still parts still count as changed", () => {
+    // Given
+    const toggled = {
+      duration: 85,
+      freezes: [
+        [0, 5.03],
+        [5.03, 57.73],
+        [57.73, 85],
+      ] as const,
+    };
+    // When
+    const result = nothingChanged(toggled);
+    // Then
+    expect(result).toBe(false);
+  });
 });

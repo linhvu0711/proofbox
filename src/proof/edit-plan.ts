@@ -81,10 +81,16 @@ export const parseProbe = (text: string): ProbeResult => {
 
 export const nothingChanged = (probe: ProbeResult): boolean => {
   let still = 0;
+  let position = 0;
+  let points = 0;
   for (const [from, to] of probe.freezes) {
-    still += (to ?? probe.duration) - from;
+    if (from === position && position > 0) {
+      points += 1;
+    }
+    still += (to ?? probe.duration) - Math.max(from, position);
+    position = Math.max(position, to ?? probe.duration);
   }
-  return probe.duration - still < 1;
+  return probe.duration - still + points < 1;
 };
 
 export const labelText = (seconds: number): string => {
