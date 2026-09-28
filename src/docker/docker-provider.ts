@@ -145,7 +145,6 @@ export const makeDockerProvider = (options: {
           `could not write the Deadline: ${written.stderr.trim()}`,
         );
       }
-      return yield* get(name);
     });
 
   const list = Effect.gen(function* () {
@@ -306,10 +305,11 @@ export const makeDockerProvider = (options: {
           }
         }
         const finished = yield* now;
-        return yield* extend(
+        yield* extend(
           name as string,
           nextDeadline({ now: finished, idle: req.idle, maxLifeAt }),
         );
+        return yield* get(name as string);
       }).pipe(
         Effect.catchTag("SandboxGoneError", () =>
           Effect.fail(fail("the container died during Sandbox creation")),

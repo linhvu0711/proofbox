@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
@@ -14,6 +16,46 @@ const nsc = (args: ReadonlyArray<string>): Promise<string> =>
       }
     });
   });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitUntil = async (
+  check: () => Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await check()) {
+      return true;
+    }
+    await sleep(500);
+  }
+  return false;
+};
+
+// Sleep until `ms` after `start`, so a step lands on its mark even when the
+// previous step ran long.
+const sleepUntil = async (start: number, ms: number) => {
+  const left = start + ms - Date.now();
+  if (left > 0) {
+    await sleep(left);
+  }
+};
+
+const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
+  const out = await nsc(["list", "-o", "json"]);
+  const parsed: unknown = JSON.parse(out);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null,
+  );
+};
+
+const liveIds = async (): Promise<ReadonlyArray<string>> =>
+  (await liveList()).map((entry) => String(entry.cluster_id ?? ""));
 
 describe("Namespace Provider", () => {
   const hosts: string[] = [];
@@ -79,5 +121,69 @@ describe("Namespace Provider", () => {
     // Then
     expect(whoami.stdout).toBe("app\n");
     expect(whoami.exitCode).toBe(0);
+  });
+
+  it("a warm exec takes under 3 s", async () => {
+    // Given: a created ns: Sandbox whose Keeper already holds the link
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const cold = await runCli(env, ["exec", id, "--", "true"]);
+    // When
+    const start = performance.now();
+    const warm = await runCli(env, ["exec", id, "--", "true"]);
+    const millis = performance.now() - start;
+    // Then
+    expect(cold.exitCode).toBe(0);
+    expect(warm.exitCode).toBe(0);
+    expect(millis).toBeLessThan(3000);
+  });
+
+  it("the host is deleted at its Deadline with no Caller alive", async () => {
+    // Given: a created ns: Sandbox with a 2 m idle; its Keeper is then killed
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env, ["--idle", "2m"]);
+    const id = created.stdout.trim();
+    const host = id.slice("ns:".length);
+    const start = Date.now();
+    const pidPath = join(env.runtime, `ns-${host}.pid`);
+    expect(await waitUntil(async () => existsSync(pidPath), 30_000)).toBe(true);
+    const pid = Number(readFileSync(pidPath, "utf8").trim());
+    process.kill(pid, "SIGKILL");
+    // When: 100 s and 240 s after create returned
+    // (the host duration is idle + 60 s, so 180 s here)
+    await sleepUntil(start, 100_000);
+    const at100 = await liveIds();
+    await sleepUntil(start, 240_000);
+    const at240 = await liveIds();
+    // Then
+    expect(at100).toContain(host);
+    expect(at240).not.toContain(host);
+  });
+
+  it("execs push the host Deadline but never past the Max life", async () => {
+    // Given: a created ns: Sandbox with 1 m idle and a 3 m max life
+    // (the host starts with idle + 60 s = 120 s to live)
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env, ["--idle", "1m", "--max-life", "3m"]);
+    const id = created.stdout.trim();
+    const host = id.slice("ns:".length);
+    const start = Date.now();
+    // When: an exec every 30 s until 150 s — past the first 120 s duration
+    let at150 = { exitCode: -1, stderr: "" };
+    for (const mark of [30_000, 60_000, 90_000, 120_000, 150_000]) {
+      await sleepUntil(start, mark);
+      const result = await runCli(env, ["exec", id, "--", "true"]);
+      expect(result.exitCode).toBe(0);
+      at150 = result;
+    }
+    // Then: an exec after the max life names the Sandbox gone
+    await sleepUntil(start, 185_000);
+    const late = await runCli(env, ["exec", id, "--", "true"]);
+    expect(late.exitCode).toBe(125);
+    expect(late.stderr).toBe(`Sandbox ${id} is gone\n`);
+    await sleepUntil(start, 250_000);
+    expect(await liveIds()).not.toContain(host);
+    expect(at150.exitCode).toBe(0);
   });
 });

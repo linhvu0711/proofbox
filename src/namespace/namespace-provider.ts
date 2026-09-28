@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Duration, Effect } from "effect";
+import { Clock, Duration, Effect } from "effect";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -122,19 +122,26 @@ export const makeNamespaceProvider = (deps: {
 
   const extend = (name: string, deadline: Date) =>
     Effect.gen(function* () {
-      yield* get(name);
-      const seconds = Math.floor(deadline.getTime() / 1000);
+      const seconds = Math.ceil(
+        (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
+      );
       const written = yield* withCliLink(name, (link) =>
         link.run(
-          `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$1" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
+          `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
         ),
       );
       if (written.exitCode !== 0) {
+        if (written.stderr.includes("No such container")) {
+          return yield* gone(name);
+        }
         return yield* fail(
           `could not write the Deadline: ${written.stderr.trim()}`,
         );
       }
-      return yield* get(name);
+      yield* deps.spawnDetached("namespace", "namespace/extend-main", [
+        name,
+        String(seconds),
+      ]);
     });
 
   const list = Effect.gen(function* () {

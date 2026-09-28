@@ -49,6 +49,10 @@ export interface NscClient {
     readonly cidfile: string;
   }) => Effect.Effect<string, NscError>;
   readonly destroy: (id: string) => Effect.Effect<void, NscError>;
+  readonly extend: (
+    id: string,
+    seconds: number,
+  ) => Effect.Effect<void, NscError>;
   readonly list: (
     labels: Readonly<Record<string, string>>,
   ) => Effect.Effect<ReadonlyArray<NscInstance>, NscError>;
@@ -108,7 +112,9 @@ export const makeNscClient = (
     id: string | undefined,
     result: NscExecResult,
   ): Effect.Effect<never, NscError> => {
-    const text = `${result.stderr}\n${result.stdout}`;
+    // nsc wraps long lines at a fixed column, so match against the text with
+    // newlines collapsed or a phrase like "was\ndestroyed" is missed.
+    const text = `${result.stderr}\n${result.stdout}`.replace(/\s+/g, " ");
     if (text.includes("not logged in")) {
       return Effect.fail(
         new ProviderUnavailableError({
@@ -207,6 +213,19 @@ export const makeNscClient = (
       }
     });
 
+  const extend = (id: string, seconds: number) =>
+    Effect.gen(function* () {
+      const result = yield* capture([
+        "extend",
+        id,
+        "--ensure_minimum",
+        `${seconds}s`,
+      ]);
+      if (result.exitCode !== 0) {
+        return yield* mapExit("extend", id, result);
+      }
+    });
+
   const list = (labels: Readonly<Record<string, string>>) =>
     Effect.gen(function* () {
       const result = yield* capture([
@@ -252,6 +271,7 @@ export const makeNscClient = (
           Effect.orElseSucceed(process.kill("SIGKILL"), () => undefined),
       );
       const stderr = yield* Ref.make("");
+      const stderrDone = yield* Deferred.make<void>();
       const listening = yield* Deferred.make<number>();
       // Keep both stdout and stderr open for the life of the process:
       // ending a read early lets the next nsc log line hit a closed pipe
@@ -261,7 +281,10 @@ export const makeNscClient = (
           stderr,
           (text) => text + Buffer.from(bytes).toString("utf8"),
         ),
-      ).pipe(Effect.forkScoped);
+      ).pipe(
+        Effect.ensuring(Deferred.complete(stderrDone, Effect.void)),
+        Effect.forkScoped,
+      );
       yield* process.stdout.pipe(
         Stream.decodeText(),
         Stream.splitLines,
@@ -275,6 +298,14 @@ export const makeNscClient = (
       );
       const gone = process.exitCode.pipe(
         Effect.orElseSucceed(() => 1),
+        // The stderr drain can lag the exit by a beat; give it a moment so a
+        // "was destroyed" line still maps to SandboxGoneError.
+        Effect.zipRight(
+          Deferred.await(stderrDone).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.ignore,
+          ),
+        ),
         Effect.zipRight(Ref.get(stderr)),
         Effect.flatMap((text) =>
           mapExit("port-forward", id, {
@@ -291,6 +322,7 @@ export const makeNscClient = (
     checkLogin,
     create,
     destroy,
+    extend,
     list,
     portForward,
   };

@@ -106,12 +106,7 @@ export const makeOpenLink = (
 
   return (id, paths, owner) =>
     Effect.gen(function* () {
-      const ctl =
-        owner === "keeper"
-          ? paths.control
-          : paths.control.replace(/\.ctl$/, `-${process.pid}.ctl`);
-      const ssh = sshBase(ctl, paths.key);
-      const run = (commandLine: string) =>
+      const runWith = (ssh: ReadonlyArray<string>) => (commandLine: string) =>
         Effect.scoped(
           Effect.gen(function* () {
             const process = yield* Command.start(
@@ -147,6 +142,19 @@ export const makeOpenLink = (
             } satisfies HostResult;
           }),
         );
+      // A CLI call rides the Keeper's link when it is up — the Keeper holds
+      // the one long-lived connection, so a warm exec never pays for a new
+      // forward or handshake.
+      if (owner === "cli" && (yield* checkCtl(paths.control))) {
+        const ssh = sshBase(paths.control, paths.key);
+        return { ssh, run: runWith(ssh) } satisfies Link;
+      }
+      const ctl =
+        owner === "keeper"
+          ? paths.control
+          : paths.control.replace(/\.ctl$/, `-${process.pid}.ctl`);
+      const ssh = sshBase(ctl, paths.key);
+      const run = runWith(ssh);
       if (yield* checkCtl(ctl)) {
         return { ssh, run } satisfies Link;
       }

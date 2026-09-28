@@ -71,7 +71,7 @@ export interface Provider {
     name: string,
     deadline: Date,
   ) => Effect.Effect<
-    SandboxInfo,
+    void,
     SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
   readonly get: (

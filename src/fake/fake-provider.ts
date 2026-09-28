@@ -232,7 +232,6 @@ export const makeFakeProvider = (options: {
         size: info.size,
       });
       yield* writeFileInfo(name, file);
-      return yield* readFileInfo(name);
     });
 
   const connect = (name: string) =>
