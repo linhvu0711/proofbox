@@ -57,6 +57,11 @@ export interface NscClient {
     id: string,
     seconds: number,
   ) => Effect.Effect<void, NscError>;
+  // `image` is `<repo>@sha256:<digest>` in the workspace registry.
+  readonly ensureImageExpiry: (
+    image: string,
+    hours: number,
+  ) => Effect.Effect<void, NscError>;
   readonly list: (
     labels: Readonly<Record<string, string>>,
   ) => Effect.Effect<ReadonlyArray<NscInstance>, NscError>;
@@ -318,6 +323,24 @@ export const makeNscClient = (
       }
     });
 
+  const ensureImageExpiry = (image: string, hours: number) =>
+    Effect.gen(function* () {
+      const result = yield* capture([
+        "registry",
+        "update-image-expiration",
+        image,
+        "--ensure-minimum",
+        `${hours}h`,
+      ]);
+      if (result.exitCode !== 0) {
+        return yield* mapExit(
+          "registry update-image-expiration",
+          undefined,
+          result,
+        );
+      }
+    });
+
   const list = (labels: Readonly<Record<string, string>>) =>
     Effect.gen(function* () {
       const result = yield* capture([
@@ -416,6 +439,7 @@ export const makeNscClient = (
     create,
     destroy,
     extend,
+    ensureImageExpiry,
     list,
     portForward,
   };

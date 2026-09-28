@@ -33,6 +33,7 @@ const Labels = Schema.Struct({
   "proofbox.idle-seconds": Schema.NumberFromString,
   "proofbox.max-life-at": Schema.Date,
   "proofbox.base-version": Schema.optional(Schema.String),
+  "proofbox.snapshot": Schema.optional(Schema.String),
   "proofbox.size": Schema.optional(Schema.String),
 });
 
@@ -83,6 +84,7 @@ export const sandboxInfoFromLabels = (
       deadline: new Date(deadlineSeconds * 1000),
       maxLifeAt: labels["proofbox.max-life-at"],
       base: labels["proofbox.base-version"],
+      snapshot: labels["proofbox.snapshot"],
       size,
     });
   });

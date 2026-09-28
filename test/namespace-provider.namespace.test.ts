@@ -1,10 +1,24 @@
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  type CliEnv,
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+  trackTempDir,
+} from "./support/cli.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
@@ -56,6 +70,15 @@ const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
     (entry): entry is Record<string, unknown> =>
       typeof entry === "object" && entry !== null,
   );
+};
+
+const tempFile = (name: string, content: string, mode = 0o644) => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-file-"));
+  trackTempDir(dir);
+  const path = join(dir, name);
+  writeFileSync(path, content);
+  chmodSync(path, mode);
+  return path;
 };
 
 const liveIds = async (): Promise<ReadonlyArray<string>> =>
@@ -113,6 +136,58 @@ describe("Namespace Provider", () => {
     expect(created.stdout).toMatch(/^ns:[a-z0-9]+\n$/);
     expect(dimensions.stdout).toContain("1440x900 pixels");
     expect(chromium.stdout).toMatch(/^Chromium \d+\./);
+  });
+
+  it("a second create reuses the Snapshot, skips the Setup script, and holds no Secret", async () => {
+    // Given: a lockfile no earlier run had, so the Fingerprint is new
+    const env = makeEnv({ docker: true, namespace: true });
+    const folder = makeGitFolder({
+      committed: {
+        "a.txt": "a\n",
+        "pnpm-lock.yaml": `lockfileVersion: '9.0'\n# run ${Date.now()}\n`,
+      },
+    });
+    const script = tempFile("setup.sh", "#!/bin/sh\necho ran >> runs.txt\n");
+    const envPath = tempFile("app.env", "API_TOKEN=tok-5f2a9c\n", 0o600);
+    // When
+    const first = await create(env, [
+      "--work",
+      folder,
+      "--setup",
+      script,
+      "--env-file",
+      envPath,
+    ]);
+    const fp = /Snapshot saved, Fingerprint ([0-9a-f]{12})/.exec(
+      first.stderr,
+    )?.[1];
+    const second = await create(env, ["--work", folder, "--setup", script]);
+    const id = second.stdout.trim();
+    const runs = await runCli(env, ["exec", id, "--", "cat", "runs.txt"]);
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "if grep -rqsF tok-5f2a9c / --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev; then echo found; else echo clean; fi",
+    ]);
+    // Then
+    expect({
+      saved: fp !== undefined,
+      reused: second.stderr.includes(
+        `proofbox: Snapshot reused, Fingerprint ${fp}\n`,
+      ),
+      setupRan: second.stderr.includes("proofbox: running Setup script"),
+      runs: runs.stdout,
+      found: found.stdout,
+    }).toEqual({
+      saved: true,
+      reused: true,
+      setupRan: false,
+      runs: "ran\n",
+      found: "clean\n",
+    });
   });
 
   it("exec runs as the app user", async () => {
