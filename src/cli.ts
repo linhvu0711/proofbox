@@ -8,6 +8,8 @@ import { execInSandbox } from "./commands/exec.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { openLive } from "./commands/live.ts";
+import { setMark } from "./commands/mark.ts";
+import { startRecording, stopRecording } from "./commands/record.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
 import { scrollAt } from "./commands/scroll.ts";
 import { typeText } from "./commands/type.ts";
@@ -226,6 +228,48 @@ const del = Command.make(
   ({ id }) => deleteSandbox(id),
 );
 
+const mark = Command.make(
+  "mark",
+  {
+    id: Args.text({ name: "id" }),
+    label: Args.text({ name: "label" }),
+  },
+  ({ id, label }) => setMark({ id, label }),
+);
+
+const recordStart = Command.make(
+  "start",
+  { id: Args.text({ name: "id" }) },
+  ({ id }) => startRecording(id),
+);
+
+const recordStop = Command.make(
+  "stop",
+  {
+    id: Args.text({ name: "id" }),
+    out: Options.text("out").pipe(Options.optional),
+    discard: Options.boolean("discard"),
+    maxSize: Options.text("max-size").pipe(Options.optional),
+  },
+  ({ id, out, discard, maxSize }) =>
+    Effect.gen(function* () {
+      const limit = yield* maxSize.pipe(
+        Option.map(parseMaxSize),
+        Option.getOrElse(() => Effect.succeed(undefined)),
+      );
+      yield* stopRecording({
+        id,
+        out: Option.getOrUndefined(out),
+        discard,
+        maxSize: limit,
+      });
+    }),
+);
+
+const record = Command.make("record").pipe(
+  Command.withSubcommands([recordStart, recordStop]),
+);
+
 const upload = Command.make(
   "upload",
   {
@@ -267,6 +311,8 @@ const command = Command.make("proofbox").pipe(
     del,
     upload,
     live,
+    record,
+    mark,
   ]),
 );
 

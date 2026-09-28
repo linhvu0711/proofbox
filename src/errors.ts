@@ -116,6 +116,14 @@ export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
   }
 }
 
+export class BadMarkError extends Data.TaggedError("BadMarkError")<{
+  readonly label: string;
+}> {
+  get message() {
+    return `Bad Step mark "${this.label}": use 1 to 60 characters on one line, for example "step 3: save the post"`;
+  }
+}
+
 export class WorkFolderTooBigError extends Data.TaggedError(
   "WorkFolderTooBigError",
 )<{
@@ -132,6 +140,55 @@ export class WorkFileGrewError extends Data.TaggedError("WorkFileGrewError")<{
 }> {
   get message() {
     return `A Work file grew while uploading, so the upload stopped past the ${formatMb(this.limit)} MB limit. Run it again, or raise the limit with --max-size.`;
+  }
+}
+
+export class ProofTooBigError extends Data.TaggedError("ProofTooBigError")<{
+  readonly bytes: number;
+  readonly limit: number;
+  readonly raw: string;
+}> {
+  get message() {
+    return `Proof video is ${formatMb(this.bytes)} MB at the lowest quality, over the ${formatMb(this.limit)} MB Size limit, so nothing was downloaded. The raw Recording stays at ${this.raw}; record a shorter walk, or raise --max-size.`;
+  }
+}
+
+export class RecordingRunningError extends Data.TaggedError(
+  "RecordingRunningError",
+)<{
+  readonly id: string;
+}> {
+  get message() {
+    return `A Recording is already running on ${this.id}; run record stop first`;
+  }
+}
+
+export class NoRecordingError extends Data.TaggedError("NoRecordingError")<{
+  readonly id: string;
+}> {
+  get message() {
+    return `No Recording is running on ${this.id}; run record start first`;
+  }
+}
+
+export class NothingChangedError extends Data.TaggedError(
+  "NothingChangedError",
+)<{
+  readonly id: string;
+  readonly raw: string;
+}> {
+  get message() {
+    return `Recording on ${this.id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at ${this.raw}; check the app is on screen and record again.`;
+  }
+}
+
+export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
+  readonly both: boolean;
+}> {
+  get message() {
+    return this.both
+      ? "record stop takes --out <file> or --discard, not both"
+      : "record stop needs --out <file>, or --discard to make no Proof video";
   }
 }
 

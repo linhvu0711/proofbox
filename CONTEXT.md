@@ -97,7 +97,7 @@ A label the Caller sets during a Recording ("step 3: save the post"). It becomes
 _Avoid_: chapter, annotation
 
 **Still part**:
-A stretch of a Recording where nothing on screen changes. The Proof video replaces it with a short "⏩ 1 min 50 s later" label.
+A stretch of a Recording where nothing on screen changes. The Proof video replaces it with a short "» 1 min 50 s later" label.
 _Avoid_: idle time, dead time, thinking time
 
 **Proof video**:

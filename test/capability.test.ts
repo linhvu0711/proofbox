@@ -67,6 +67,26 @@ describe("Capability", () => {
     );
   });
 
+  it("record start on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["record", "start", id]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no Recording was started\n",
+    );
+  });
+
   it("create with an unknown Provider names the Providers", async () => {
     // Given
     const env = makeEnv();
