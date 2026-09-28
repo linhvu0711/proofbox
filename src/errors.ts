@@ -30,6 +30,9 @@ export class ToolBundleHashError extends Data.TaggedError(
   get message() {
     return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. Run docker image rm ${this.tag} and try again`;
   }
+  get reason() {
+    return this.message;
+  }
 }
 
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{

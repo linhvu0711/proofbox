@@ -101,7 +101,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-    readonly size?: Size;
+    readonly size?: Size | undefined;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -170,7 +170,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-    readonly size?: Size;
+    readonly size?: Size | undefined;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),

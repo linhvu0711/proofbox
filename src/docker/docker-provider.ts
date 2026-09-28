@@ -266,7 +266,7 @@ export const makeDockerProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-    readonly size?: Size;
+    readonly size?: Size | undefined;
   }) =>
     Effect.gen(function* () {
       // Prove the daemon answers before anything is made — and before the
