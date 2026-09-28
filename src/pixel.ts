@@ -1,7 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import { Effect, Stream } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
-import { OutFileError, ProviderError } from "./errors.ts";
+import {
+  MissingCapabilityError,
+  OutFileError,
+  ProviderError,
+} from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { type Os, Providers } from "./provider.ts";
 import { parseSandboxId } from "./sandbox-id.ts";
@@ -29,10 +33,21 @@ export const runPixel = (rawId: string, helperArgv: ReadonlyArray<string>) =>
         new Error(`Provider ${id.provider} passed parsing but is unknown`),
       );
     }
+    if (!provider.capabilities.has("desktop")) {
+      return yield* new MissingCapabilityError({
+        provider: provider.name,
+        capability: "desktop",
+        outcome: "no action was taken",
+      });
+    }
     const info = yield* provider.get(id.name);
     const helper = PIXEL_HELPER[info.os];
     if (helper === undefined) {
-      return yield* Effect.die(new Error(`no Pixel helper for ${info.os}`));
+      return yield* new MissingCapabilityError({
+        provider: provider.name,
+        capability: "desktop",
+        outcome: "no action was taken",
+      });
     }
     const keeper = yield* KeeperClient;
     const collected = yield* withDeadlinePush(

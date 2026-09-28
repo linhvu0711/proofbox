@@ -86,9 +86,10 @@ export class MissingCapabilityError extends Data.TaggedError(
 )<{
   readonly provider: string;
   readonly capability: string;
+  readonly outcome: string;
 }> {
   get message() {
-    return `Provider ${this.provider} lacks the Capability ${this.capability}; nothing was created`;
+    return `Provider ${this.provider} lacks the Capability ${this.capability}; ${this.outcome}`;
   }
 }
 
