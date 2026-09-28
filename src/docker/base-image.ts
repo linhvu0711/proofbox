@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { ProviderError } from "../errors.ts";
+import { Progress } from "../progress.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient, DockerError } from "./docker-client.ts";
 
@@ -91,10 +92,11 @@ export const ensureBaseImage = (
     readonly tag: string;
     readonly buildArgs: Readonly<Record<string, string>>;
   },
-): Effect.Effect<void, DockerError> =>
+): Effect.Effect<void, DockerError, Progress> =>
   Effect.gen(function* () {
     if (yield* client.imageExists(image.tag)) {
       return;
     }
-    yield* client.build(image);
+    const progress = yield* Progress;
+    yield* progress.step("building the Base image", client.build(image));
   });

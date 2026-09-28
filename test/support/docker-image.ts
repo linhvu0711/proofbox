@@ -1,6 +1,6 @@
 import { CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -9,7 +9,9 @@ import {
   toolBundleArgs,
   toolBundleForArch,
 } from "../../src/docker/base-image.ts";
+import { CliOutput } from "../../src/cli-output.ts";
 import { makeDockerClient } from "../../src/docker/docker-client.ts";
+import { Progress } from "../../src/progress.ts";
 import { TOOL_BUNDLE } from "../../src/tool-bundle.ts";
 
 export default async () => {
@@ -27,6 +29,14 @@ export default async () => {
           ...toolBundleArgs(yield* toolBundleForArch(arch)),
         },
       });
-    }).pipe(Effect.provide(NodeContext.layer)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          CliOutput.Default,
+          Progress.Default.pipe(Layer.provide(CliOutput.Default)),
+        ),
+      ),
+    ),
   );
 };

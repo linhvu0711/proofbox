@@ -14,6 +14,7 @@ import {
   baseImageTag,
   baseImageVersion,
   ensureBaseImage,
+  type ToolBundleFile,
   toolBundleArgs,
   toolBundleForArch,
 } from "./base-image.ts";
@@ -142,17 +143,14 @@ export const makeDockerProvider = (options: {
       readonly idle: Duration.Duration;
       readonly maxLife: Duration.Duration;
     },
-    arch: string,
+    image: {
+      readonly version: string;
+      readonly tag: string;
+      readonly bundle: ReadonlyArray<ToolBundleFile>;
+    },
   ) =>
     Effect.gen(function* () {
-      const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
-      const bundle = yield* toolBundleForArch(arch);
-      const tag = options.imageTag ?? baseImageTag(version);
-      yield* ensureBaseImage(client, {
-        dir: BASE_IMAGE_DIR,
-        tag,
-        buildArgs: { BASE_VERSION: version, ...toolBundleArgs(bundle) },
-      });
+      const { version, tag, bundle } = image;
       const createdAt = yield* now;
       const maxLifeAt = new Date(
         createdAt.getTime() + Duration.toMillis(req.maxLife),
@@ -250,10 +248,18 @@ export const makeDockerProvider = (options: {
       // Prove the daemon answers before anything is made — and before the
       // progress line prints, so a dead daemon reports only the error.
       const arch = yield* client.serverArch;
+      const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+      const bundle = yield* toolBundleForArch(arch);
+      const tag = options.imageTag ?? baseImageTag(version);
+      yield* ensureBaseImage(client, {
+        dir: BASE_IMAGE_DIR,
+        tag,
+        buildArgs: { BASE_VERSION: version, ...toolBundleArgs(bundle) },
+      });
       const progress = yield* Progress;
       return yield* progress.step(
         "creating docker Sandbox",
-        createWork(req, arch),
+        createWork(req, { version, tag, bundle }),
       );
     });
 
