@@ -207,6 +207,42 @@ describe("upload", () => {
     expect(readdirSync(join(env.root, name, "outside"))).toEqual([]);
   });
 
+  it("a cleared symlink ancestor resends the siblings it carried away", async () => {
+    // Given: the fixture plus d/x.txt and d/y.txt uploaded; in the Sandbox
+    // d became a symlink to an outside folder; the Caller changed d/x.txt
+    const { env, id, name, folder } = await uploadOnce();
+    mkdirSync(join(folder, "d"));
+    writeFileSync(join(folder, "d", "x.txt"), "x\n");
+    writeFileSync(join(folder, "d", "y.txt"), "y\n");
+    const second = await runCli(env, ["upload", id, folder]);
+    expect(second.exitCode).toBe(0);
+    const linked = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "rm -rf d && mkdir -p ../outside && ln -s ../outside d",
+    ]);
+    expect(linked.exitCode).toBe(0);
+    writeFileSync(join(folder, "d", "x.txt"), "x2\n");
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then: dropping the link removed d/y.txt too, so it is resent even
+    // though only d/x.txt changed
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 2 files, removed 0 files\n",
+    );
+    expect(
+      String(readFileSync(join(env.root, name, "home", "d", "x.txt"))),
+    ).toBe("x2\n");
+    expect(
+      String(readFileSync(join(env.root, name, "home", "d", "y.txt"))),
+    ).toBe("y\n");
+    expect(readdirSync(join(env.root, name, "outside"))).toEqual([]);
+  });
+
   it("a removed path does not reach outside the Work folder through a symlink", async () => {
     // Given: the fixture plus d/x.txt uploaded; in the Sandbox d became a
     // symlink to an outside folder holding a planted file; the Caller

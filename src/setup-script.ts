@@ -34,7 +34,13 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
         Effect.gen(function* () {
           const written = yield* keeper.exec(
             rawId,
-            ["sh", "-c", 'cat > "$1" && chmod 700 "$1"', "sh", setupPath],
+            [
+              "sh",
+              "-c",
+              'umask 077; cat > "$1" && chmod 700 "$1"',
+              "sh",
+              setupPath,
+            ],
             { stdin: Stream.make(script) },
           );
           let writeCode = 0;
@@ -59,11 +65,6 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
           const decoder = new TextDecoder();
           const keep = (chunk: Uint8Array) => {
             pending += decoder.decode(chunk, { stream: true });
-            // A runaway line would grow the Caller without end; the tail
-            // is all "last 50 lines" needs anyway.
-            if (pending.length > 65_536) {
-              pending = pending.slice(-65_536);
-            }
             let newline = pending.indexOf("\n");
             while (newline !== -1) {
               lines.push(pending.slice(0, newline + 1));
@@ -72,6 +73,12 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
               }
               pending = pending.slice(newline + 1);
               newline = pending.indexOf("\n");
+            }
+            // A runaway line would grow the Caller without end; the tail
+            // is all "last 50 lines" needs anyway. Clip only the unflushed
+            // remainder so complete lines are never dropped mid-chunk.
+            if (pending.length > 65_536) {
+              pending = pending.slice(-65_536);
             }
           };
           const ran = yield* keeper.exec(rawId, [setupPath]);

@@ -179,7 +179,7 @@ export const sendWorkFolder = (
               ),
               Effect.catchAll(() => Effect.succeed(undefined)),
             );
-            const diff = diffHashList(old, files);
+            let diff = diffHashList(old, files);
             if (
               [...diff.send, ...diff.remove].some((path) =>
                 pathOutsideWork(path),
@@ -205,7 +205,7 @@ export const sendWorkFolder = (
               }
             }
             if (ancestors.size !== 0) {
-              yield* runInSandbox(
+              const cleared = yield* runInSandbox(
                 keeper,
                 rawId,
                 [
@@ -214,7 +214,7 @@ export const sendWorkFolder = (
                   "-I{}",
                   "sh",
                   "-c",
-                  '[ -L "$1" ] && rm -f -- "$1" || :',
+                  '[ -L "$1" ] && { printf "%s\\0" "$1"; rm -f -- "$1"; } || :',
                   "sh",
                   "{}",
                 ],
@@ -222,6 +222,22 @@ export const sendWorkFolder = (
                   new TextEncoder().encode([...ancestors].join("\0")),
                 ),
               );
+              // A cleared dir took every uploaded file under it; siblings
+              // that did not change are not in the send list, so add the
+              // Caller's own files below each cleared path.
+              if (cleared !== "") {
+                const dropped = cleared.split("\0").filter((dir) => dir !== "");
+                const send = new Set(diff.send);
+                for (const file of files) {
+                  if (
+                    !send.has(file.path) &&
+                    dropped.some((dir) => file.path.startsWith(`${dir}/`))
+                  ) {
+                    send.add(file.path);
+                  }
+                }
+                diff = { send: [...send].sort(), remove: diff.remove };
+              }
             }
             // Removal runs before extraction: a path that changed kind (a
             // folder that became a file, or the reverse) blocks tar, and the
