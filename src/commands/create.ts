@@ -102,7 +102,7 @@ export const createSandbox = (options: {
       size,
     });
     const output = yield* CliOutput;
-    const id = `${provider.name}:${info.name}`;
+    const id = `${provider.idPrefix}:${info.name}`;
     const keeper = yield* KeeperClient;
     const progress = yield* Progress;
     yield* progress

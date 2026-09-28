@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 import { Effect } from "effect";
 import { BadSandboxIdError, UnknownProviderError } from "./errors.ts";
+import type { Provider } from "./provider.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -37,4 +38,30 @@ export const parseSandboxId = (
       });
     }
     return { provider, name };
+  });
+
+export interface ResolvedSandboxId {
+  readonly provider: Provider;
+  readonly prefix: string;
+  readonly name: string;
+}
+
+export const resolveSandboxId = (
+  raw: string,
+  providers: ReadonlyMap<string, Provider>,
+): Effect.Effect<ResolvedSandboxId, BadSandboxIdError | UnknownProviderError> =>
+  Effect.gen(function* () {
+    const parsed = yield* parseSandboxId(
+      raw,
+      [...providers.values()].map((provider) => provider.idPrefix),
+    );
+    const provider = [...providers.values()].find(
+      (candidate) => candidate.idPrefix === parsed.provider,
+    );
+    if (provider === undefined) {
+      return yield* Effect.die(
+        new Error(`prefix ${parsed.provider} parsed but maps to no Provider`),
+      );
+    }
+    return { provider, prefix: parsed.provider, name: parsed.name };
   });

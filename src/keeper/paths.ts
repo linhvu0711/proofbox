@@ -8,6 +8,8 @@ export interface KeeperPaths {
   readonly dir: string;
   readonly socket: string;
   readonly pid: string;
+  readonly key: string;
+  readonly control: string;
 }
 
 export const keeperPaths = (id: {
@@ -43,5 +45,7 @@ export const keeperPaths = (id: {
       dir,
       socket: join(dir, `${stem}.sock`),
       pid: join(dir, `${stem}.pid`),
+      key: join(dir, `${stem}.key`),
+      control: join(dir, `${stem}.ctl`),
     };
   });

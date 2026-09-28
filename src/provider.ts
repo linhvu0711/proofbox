@@ -53,6 +53,7 @@ export interface Connection {
 
 export interface Provider {
   readonly name: string;
+  readonly idPrefix: string;
   readonly capabilities: ReadonlySet<Capability>;
   readonly sizes: "any" | ReadonlyArray<Size>;
   readonly create: (req: {
@@ -60,6 +61,7 @@ export interface Provider {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly name?: string | undefined;
   }) => Effect.Effect<
     SandboxInfo,
     ProviderError | ProviderUnavailableError | ToolBundleHashError,

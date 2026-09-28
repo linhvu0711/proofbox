@@ -6,20 +6,15 @@ import { SetupScriptFailedError, UploadFailedError } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
-import { parseSandboxId } from "./sandbox-id.ts";
+import { resolveSandboxId } from "./sandbox-id.ts";
 
 const KEEP_LINES = 50;
 
 export const runSetupScript = (rawId: string, script: Uint8Array) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const info = yield* provider.get(id.name);
     const progress = yield* Progress;
     const keeper = yield* KeeperClient;

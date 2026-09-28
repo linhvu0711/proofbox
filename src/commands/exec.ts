@@ -3,19 +3,14 @@ import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
-import { parseSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const output = yield* CliOutput;
     const info = yield* provider.get(id.name);
     const killsBefore = yield* provider.memoryKills(id.name);

@@ -7,10 +7,10 @@ import {
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
 import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
-import { ProviderError, UnknownProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
-import { parseSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest } from "./protocol.ts";
 
@@ -47,15 +47,12 @@ const frameOf = (event: ExecEvent) => {
 export const runKeeper = (rawId: string) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* new UnknownProviderError({
-        provider: id.provider,
-        known: [...providers.keys()],
-      });
-    }
-    const paths = yield* keeperPaths(id);
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
+    const paths = yield* keeperPaths({
+      provider: id.prefix,
+      name: id.name,
+    });
     if (yield* socketAnswers(paths.socket)) {
       return;
     }
@@ -122,7 +119,7 @@ export const runKeeper = (rawId: string) =>
               ? Effect.void
               : Effect.asVoid(
                   mailbox.fail(
-                    new ProviderError({ provider: id.provider, reason }),
+                    new ProviderError({ provider: id.provider.name, reason }),
                   ),
                 );
 
@@ -156,7 +153,7 @@ export const runKeeper = (rawId: string) =>
                   try: () => decodeInput(JSON.parse(line)),
                   catch: () =>
                     new ProviderError({
-                      provider: id.provider,
+                      provider: id.provider.name,
                       reason: "bad input frame",
                     }),
                 });
@@ -228,7 +225,7 @@ export const runKeeper = (rawId: string) =>
               void Runtime.runPromiseExit(runtime)(
                 mailbox.fail(
                   new ProviderError({
-                    provider: id.provider,
+                    provider: id.provider.name,
                     reason:
                       "the client closed the connection before the input ended",
                   }),
@@ -244,7 +241,7 @@ export const runKeeper = (rawId: string) =>
               resume(
                 Effect.fail(
                   new ProviderError({
-                    provider: id.provider,
+                    provider: id.provider.name,
                     reason: error.message,
                   }),
                 ),
@@ -262,7 +259,7 @@ export const runKeeper = (rawId: string) =>
             try: () => writeFile(paths.pid, `${process.pid}\n`),
             catch: (cause) =>
               new ProviderError({
-                provider: id.provider,
+                provider: id.provider.name,
                 reason: cause instanceof Error ? cause.message : String(cause),
               }),
           }),
