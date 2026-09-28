@@ -10,7 +10,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupEnvs, makeEnv, makeGitFolder, runCli } from "./support/cli.ts";
+import {
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+  trackTempDir,
+} from "./support/cli.ts";
 
 const workFixture = () =>
   makeGitFolder({
@@ -31,6 +37,7 @@ const setupScript = (content: string) => {
 
 const envFile = (content: string, mode = 0o600) => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+  trackTempDir(dir);
   const path = join(dir, "app.env");
   writeFileSync(path, content);
   chmodSync(path, mode);
@@ -429,7 +436,11 @@ describe("create", () => {
     // Given: an env file path that does not exist
     const env = makeEnv();
     const missing = join(
-      mkdtempSync(join(tmpdir(), "proofbox-env-")),
+      (() => {
+        const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+        trackTempDir(dir);
+        return join(dir, "app.env");
+      })(),
       "none.env",
     );
     // When
@@ -476,6 +487,7 @@ describe("create", () => {
     // Given: a folder passed as the env file
     const env = makeEnv();
     const folder = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    trackTempDir(folder);
     // When
     const result = await runCli(env, [
       "create",

@@ -33,6 +33,7 @@ import {
   makeEnv,
   makeGitFolder,
   runCli,
+  trackTempDir,
 } from "./support/cli.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
@@ -487,6 +488,7 @@ describe("Docker Provider", () => {
     // Given: a docker Sandbox created with an env file
     const env = makeEnv({ docker: true });
     const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    trackTempDir(dir);
     const path = join(dir, "app.env");
     writeFileSync(path, "API_TOKEN=tok-5f2a9c\n");
     chmodSync(path, 0o600);
