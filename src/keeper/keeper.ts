@@ -76,6 +76,7 @@ export const runKeeper = (rawId: string) =>
           let mode: "request" | "plain" | "stdin" = "request";
           let mailbox: Mailbox.Mailbox<Uint8Array, ProviderError> | undefined;
           let inputEnded = false;
+          let execDone = false;
           let closeSocket = false;
 
           const runExec = (
@@ -98,8 +99,16 @@ export const runKeeper = (rawId: string) =>
                 ),
                 Effect.ensuring(
                   Effect.sync(() => {
-                    socket.end();
-                    socket.destroy();
+                    // A command may exit before its input ends (tar -x
+                    // stops at the end-of-archive marker); drain the
+                    // remaining input frames so the client can finish
+                    // writing before the socket closes.
+                    if (mode === "stdin" && !inputEnded) {
+                      execDone = true;
+                    } else {
+                      socket.end();
+                      socket.destroy();
+                    }
                   }),
                 ),
               );
@@ -148,12 +157,18 @@ export const runKeeper = (rawId: string) =>
                     }),
                 });
                 if ("in" in frame) {
-                  yield* mailbox.offer(
-                    new Uint8Array(Buffer.from(frame.in, "base64")),
-                  );
+                  if (!execDone) {
+                    yield* mailbox.offer(
+                      new Uint8Array(Buffer.from(frame.in, "base64")),
+                    );
+                  }
                 } else {
                   inputEnded = true;
-                  yield* mailbox.end;
+                  if (execDone) {
+                    closeSocket = true;
+                  } else {
+                    yield* mailbox.end;
+                  }
                 }
               }
             });
