@@ -345,6 +345,26 @@ describe("Docker Provider", () => {
     expect(await containerExists(containerOf(id))).toBe(false);
   });
 
+  it("delete leaves a container that is not a Sandbox alone", async () => {
+    // Given: a container borrowing the proofbox- name without the label
+    const env = makeEnv({ docker: true });
+    await docker([
+      "run",
+      "-d",
+      "--name",
+      "proofbox-zzzzzz",
+      "debian:bookworm-slim",
+      "sleep",
+      "60",
+    ]);
+    containers.push("proofbox-zzzzzz");
+    // When
+    const deleted = await runCli(env, ["delete", "docker:zzzzzz"]);
+    // Then
+    expect(deleted.stdout).toBe("Sandbox docker:zzzzzz is already gone\n");
+    expect(await containerExists("proofbox-zzzzzz")).toBe(true);
+  });
+
   it("the watchdog deletes the container at the Deadline with no Caller process alive", async () => {
     // Given: a docker Sandbox with a 5 s idle and a live Keeper
     const env = makeEnv({ docker: true });

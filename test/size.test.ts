@@ -16,11 +16,15 @@ describe("--size", () => {
       const sixteenThirtyTwo = yield* parseSize("16x32");
       const badText = yield* Effect.flip(parseSize("abc"));
       const badZero = yield* Effect.flip(parseSize("0x4"));
+      const tooBig = yield* Effect.flip(
+        parseSize("9999999999999999999999999x1"),
+      );
       // Then
       expect(twoThree).toEqual({ cpu: 2, ramGb: 3 });
       expect(sixteenThirtyTwo).toEqual({ cpu: 16, ramGb: 32 });
       expect(badText._tag).toBe("BadSizeError");
       expect(badZero._tag).toBe("BadSizeError");
+      expect(tooBig._tag).toBe("BadSizeError");
     }),
   );
 

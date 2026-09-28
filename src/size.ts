@@ -16,10 +16,12 @@ export const parseSize = (value: string): Effect.Effect<Size, BadSizeError> => {
   if (match === null) {
     return Effect.fail(new BadSizeError({ value }));
   }
-  return Effect.succeed({
-    cpu: Number(match[1]),
-    ramGb: Number(match[2]),
-  });
+  const cpu = Number(match[1]);
+  const ramGb = Number(match[2]);
+  if (!Number.isSafeInteger(cpu) || !Number.isSafeInteger(ramGb)) {
+    return Effect.fail(new BadSizeError({ value }));
+  }
+  return Effect.succeed({ cpu, ramGb });
 };
 
 export const OUT_OF_MEMORY_EXIT = 122;

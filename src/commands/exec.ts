@@ -37,6 +37,7 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       push,
       Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
     );
+    let exitCode: number | undefined;
     yield* events.pipe(
       Stream.runForEach((event) => {
         switch (event._tag) {
@@ -45,13 +46,14 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
           case "Stderr":
             return output.err(event.bytes);
           case "Exit":
+            exitCode = event.code;
             return output.setExitCode(event.code);
         }
       }),
       Effect.raceFirst(pushWhileRunning),
     );
     const killsAfter = yield* provider.memoryKills(id.name);
-    if (killsAfter > killsBefore) {
+    if (killsAfter > killsBefore && exitCode === 137) {
       yield* output.err(`${outOfMemoryMessage(info.size, provider.sizes)}\n`);
       yield* output.setExitCode(OUT_OF_MEMORY_EXIT);
     }

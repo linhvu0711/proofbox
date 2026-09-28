@@ -52,6 +52,12 @@ export const makeDockerProvider = (options: {
       if (Option.isNone(found) || !found.value.running) {
         return yield* gone(name);
       }
+      const ownedBy = yield* Schema.decodeUnknown(
+        Schema.Struct({ "proofbox.name": Schema.String }),
+      )(found.value.labels).pipe(Effect.option);
+      if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
+        return yield* gone(name);
+      }
       const labels = yield* Schema.decodeUnknown(Labels)(
         found.value.labels,
       ).pipe(Effect.mapError((error) => fail(error.message)));
@@ -90,7 +96,7 @@ export const makeDockerProvider = (options: {
       const written = yield* client.execText(containerOf(name), "root", [
         "sh",
         "-c",
-        'printf "%s\n" "$1" > /run/proofbox/deadline',
+        'tmp=/run/proofbox/.deadline.$$; printf "%s\n" "$1" > "$tmp" && mv "$tmp" /run/proofbox/deadline',
         "sh",
         String(Math.floor(deadline.getTime() / 1000)),
       ]);
@@ -122,6 +128,12 @@ export const makeDockerProvider = (options: {
     Effect.gen(function* () {
       const found = yield* client.inspect(containerOf(name));
       if (Option.isNone(found)) {
+        return "gone" as const;
+      }
+      const ownedBy = yield* Schema.decodeUnknown(
+        Schema.Struct({ "proofbox.name": Schema.String }),
+      )(found.value.labels).pipe(Effect.option);
+      if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
         return "gone" as const;
       }
       yield* client.remove(containerOf(name));
@@ -301,8 +313,9 @@ export const makeDockerProvider = (options: {
     Effect.gen(function* () {
       yield* get(name);
       const read = yield* client.execText(containerOf(name), "root", [
-        "cat",
-        "/sys/fs/cgroup/memory.events",
+        "sh",
+        "-c",
+        "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
       ]);
       const match = /^oom_kill (\d+)$/m.exec(read.stdout);
       return match === null ? 0 : Number(match[1]);
