@@ -34,6 +34,10 @@ _Avoid_: TTL, idle timer, timeout
 The hard limit on how long a Sandbox can live, 3 hours by default, however active it is.
 _Avoid_: hard TTL, lease
 
+**Sandbox size**:
+The CPU count and RAM of a Sandbox, written `4x8` (4 vCPU, 8 GB). Each Provider has a default per OS and an ordered list of bigger sizes. Not the Size limit, which is about the Proof video.
+_Avoid_: machine type, shape, spec, instance size
+
 ### Getting the app ready
 
 **Work folder**:
@@ -121,5 +125,5 @@ The helper agent that does a Walk. It gets the walk and the Sandbox id, sets the
 _Avoid_: computer-use agent, tester, driver
 
 **Project config**:
-The folder `~/.config/ship/projects/<owner>-<repo>/` on the Mac that holds one project's Sandbox OS, Setup script, and env file (mode 600). `/implement` drafts it on a project's first run and asks the user once.
+The folder `~/.config/ship/projects/<owner>-<repo>/` on the Mac that holds one project's Sandbox OS, Sandbox size (empty means the Provider's default), Setup script, and env file (mode 600). `/implement` drafts it on a project's first run and asks the user once.
 _Avoid_: profile, environment, settings

@@ -50,6 +50,41 @@ All numbers are from real runs on the Personal workspace. Scripts: `proofvideo.p
 
 `nsc instance report` gives minutes, not dollars. Linux: 48 min on 2x4 (96 unit-minutes), $0.10–0.14. macOS: 36.1 min on 6x14 (15.2 + 20.9), $2.17–3.25 at $0.06–0.09/min, the prepaid and overage rates for 6x14 on https://namespace.so/pricing. Most of the Mac time was debugging between commands, not the checks. The dashboard bill has the final number.
 
+## Size test, 2026-09-28
+
+Question: can the small sizes (macOS 4x7, Linux 2x4 or 4x8) install, build, and run real projects, with the screen recorded at the same time? Scripts: `mac-bench.sh`, `mac-heavy.sh`, and `linux-heavy.sh` in the session scratchpad (not kept). Region iad4. Recording in every run: ffmpeg, 30 fps, libx264 ultrafast, CRF 18.
+
+macOS 4x7 (4 vCPU, 7 GB, macOS 26.3.1, Xcode 26.1.1, Swift 6.2.1):
+
+| Work | Time | Recording at the same time | RAM |
+|---|---|---|---|
+| clocktrace `pnpm install` | 7 s | | |
+| clocktrace `pnpm -r run build` (tsc and `swift build -c release`) | 8 s | | |
+| swift-format 602.0.0 `swift build` (debug) | 52 s | 1796 frames in 60 s, speed 0.999x, load about 10 | 67% free at worst, no swap |
+| swift-format 602.0.0 `swift build -c release` | 170 s | 3600 frames in 120 s, speed 0.999x | 51% free at worst, no swap |
+
+A frame from the release-build recording showed the real desktop.
+
+Linux, in a `debian:bookworm` container on a bare host, with Xvfb 1440x900, fluxbox, and Chromium on a page:
+
+| Work | 2x4 | 4x8 |
+|---|---|---|
+| Desktop `apt-get install` | 30 s | 25 s |
+| perch `bun install` | 1 s | 1 s |
+| perch `bun run build` | 7 s | 5 s |
+| ripgrep 14.1.1 `cargo build --release` | 30 s | 16 s |
+| typst v0.13.1 `cargo build --release -p typst-cli` | 222 s | 134 s |
+| Recording during the typst build | 3600 frames in 120 s, 1x | 3600 frames in 120 s, 1x |
+| RAM during the typst build | peak 2876 MB used, 1099 MB left | peak 3298 MB used, 4703 MB left |
+| Out-of-memory kills | 0 | 0 |
+
+What it shows:
+
+- Recording held 30 fps in every run, even with all CPUs busy.
+- CPU changes build time only. 4x8 built typst 40% faster than 2x4.
+- RAM is what can fail a run. 2x4 had 1.1 GB left with a mid-size Rust build and Chromium, so a large web build (a big Next.js app needs 2 to 4 GB of heap) can run out there.
+- The Mac left idle until its Deadline cost about 25 extra minutes. proofbox deletes a Sandbox when its work ends, so this does not apply to real runs.
+
 ## Open
 
 - Nearer regions than iad4 for a Caller in UTC+7 (`--region` exists, not tested).

@@ -8,7 +8,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 2. **macOS privacy locks.** Run GUI commands in the user's desktop session (`launchctl asuser`), grant screen and input access to `/opt/namespace/vmguest` in TCC.db, and pre-answer the replayd "bypass the private window picker" alert. Decided 2026-09-27: `create` ends with a test screenshot and a 1 s test capture, and fails clearly if either is blocked or an alert is on screen.
 3. **No Homebrew.** proofbox brings its own pinned tools (static ffmpeg, its own input helper). Decided 2026-09-27: a Tool bundle (see CONTEXT.md) with fixed hashes, defined by the core. How it reaches a Sandbox is a Provider choice, so other platforms can do it their own way. Namespace macOS: `nsc artifact cache-url`, before the token is deleted and before any user code arrives.
 4. **Slow link and slow commands.** Build the Proof video in the Sandbox and download only that. Decided 2026-09-27: a Keeper per Sandbox on the Caller's machine holds one open connection (see CONTEXT.md). The Sandbox id stays the source of truth.
-5. **One Mac at a time** on the current plan (6 vCPU / 14 GiB macOS quota). The published Developer limit is 12 vCPU / 28 GB; ask support to raise it. Decided 2026-09-27: stay on Developer (pay as you go) for now. The user needs at least 6 Macs at once later, which means Team ($100/month, 24 vCPU: exactly 6 small 4x7 Macs). proofbox must report the provider's `ResourceLimitsError` clearly. Still to test: is the small 4x7 Mac fast enough.
+5. **One Mac at a time** on the current plan (6 vCPU / 14 GiB macOS quota). The published Developer limit is 12 vCPU / 28 GB; ask support to raise it. Decided 2026-09-27: stay on Developer (pay as you go) for now. The user needs at least 6 Macs at once later, which means Team ($100/month, 24 vCPU: exactly 6 small 4x7 Macs). proofbox must report the provider's `ResourceLimitsError` clearly. The size test on 2026-09-28 answered the open question: the small 4x7 Mac is fast enough (item 11).
 
 ## Checking again after a failure
 
@@ -27,3 +27,12 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 ## Secrets on macOS
 
 10. Decided 2026-09-27: no container on the Mac, so the env file goes into a RAM disk (`hdiutil attach -nomount ram://…`), mode 600, owned by `runner`. It is sent at the same point as on Linux: after the Setup script has finished, so setup never sees it. It is gone when the Mac is deleted. macOS has no Snapshots, so nothing can carry it forward.
+
+## Sandbox size
+
+11. The size test (`docs/research/namespace-test.md`, 2026-09-28) showed that CPU changes only how long a build takes, and RAM decides whether it works. No one size fits every project. Decided 2026-09-28:
+    - Defaults: macOS 4x7, Linux 4x8. The 4x7 Mac is the only size that fits 6 Macs in the Team plan's 24 vCPU. Linux 4x8 costs about $0.004/min, and 8 of them fit the Developer plan's 32 vCPU.
+    - The Caller picks another size with `create --size <cpu>x<ram>`. A size the Provider does not offer is refused, and the error lists the sizes it does offer.
+    - Sizes go up in this order: Linux 4x8, 8x16, 16x32; macOS 4x7, 6x14.
+    - A command killed for lack of memory fails with its own exit code and a plain message that names the size and the next one up, for example `Sandbox ran out of memory (4x8). Try --size 8x16.` At the largest size, the message says so.
+    - The skills step up one size by themselves and save it in the Project config (`docs/workflow-decisions.md` item 17). A bigger Mac uses more of the macOS quota, so fewer Macs run at once.
