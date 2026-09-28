@@ -10,9 +10,10 @@ import {
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { ConfigProvider, Effect, Layer } from "effect";
+import { Chunk, ConfigProvider, Effect, Layer, Ref } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
+import { createSandbox } from "../src/commands/create.ts";
 import { readWorkFolder, sendWorkFolder } from "../src/commands/upload.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -558,5 +559,29 @@ describe("upload", () => {
           "proofbox: uploading Work folder\nproofbox: sent 2 files, removed 0 files\n",
         );
       }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.scopedLive(
+    "a grown Work file fails the upload with its own message without a Keeper",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Sandbox made with no Keeper; big.bin grew after the size
+        // check
+        const env = makeEnv();
+        const error = yield* Effect.gen(function* () {
+          yield* createSandbox({ os: "linux", provider: "fake" });
+          const output = yield* CliOutput;
+          const id = Chunk.toReadonlyArray(yield* Ref.get(output.captured.out))
+            .join("")
+            .trim();
+          const { folder, files } = yield* grownFolder;
+          // When
+          return yield* Effect.flip(
+            sendWorkFolder(id, folder, files, 1_000_000),
+          );
+        }).pipe(Effect.provide(uploadLayers(env, "direct")), withRuntime(env));
+        // Then
+        expect(error.message).toBe(grewMessage);
+      }),
   );
 });
