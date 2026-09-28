@@ -53,7 +53,9 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       Effect.raceFirst(pushWhileRunning),
     );
     const killsAfter = yield* provider.memoryKills(id.name);
-    if (killsAfter > killsBefore && exitCode === 137) {
+    // The kill count is container-wide; a new kill plus a clean or 137 exit
+    // means the command hid an OOM child (e.g. an early pipeline stage).
+    if (killsAfter > killsBefore && (exitCode === 0 || exitCode === 137)) {
       yield* output.err(`${outOfMemoryMessage(info.size, provider.sizes)}\n`);
       yield* output.setExitCode(OUT_OF_MEMORY_EXIT);
     }
