@@ -439,7 +439,7 @@ describe("create", () => {
       (() => {
         const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
         trackTempDir(dir);
-        return join(dir, "app.env");
+        return dir;
       })(),
       "none.env",
     );
