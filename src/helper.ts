@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { rename, unlink } from "node:fs/promises";
 import { Effect, Exit, Stream } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import { MissingCapabilityError } from "./errors.ts";
@@ -122,54 +122,68 @@ export const fetchHelper = (
     )(
       Effect.gen(function* () {
         const events = yield* keeper.exec(rawId, [helper, "fetch", remote]);
-        const stream = yield* Effect.acquireRelease(
-          Effect.sync(() => createWriteStream(dest)),
-          (done) =>
-            Effect.async<void>((resume) => {
-              done.end(() => resume(Effect.void));
-            }),
-        );
-        let writeError: Error | undefined;
-        stream.on("error", (error) => {
-          writeError = error;
-        });
-        const stderr: Uint8Array[] = [];
-        let code: number | undefined;
-        yield* events.pipe(
-          Stream.runForEach((event) => {
-            if (event._tag === "Stdout") {
-              if (writeError !== undefined) {
-                return Effect.die(writeError);
-              }
-              return Effect.async<void>((resume) => {
-                if (stream.write(event.bytes)) {
-                  resume(Effect.void);
-                } else {
-                  stream.once("drain", () => resume(Effect.void));
-                }
+        const part = `${dest}.part`;
+        return yield* Effect.acquireUseRelease(
+          Effect.sync(() => createWriteStream(part)),
+          (stream) =>
+            Effect.gen(function* () {
+              let writeError: Error | undefined;
+              stream.on("error", (error) => {
+                writeError = error;
               });
-            }
-            if (event._tag === "Stderr") {
-              stderr.push(event.bytes);
-            } else {
-              code = event.code;
-            }
-            return Effect.void;
-          }),
+              const stderr: Uint8Array[] = [];
+              let code: number | undefined;
+              yield* events.pipe(
+                Stream.runForEach((event) => {
+                  if (event._tag === "Stdout") {
+                    if (writeError !== undefined) {
+                      return Effect.die(writeError);
+                    }
+                    return Effect.async<void>((resume) => {
+                      stream.write(event.bytes, (error) => {
+                        resume(
+                          error === undefined || error === null
+                            ? Effect.void
+                            : Effect.die(error),
+                        );
+                      });
+                    });
+                  }
+                  if (event._tag === "Stderr") {
+                    stderr.push(event.bytes);
+                  } else {
+                    code = event.code;
+                  }
+                  return Effect.void;
+                }),
+              );
+              yield* Effect.async<void>((resume) => {
+                if (writeError !== undefined) {
+                  resume(Effect.void);
+                  return;
+                }
+                stream.once("error", () => resume(Effect.void));
+                stream.end(() => resume(Effect.void));
+              });
+              if (writeError !== undefined) {
+                return yield* Effect.die(writeError);
+              }
+              if (code === 0) {
+                yield* Effect.promise(() => rename(part, dest));
+              }
+              return {
+                provider: id.provider,
+                code,
+                stderr: Buffer.concat(stderr).toString("utf8").trim(),
+              };
+            }),
+          (stream) => Effect.sync(() => stream.destroy()),
         );
-        if (writeError !== undefined) {
-          return yield* Effect.die(writeError);
-        }
-        return {
-          provider: id.provider,
-          code,
-          stderr: Buffer.concat(stderr).toString("utf8").trim(),
-        };
       }).pipe(
         Effect.onExit((exit) =>
           Exit.isSuccess(exit) && exit.value.code === 0
             ? Effect.void
-            : Effect.promise(() => unlink(dest).catch(() => {})),
+            : Effect.promise(() => unlink(`${dest}.part`).catch(() => {})),
         ),
       ),
     );
