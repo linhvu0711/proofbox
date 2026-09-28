@@ -30,7 +30,9 @@ export const MAC_STATE_DIR = "/var/lib/proofbox";
 export const MAC_WORK_DIR = "/Users/runner/work";
 const LABELS = `${MAC_STATE_DIR}/labels.json`;
 const DEADLINE = `${MAC_STATE_DIR}/deadline`;
-const MEMORY_KILLS = `${MAC_STATE_DIR}/memory-kills.log`;
+// Root's folder, not MAC_STATE_DIR: runner owns that one and could swap
+// the log for one with made-up kills.
+const MEMORY_KILLS = "/var/log/proofbox-memory-kills.log";
 
 const fail = (reason: string) =>
   new ProviderError({ provider: "namespace", reason });

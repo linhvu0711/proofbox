@@ -309,6 +309,10 @@ describe("Namespace macOS Provider", () => {
       );
       // The Mac is a Sandbox only once it is prepared.
       expect(at("/tmp/proofbox-test.mov")).toBeLessThan(at("labels.json"));
+      // In a folder runner cannot write, so user code cannot fake a kill.
+      expect(
+        at(">> /var/log/proofbox-memory-kills.log"),
+      ).toBeGreaterThanOrEqual(0);
     }).pipe(withRuntime(runtimeDir())),
   );
 
