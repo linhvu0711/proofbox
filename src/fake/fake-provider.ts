@@ -1,10 +1,8 @@
-import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Clock, Config, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Clock, Duration, Effect, Schema, Stream } from "effect";
 import { nextDeadline } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import { Progress } from "../progress.ts";
@@ -14,18 +12,11 @@ import {
   IdleSeconds,
   Os,
   type Provider,
-  Providers,
   SandboxInfo,
 } from "../provider.ts";
+import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { spawnDetached } from "../spawn-detached.ts";
-
-const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-
-const makeName = () =>
-  Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join(
-    "",
-  );
 
 export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
@@ -124,7 +115,7 @@ export const makeFakeProvider = (options: {
       });
       let name: string | undefined;
       for (let i = 0; i < 5 && name === undefined; i++) {
-        const candidate = makeName();
+        const candidate = makeSandboxName();
         const made = yield* Effect.tryPromise({
           try: async () => {
             await mkdir(join(root, candidate));
@@ -165,7 +156,7 @@ export const makeFakeProvider = (options: {
         catch: (cause) => fail(describe(cause)),
       });
       if (options.watch === "process") {
-        yield* spawnDetached("fake/watch-main", [root, name]);
+        yield* spawnDetached("fake", "fake/watch-main", [root, name]);
       }
       return new SandboxInfo({ name, ...file });
     });
@@ -285,16 +276,3 @@ export const makeFakeProvider = (options: {
     connect,
   };
 };
-
-export const ProvidersLive = Layer.effect(
-  Providers,
-  Effect.gen(function* () {
-    const root = yield* Config.string("PROOFBOX_FAKE_ROOT").pipe(
-      Config.withDefault(join(homedir(), ".local/share/proofbox/fake")),
-    );
-    const providers = new Map<string, Provider>([
-      ["fake", makeFakeProvider({ root, watch: "process" })],
-    ]);
-    return providers;
-  }),
-);

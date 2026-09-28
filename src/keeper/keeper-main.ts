@@ -1,6 +1,6 @@
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
-import { ProvidersLive } from "../fake/fake-provider.ts";
+import { ProvidersLive } from "../provider-registry.ts";
 import { runKeeper } from "./keeper.ts";
 
 const id = process.argv[2];

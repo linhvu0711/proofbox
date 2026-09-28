@@ -46,7 +46,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       const start = Effect.fn("KeeperClient.start")(function* (rawId: string) {
         const id = yield* parseSandboxId(rawId, [...providers.keys()]);
         const paths = yield* keeperPaths(id);
-        yield* spawnDetached("keeper/keeper-main", [
+        yield* spawnDetached(id.provider, "keeper/keeper-main", [
           `${id.provider}:${id.name}`,
         ]);
         yield* connectSocket(paths.socket, id.provider).pipe(

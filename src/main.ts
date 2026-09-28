@@ -5,9 +5,9 @@ import { Effect, Exit, Layer } from "effect";
 import { cli } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
-import { ProvidersLive } from "./fake/fake-provider.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
+import { ProvidersLive } from "./provider-registry.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
