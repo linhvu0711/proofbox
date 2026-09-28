@@ -313,7 +313,9 @@ export const makeNamespaceProvider = (deps: {
           imageTag: `nscr.io/${registry}/${baseImageTag(version)}`,
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
-          runArgs: [],
+          // Publish the VNC port for the Live view; the host reaches it
+          // only through our own port-forward, never ingress.
+          runArgs: ["-p", "5900:5900"],
           brand: brandFor(id),
         });
         const info = yield* inner.create({
@@ -402,11 +404,37 @@ export const makeNamespaceProvider = (deps: {
       return match === null ? 0 : Number(match[1]);
     });
 
+  const liveView = (name: string) =>
+    Effect.gen(function* () {
+      const password = makeSandboxName(8);
+      const link = yield* deps.openLink(name, yield* paths(name), "cli");
+      const docker = deps.dockerFor(link);
+      const container = containerOf(name);
+      const started = yield* docker.execText(container, "app", [
+        "sh",
+        "-c",
+        'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log',
+        "sh",
+        password,
+      ]);
+      yield* Effect.addFinalizer(() =>
+        docker
+          .execText(container, "app", ["pkill", "-x", "x11vnc"])
+          .pipe(Effect.ignore),
+      );
+      if (started.exitCode !== 0) {
+        return yield* fail(`x11vnc did not start: ${started.stderr.trim()}`);
+      }
+      const port = yield* nsc.portForward(name, 5900);
+      return { address: `127.0.0.1:${port}`, password };
+    });
+
   return {
     name: "namespace",
     idPrefix: "ns",
-    capabilities: new Set(["os:linux"]),
+    capabilities: new Set(["os:linux", "live-view"]),
     sizes: SIZES,
+    liveView,
     create,
     get,
     list,

@@ -23,7 +23,7 @@ export type Os = typeof Os.Type;
 
 export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const Capability = Schema.Literal("os:linux", "os:macos");
+export const Capability = Schema.Literal("os:linux", "os:macos", "live-view");
 export type Capability = typeof Capability.Type;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
@@ -79,6 +79,14 @@ export interface Provider {
   ) => Effect.Effect<
     void,
     SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
+  // Scoped: the Live view stays up until the scope closes.
+  readonly liveView?: (
+    name: string,
+  ) => Effect.Effect<
+    { readonly address: string; readonly password: string },
+    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    Scope.Scope
   >;
   readonly get: (
     name: string,

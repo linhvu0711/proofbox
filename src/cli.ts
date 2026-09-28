@@ -4,6 +4,7 @@ import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { listSandboxes } from "./commands/list.ts";
+import { openLive } from "./commands/live.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
 import { parseMaxSize } from "./upload/max-size.ts";
 
@@ -47,9 +48,19 @@ const list = Command.make(
   ({ json }) => listSandboxes({ json }),
 );
 
+const live = Command.make(
+  "live",
+  {
+    id: Args.text({ name: "id" }),
+  },
+  ({ id }) => openLive(id),
+);
+
 const del = Command.make(
   "delete",
-  { id: Args.text({ name: "id" }) },
+  {
+    id: Args.text({ name: "id" }),
+  },
   ({ id }) => deleteSandbox(id),
 );
 
@@ -71,7 +82,7 @@ const upload = Command.make(
 );
 
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, list, del, upload]),
+  Command.withSubcommands([create, exec, list, del, upload, live]),
 );
 
 export const cli = Command.run(command, {

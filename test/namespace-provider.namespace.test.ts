@@ -1,8 +1,12 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { connect } from "node:net";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
 const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
 
@@ -276,5 +280,133 @@ describe("Namespace Provider", () => {
     await sleepUntil(start, 250_000);
     expect(await liveIds()).not.toContain(host);
     expect(at150.exitCode).toBe(0);
+  });
+
+  it("live prints a local address and a password that open the desktop", async () => {
+    // Given: a created ns: Sandbox
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When: `live` as a child; read its first two stdout lines
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
+    );
+    let port = 0;
+    try {
+      const lines = await new Promise<string[]>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          const found = text.split("\n").filter((line) => line !== "");
+          if (found.length >= 2) {
+            resolve(found.slice(0, 2));
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // Then
+      const [address, passwordLine] = lines as [string, string];
+      expect(address).toMatch(/^127\.0\.0\.1:\d+$/);
+      expect(passwordLine).toMatch(/^password [a-z0-9]{8}$/);
+      port = Number(address.split(":")[1]);
+      const greeting = await new Promise<Buffer>((resolve, reject) => {
+        const socket = connect(port, "127.0.0.1");
+        socket.once("data", (data) => {
+          socket.destroy();
+          resolve(data);
+        });
+        socket.once("error", reject);
+      });
+      expect(greeting.subarray(0, 12).toString("utf8")).toBe("RFB 003.008\n");
+    } finally {
+      child.kill("SIGINT");
+    }
+    // And after SIGINT the child exits and the address refuses a connection
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    const closed = await new Promise<boolean>((resolve) => {
+      const socket = connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once("error", () => resolve(true));
+    });
+    expect(closed).toBe(true);
+  });
+
+  it("the host has only a private address and no ingress", async () => {
+    // Given: a created ns: Sandbox with `live` running
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const host = id.slice("ns:".length);
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          if (text.split("\n").filter((line) => line !== "").length >= 2) {
+            resolve();
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // When
+      const entry = (await liveList()).find((item) => item.cluster_id === host);
+      const ctl = join(env.runtime, `ns-${host}.ctl`);
+      const key = join(env.runtime, `ns-${host}.key`);
+      expect(await waitUntil(async () => existsSync(ctl), 30_000)).toBe(true);
+      const ip = await new Promise<string>((resolve, reject) => {
+        execFile(
+          "ssh",
+          [
+            "-S",
+            ctl,
+            "-i",
+            key,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "root@127.0.0.1",
+            "ip -4 -o addr show scope global",
+          ],
+          (error, stdout, stderr) =>
+            error === null
+              ? resolve(stdout)
+              : reject(new Error(stderr || error.message)),
+        );
+      });
+      // Then
+      expect(entry === undefined || !("ingress" in entry)).toBe(true);
+      const addresses = [...ip.matchAll(/inet (\d+\.\d+\.\d+\.\d+)\//g)].map(
+        (match) => match[1] as string,
+      );
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        expect(address.startsWith("10.")).toBe(true);
+      }
+    } finally {
+      child.kill("SIGINT");
+    }
   });
 });

@@ -42,6 +42,7 @@ export const createSandbox = (options: {
       return yield* new MissingCapabilityError({
         provider: provider.name,
         capability,
+        outcome: "nothing was created",
       });
     }
     const idle =

@@ -5,10 +5,8 @@ import type { Provider } from "./provider.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
-export const makeSandboxName = () =>
-  Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join(
-    "",
-  );
+export const makeSandboxName = (length = 6) =>
+  Array.from({ length }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
 
 const ID_PATTERN = /^([a-z][a-z0-9-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
