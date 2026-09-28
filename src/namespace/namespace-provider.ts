@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { rename, rm, writeFile } from "node:fs/promises";
+import { readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
@@ -183,6 +183,28 @@ export const makeNamespaceProvider = (deps: {
 
   const list = Effect.gen(function* () {
     const instances = yield* nsc.list({ "proofbox.os": "linux" });
+    // Hosts can expire without a delete; their keypair and Max-life cap
+    // stay in the runtime dir, so drop the files of any host that is gone.
+    const alive = new Set(instances.map((instance) => instance.clusterId));
+    const dir = (yield* paths("__probe__")).dir;
+    yield* Effect.promise(async () => {
+      const entries = await readdir(dir).catch(() => [] as string[]);
+      await Promise.all(
+        entries
+          .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
+          .filter((name): name is string => name !== undefined)
+          .filter((name) => !alive.has(name))
+          .map((name) =>
+            Promise.all(
+              [".key", ".key.pub", ".max-life", ".ctl", ".sock"].map((suffix) =>
+                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
+                  () => {},
+                ),
+              ),
+            ),
+          ),
+      ).then(() => {});
+    });
     const infos = yield* Effect.forEach(
       instances,
       (instance) =>
