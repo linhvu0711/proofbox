@@ -1,5 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Option, Stream } from "effect";
+import { commandEvents } from "../command-events.ts";
 import { ProviderError, ProviderUnavailableError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
@@ -252,70 +253,38 @@ export const makeDockerClient = (
     container: string,
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
-  ): Stream.Stream<ExecEvent, DockerError> =>
-    Stream.unwrapScoped(
-      Effect.gen(function* () {
-        const dockerExec = [
-          "exec",
-          ...(options?.stdin === undefined ? [] : ["-i"]),
-          "-u",
-          "app",
-          "-w",
-          "/home/app",
-          container,
-          ...argv,
-        ];
-        const process = yield* Command.start(
-          remote === undefined
-            ? Command.make("docker", ...dockerExec)
-            : Command.make(
-                "ssh",
-                "-T",
-                ...remote.ssh,
-                shellJoin(["docker", ...dockerExec]),
-              ),
-        ).pipe(
-          Effect.provideService(CommandExecutor.CommandExecutor, executor),
-          Effect.mapError((error) => spawnError(error)),
-        );
-        const feed =
-          options?.stdin === undefined
-            ? undefined
-            : Stream.run(options.stdin, process.stdin).pipe(
-                // A command may exit before its stdin reports "finish"
-                // (tar -x stops at the end-of-archive marker); when the
-                // process is gone the feed is done by definition.
-                Effect.raceFirst(
-                  process.exitCode.pipe(Effect.orElseSucceed(() => {})),
-                ),
-                Effect.mapError((error) => fail(describe(error))),
-              );
-        const outputs = Stream.merge(
-          process.stdout.pipe(
-            Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
+  ): Stream.Stream<ExecEvent, DockerError> => {
+    const dockerExec = [
+      "exec",
+      ...(options?.stdin === undefined ? [] : ["-i"]),
+      "-u",
+      "app",
+      "-w",
+      "/home/app",
+      container,
+      ...argv,
+    ];
+    return commandEvents<DockerError>(
+      executor,
+      remote === undefined
+        ? Command.make("docker", ...dockerExec)
+        : Command.make(
+            "ssh",
+            "-T",
+            ...remote.ssh,
+            shellJoin(["docker", ...dockerExec]),
           ),
-          process.stderr.pipe(
-            Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
-          ),
-        ).pipe(Stream.mapError((error) => fail(describe(error))));
-        const events =
-          feed === undefined
-            ? outputs
-            : Stream.merge(outputs, Stream.fromEffect(feed).pipe(Stream.drain));
-        const exit = Stream.fromEffect(
-          process.exitCode.pipe(
-            Effect.mapError((error) => fail(describe(error))),
-            Effect.flatMap((code) =>
-              remote !== undefined && code === 255
-                ? Effect.fail(linkLost("the ssh link dropped mid-command"))
-                : Effect.succeed(code),
-            ),
-            Effect.map((code): ExecEvent => ({ _tag: "Exit", code })),
-          ),
-        );
-        return Stream.concat(events, exit);
-      }),
+      options,
+      {
+        spawn: spawnError,
+        fail,
+        exit: (code) =>
+          remote !== undefined && code === 255
+            ? Effect.fail(linkLost("the ssh link dropped mid-command"))
+            : Effect.succeed(code),
+      },
     );
+  };
 
   const inspect = (container: string) =>
     Effect.gen(function* () {

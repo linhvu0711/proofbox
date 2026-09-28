@@ -1,0 +1,211 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { it } from "@effect/vitest";
+import {
+  ConfigProvider,
+  Duration,
+  Effect,
+  Layer,
+  Ref,
+  Stream,
+  TestClock,
+} from "effect";
+import { describe, expect } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
+import type { NscClient } from "../src/namespace/nsc-client.ts";
+import type { HostResult, Link } from "../src/namespace/ssh-link.ts";
+import { Progress } from "../src/progress.ts";
+import type { ExecEvent } from "../src/provider.ts";
+
+type CreateRequest = Parameters<NscClient["create"]>[0];
+
+interface Answer {
+  readonly exitCode?: number;
+  readonly stdout?: string | Uint8Array;
+  readonly stderr?: string;
+}
+
+// A Namespace Mac behind fakes: nsc records its calls, the Link records each
+// command line it runs and answers it from `answer` (exit 0 by default).
+const makeMac = (
+  answer: (line: string) => Answer | undefined = () => undefined,
+) =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const requests = yield* Ref.make<ReadonlyArray<CreateRequest>>([]);
+    const commands = yield* Ref.make<ReadonlyArray<string>>([]);
+    const detached = yield* Ref.make<
+      ReadonlyArray<readonly [string, ReadonlyArray<string>]>
+    >([]);
+    const note = (all: Ref.Ref<ReadonlyArray<string>>, line: string) =>
+      Ref.update(all, (list) => [...list, line]);
+    const nsc: NscClient = {
+      checkLogin: note(calls, "checkLogin"),
+      create: (req) =>
+        Ref.update(requests, (all) => [...all, req]).pipe(
+          Effect.zipRight(note(calls, "create")),
+          Effect.as("abc123def4567"),
+        ),
+      destroy: (id) => note(calls, `destroy ${id}`),
+      extend: () => Effect.void,
+      ensureImageExpiry: () => Effect.void,
+      list: () => Effect.succeed([]),
+      portForward: () => Effect.die("unused"),
+    };
+    const reply = (line: string) => {
+      const found = answer(line) ?? {};
+      const stdout = found.stdout ?? "";
+      return {
+        exitCode: found.exitCode ?? 0,
+        stdout,
+        stderr: found.stderr ?? "",
+      };
+    };
+    const link: Link = {
+      ssh: [],
+      run: (line) =>
+        note(commands, line).pipe(
+          Effect.map((): HostResult => {
+            const { exitCode, stdout, stderr } = reply(line);
+            return {
+              exitCode,
+              stdout:
+                typeof stdout === "string"
+                  ? stdout
+                  : Buffer.from(stdout).toString("utf8"),
+              stderr,
+            };
+          }),
+        ),
+      stream: (line) =>
+        Stream.fromEffect(note(commands, line)).pipe(
+          Stream.flatMap(() => {
+            const { exitCode, stdout } = reply(line);
+            const bytes =
+              typeof stdout === "string"
+                ? new TextEncoder().encode(stdout)
+                : stdout;
+            const events: ExecEvent[] = [
+              ...(bytes.length === 0
+                ? []
+                : [{ _tag: "Stdout" as const, bytes }]),
+              { _tag: "Exit", code: exitCode },
+            ];
+            return Stream.fromIterable(events);
+          }),
+        ),
+    };
+    const provider = makeNamespaceProvider({
+      nsc,
+      openLink: () => Effect.succeed(link),
+      dockerFor: () => {
+        throw new Error("a Mac has no Docker");
+      },
+      spawnDetached: (_provider, rel, args) =>
+        Ref.update(detached, (all) => [...all, [rel, args] as const]),
+    });
+    return { provider, calls, requests, commands, detached };
+  });
+
+const runtimeDir = () => mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+
+const withRuntime =
+  (runtime: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Layer.succeed(
+            Progress,
+            new Progress({
+              step: (_label, effect) => effect,
+              warn: () => Effect.void,
+            }),
+          ),
+        ),
+      ),
+    );
+
+const createMac = (size?: { cpu: number; ramGb: number }) => ({
+  os: "macos" as const,
+  idle: Duration.minutes(5),
+  maxLife: Duration.hours(3),
+  size,
+});
+
+describe("Namespace macOS Provider", () => {
+  it.effect("macOS create with no size asks nsc for macos/arm64:4x7", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      const info = yield* mac.provider.create(createMac());
+      // Then
+      const [request] = yield* Ref.get(mac.requests);
+      expect(request?.machineType).toBe("macos/arm64:4x7");
+      expect(request?.selectors).toEqual({ "macos.version": "26.x" });
+      expect(request?.labels["proofbox.os"]).toBe("macos");
+      expect(request?.labels["proofbox.size"]).toBe("4x7");
+      expect(info.os).toBe("macos");
+      expect(info.size).toEqual({ cpu: 4, ramGb: 7 });
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create --size 6x14 asks nsc for macos/arm64:6x14", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac({ cpu: 6, ramGb: 14 }));
+      // Then
+      const [request] = yield* Ref.get(mac.requests);
+      expect(request?.machineType).toBe("macos/arm64:6x14");
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create asks for idle plus 60 s and arms the Max life", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      const info = yield* mac.provider.create(createMac());
+      // Then
+      const [request] = yield* Ref.get(mac.requests);
+      expect(request?.durationSeconds).toBe(360);
+      expect(info.idleSeconds).toBe(300);
+      const expire = (yield* Ref.get(mac.detached)).find(
+        ([rel]) => rel === "namespace/expire-main",
+      );
+      expect(expire?.[1][0]).toBe("abc123def4567");
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "extend on a Mac writes the Deadline file and pushes the host",
+    () => {
+      const runtime = runtimeDir();
+      writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        yield* TestClock.setTime(0);
+        // When
+        yield* mac.provider.extend("abc123def4567", new Date(300_000));
+        // Then
+        expect(yield* Ref.get(mac.detached)).toContainEqual([
+          "namespace/extend-main",
+          ["abc123def4567", "300"],
+        ]);
+        const lines = yield* Ref.get(mac.commands);
+        expect(lines.some((line) => line.includes("/deadline"))).toBe(true);
+        expect(lines.some((line) => line.includes("docker exec"))).toBe(false);
+      }).pipe(withRuntime(runtime));
+    },
+  );
+});

@@ -175,6 +175,7 @@ const makeProvider = (
     openLink: () =>
       Effect.succeed<Link>({
         ssh: [],
+        stream: () => Stream.empty,
         run,
       }),
     dockerFor: () => docker,
@@ -190,6 +191,7 @@ describe("Namespace Provider", () => {
         const commands = yield* Ref.make<ReadonlyArray<string>>([]);
         const link: Link = {
           ssh: [],
+          stream: () => Stream.empty,
           run: (commandLine) =>
             Ref.update(commands, (all) => [...all, commandLine]).pipe(
               Effect.as({ exitCode: 0, stdout: "", stderr: "" }),

@@ -50,6 +50,7 @@ export interface NscClient {
     readonly durationSeconds: number;
     readonly sshKeyFile: string;
     readonly labels: Readonly<Record<string, string>>;
+    readonly selectors?: Readonly<Record<string, string>> | undefined;
     readonly cidfile: string;
   }) => Effect.Effect<string, NscError | ProviderLimitError>;
   readonly destroy: (id: string) => Effect.Effect<void, NscError>;
@@ -191,6 +192,7 @@ export const makeNscClient = (
     readonly durationSeconds: number;
     readonly sshKeyFile: string;
     readonly labels: Readonly<Record<string, string>>;
+    readonly selectors?: Readonly<Record<string, string>> | undefined;
     readonly cidfile: string;
   }) =>
     Effect.gen(function* () {
@@ -219,6 +221,10 @@ export const makeNscClient = (
               req.sshKeyFile,
               ...Object.entries(req.labels).flatMap(([key, value]) => [
                 "--label",
+                `${key}=${value}`,
+              ]),
+              ...Object.entries(req.selectors ?? {}).flatMap(([key, value]) => [
+                "--selectors",
                 `${key}=${value}`,
               ]),
               "--cidfile",

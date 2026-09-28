@@ -11,6 +11,8 @@ export interface KeeperPaths {
   readonly key: string;
   readonly control: string;
   readonly maxLife: string;
+  // The OS of a host made by a Provider with more than one OS.
+  readonly os: string;
 }
 
 export const keeperPaths = (id: {
@@ -49,5 +51,6 @@ export const keeperPaths = (id: {
       key: join(dir, `${stem}.key`),
       control: join(dir, `${stem}.ctl`),
       maxLife: join(dir, `${stem}.max-life`),
+      os: join(dir, `${stem}.os`),
     };
   });

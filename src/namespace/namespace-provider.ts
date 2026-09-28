@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
@@ -22,10 +29,16 @@ import {
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import { type Provider, SandboxInfo } from "../provider.ts";
+import { type Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
+import {
+  macExec,
+  readMac,
+  writeMacDeadline,
+  writeMacState,
+} from "./mac-host.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
   pullSnapshot,
@@ -45,6 +58,10 @@ const MACOS_SIZES: ReadonlyArray<Size> = [
   { cpu: 4, ramGb: 7 },
   { cpu: 6, ramGb: 14 },
 ];
+const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
+// Every Known line about the Mac was proved on macOS 26; with no selector
+// Namespace gives 15.
+const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
 
 // The host holds Docker itself plus the Sandbox container; keep 1 GB of the
 // Namespace size outside the container's limit so the host stays healthy.
@@ -79,6 +96,16 @@ export const makeNamespaceProvider = (deps: {
   });
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
   const containerOf = (name: string) => `proofbox-${name.slice(0, 6)}`;
+  // The host's OS, written at create; a host made before macOS existed has
+  // no file and is Linux.
+  const osOf = (name: string) =>
+    Effect.gen(function* () {
+      const file = (yield* paths(name)).os;
+      const text = yield* Effect.promise(() =>
+        readFile(file, "utf8").catch(() => "linux"),
+      );
+      return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+    });
 
   // Link bring-up can outlast a short host Deadline, so every open first
   // bumps the host's own lifetime — detached, since nsc needs no link.
@@ -216,8 +243,15 @@ export const makeNamespaceProvider = (deps: {
       });
     });
 
+  const getAs = (os: Os, name: string) =>
+    withCliLink(name, (link) =>
+      os === "macos" ? readMac(link, name) : getWith(link, name),
+    );
+
   const get = (name: string) =>
-    withCliLink(name, (link) => getWith(link, name));
+    Effect.gen(function* () {
+      return yield* getAs(yield* osOf(name), name);
+    });
 
   const extend = (name: string, deadline: Date) =>
     Effect.gen(function* () {
@@ -230,10 +264,13 @@ export const makeNamespaceProvider = (deps: {
         name,
         String(seconds),
       ]);
+      const os = yield* osOf(name);
       const written = yield* withCliLink(name, (link) =>
-        link.run(
-          `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
-        ),
+        os === "macos"
+          ? writeMacDeadline(link, seconds)
+          : link.run(
+              `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
+            ),
       );
       if (written.exitCode !== 0) {
         if (written.stderr.toLowerCase().includes("no such container")) {
@@ -245,8 +282,24 @@ export const makeNamespaceProvider = (deps: {
       }
     });
 
+  // Each OS is its own label, so a host is listed with the OS it runs.
+  const listHosts = Effect.gen(function* () {
+    const [linux, macos] = yield* Effect.all(
+      [
+        nsc.list({ "proofbox.os": "linux" }),
+        nsc.list({ "proofbox.os": "macos" }),
+      ],
+      { concurrency: 2 },
+    );
+    return [
+      ...linux.map((instance) => ({ os: "linux" as const, instance })),
+      ...macos.map((instance) => ({ os: "macos" as const, instance })),
+    ];
+  });
+
   const list = Effect.gen(function* () {
-    const instances = yield* nsc.list({ "proofbox.os": "linux" });
+    const hosts = yield* listHosts;
+    const instances = hosts.map((host) => host.instance);
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
     const alive = new Set(instances.map((instance) => instance.clusterId));
@@ -271,19 +324,20 @@ export const makeNamespaceProvider = (deps: {
           .map(async (name) => {
             if (!(await stale(`ns-${name}.key`))) return;
             await Promise.all(
-              [".key", ".key.pub", ".max-life", ".ctl", ".sock"].map((suffix) =>
-                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
-                  () => {},
-                ),
+              [".key", ".key.pub", ".max-life", ".os", ".ctl", ".sock"].map(
+                (suffix) =>
+                  rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
+                    () => {},
+                  ),
               ),
             );
           }),
       ).then(() => {});
     });
     const infos = yield* Effect.forEach(
-      instances,
-      (instance) =>
-        get(instance.clusterId).pipe(
+      hosts,
+      ({ os, instance }) =>
+        getAs(os, instance.clusterId).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
         ),
       { discard: false },
@@ -298,10 +352,10 @@ export const makeNamespaceProvider = (deps: {
 
   const del = (name: string) =>
     Effect.gen(function* () {
-      const instances = yield* nsc
-        .list({ "proofbox.os": "linux" })
-        .pipe(Effect.catchTag("SandboxGoneError", () => Effect.succeed([])));
-      const present = instances.some((instance) => instance.clusterId === name);
+      const hosts = yield* listHosts.pipe(
+        Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
+      );
+      const present = hosts.some((host) => host.instance.clusterId === name);
       if (present) {
         yield* nsc
           .destroy(name)
@@ -316,6 +370,7 @@ export const makeNamespaceProvider = (deps: {
           rm(dir.key, { force: true }).catch(() => {}),
           rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
           rm(dir.maxLife, { force: true }).catch(() => {}),
+          rm(dir.os, { force: true }).catch(() => {}),
         ]).then(() => {}),
       );
       return present ? ("deleted" as const) : ("gone" as const);
@@ -335,7 +390,8 @@ export const makeNamespaceProvider = (deps: {
           Effect.fail(fail(error.message)),
         ),
       );
-      const size = req.size ?? DEFAULT_SIZE;
+      const macos = req.os === "macos";
+      const size = req.size ?? (macos ? DEFAULT_MACOS_SIZE : DEFAULT_SIZE);
       const staged = yield* paths(`new-${process.pid}`);
       const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
       const cidfile = join(staged.dir, `ns-new-${process.pid}.cid`);
@@ -358,6 +414,7 @@ export const makeNamespaceProvider = (deps: {
               rm(hostPaths.key, { force: true }).catch(() => {}),
               rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
               rm(hostPaths.maxLife, { force: true }).catch(() => {}),
+              rm(hostPaths.os, { force: true }).catch(() => {}),
             ]).then(() => {}),
           );
           yield* nsc.destroy(hostId).pipe(Effect.orElseSucceed(() => {}));
@@ -393,11 +450,14 @@ export const makeNamespaceProvider = (deps: {
         );
         const id = yield* nsc
           .create({
-            machineType: `linux/amd64:${formatSize(size)}`,
+            machineType: macos
+              ? `macos/arm64:${formatSize(size)}`
+              : `linux/amd64:${formatSize(size)}`,
             durationSeconds,
             sshKeyFile: `${keyBase}.pub`,
+            selectors: macos ? MACOS_SELECTORS : undefined,
             labels: {
-              "proofbox.os": "linux",
+              "proofbox.os": req.os,
               "proofbox.size": formatSize(size),
               "proofbox.create-token": createToken,
             },
@@ -439,6 +499,7 @@ export const makeNamespaceProvider = (deps: {
             await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
               mode: 0o600,
             });
+            await writeFile(hostPaths.os, req.os, { mode: 0o600 });
           },
           catch: (cause) =>
             fail(`could not store the host key: ${describe(cause)}`),
@@ -467,6 +528,14 @@ export const makeNamespaceProvider = (deps: {
           ),
         );
         const link = yield* deps.openLink(id, hostPaths, "cli");
+        if (macos) {
+          return yield* writeMacState(link, {
+            id,
+            idle: req.idle,
+            maxLifeAt: new Date(maxLifeSeconds * 1000),
+            size,
+          });
+        }
         const registry = yield* readTenant(link);
         const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
         const snapshotImage =
@@ -552,6 +621,10 @@ export const makeNamespaceProvider = (deps: {
   const connect = (name: string) =>
     Effect.gen(function* () {
       const link = yield* openLink(name, "keeper");
+      if ((yield* osOf(name)) === "macos") {
+        yield* readMac(link, name);
+        return { exec: macExec(link) };
+      }
       yield* getWith(link, name);
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
@@ -565,7 +638,10 @@ export const makeNamespaceProvider = (deps: {
 
   const memoryKills = (name: string) =>
     Effect.gen(function* () {
-      yield* get(name);
+      const info = yield* get(name);
+      if (info.os === "macos") {
+        return 0;
+      }
       const read = yield* withCliLink(name, (link) =>
         deps
           .dockerFor(link)
@@ -581,6 +657,9 @@ export const makeNamespaceProvider = (deps: {
 
   const liveView = (name: string) =>
     Effect.gen(function* () {
+      if ((yield* osOf(name)) === "macos") {
+        return yield* fail("the Live view is not on macOS yet");
+      }
       const link = yield* openLink(name, "cli");
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
