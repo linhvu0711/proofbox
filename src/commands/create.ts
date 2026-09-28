@@ -1,7 +1,7 @@
 import { Effect, Option } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
-import { UnknownProviderError } from "../errors.ts";
+import { MissingCapabilityError, UnknownProviderError } from "../errors.ts";
 import { type Os, Providers } from "../provider.ts";
 
 export const createSandbox = (options: {
@@ -17,6 +17,13 @@ export const createSandbox = (options: {
       return yield* new UnknownProviderError({
         provider: options.provider,
         known: [...providers.keys()],
+      });
+    }
+    const capability = `os:${options.os}` as const;
+    if (!provider.capabilities.has(capability)) {
+      return yield* new MissingCapabilityError({
+        provider: provider.name,
+        capability,
       });
     }
     const idle =

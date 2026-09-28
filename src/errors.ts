@@ -26,6 +26,17 @@ export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   }
 }
 
+export class MissingCapabilityError extends Data.TaggedError(
+  "MissingCapabilityError",
+)<{
+  readonly provider: string;
+  readonly capability: string;
+}> {
+  get message() {
+    return `Provider ${this.provider} lacks the Capability ${this.capability}; nothing was created`;
+  }
+}
+
 export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
