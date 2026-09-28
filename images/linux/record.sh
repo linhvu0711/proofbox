@@ -33,9 +33,13 @@ case "$cmd" in
     if [ -L "$CUR" ]; then
       exit 4
     fi
-    n=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)
+    n=0
+    while [ -e "$ROOT/$((n + 1))" ]; do
+      n=$((n + 1))
+    done
     DIR=$ROOT/$((n + 1))
     mkdir "$DIR" 2>/dev/null || exit 4
+    date +%s.%3N > "$DIR/start"
     setsid "$FFMPEG" -f x11grab -framerate 30 -video_size "${W}x${H}" -draw_mouse 1 -i "$DISPLAY" -c:v libx264 -preset ultrafast -crf 18 -g 30 -pix_fmt yuv420p "$DIR/raw.mkv" < /dev/null > "$DIR/ffmpeg.log" 2>&1 &
     echo $! > "$DIR/pid"
     if ! ln -s "$DIR" "$CUR" 2>/dev/null; then
@@ -55,7 +59,9 @@ case "$cmd" in
     done
     cat "$DIR/ffmpeg.log" >&2
     kill -TERM "$(cat "$DIR/pid")" 2>/dev/null || true
-    rm -f "$CUR"
+    if [ "$DIR" -ef "$CUR" ]; then
+      rm -f "$CUR"
+    fi
     exit 1
     ;;
   stop)

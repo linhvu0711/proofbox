@@ -7,8 +7,8 @@ import {
   RecordingRunningError,
   StopFlagsError,
 } from "../errors.ts";
-import { runHelper } from "../helper.ts";
-import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
+import { fetchHelper, runHelper } from "../helper.ts";
+import { ACTION_LOG_PATH, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
@@ -185,30 +185,30 @@ export const stopRecording = (options: {
     });
     const progress = yield* Progress;
     yield* progress.step("building the Proof video", buildProof);
-    const video = yield* runHelper(
+    const video = yield* fetchHelper(
       options.id,
       RECORD_HELPER,
-      ["fetch", `${info.dir}/proof.mp4`],
+      `${info.dir}/proof.mp4`,
+      out,
       { outcome: "no Proof video was made" },
     );
     if (video.code !== 0) {
       return yield* helperFailed(video);
     }
-    yield* writeOut(out, video.stdout);
     const base = out.replace(/\.[^./\\]+$/, "");
     const lines = [out];
     for (let k = 1; k <= info.steps; k++) {
-      const shot = yield* runHelper(
+      const path = `${base}-${k}.png`;
+      const shot = yield* fetchHelper(
         options.id,
         RECORD_HELPER,
-        ["fetch", `${info.dir}/shot-${k}.png`],
+        `${info.dir}/shot-${k}.png`,
+        path,
         { outcome: "no Proof video was made" },
       );
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
       }
-      const path = `${base}-${k}.png`;
-      yield* writeOut(path, shot.stdout);
       lines.push(path);
     }
     const output = yield* CliOutput;
