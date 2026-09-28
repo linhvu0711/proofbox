@@ -393,8 +393,43 @@ describe("Recording and the Proof video", () => {
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+      "proofbox: building the Proof video\n" +
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
     );
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("record stop prints progress on stderr while it builds", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(3000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.startsWith("proofbox: building the Proof video\n")).toBe(
+      true,
+    );
+    expect(result.stdout).toBe(`${join(dir, "proof.mp4")}\n`);
   });
 });

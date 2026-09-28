@@ -10,6 +10,7 @@ import {
 import { runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
+import { Progress } from "../progress.ts";
 import {
   nothingChanged,
   parseProbe,
@@ -95,81 +96,85 @@ export const stopRecording = (options: {
     if (out === undefined) {
       return yield* Effect.die(new Error("record stop lost --out"));
     }
-    const probed = yield* runHelper(
-      options.id,
-      RECORD_HELPER,
-      ["probe", info.dir],
-      { outcome: "no Proof video was made" },
-    );
-    if (probed.code !== 0) {
-      return yield* helperFailed(probed);
-    }
-    const probe = parseProbe(probed.stdout.toString("utf8"));
-    if (nothingChanged(probe)) {
-      return yield* new NothingChangedError({
-        id: options.id,
+    const buildProof = Effect.gen(function* () {
+      const probed = yield* runHelper(
+        options.id,
+        RECORD_HELPER,
+        ["probe", info.dir],
+        { outcome: "no Proof video was made" },
+      );
+      if (probed.code !== 0) {
+        return yield* helperFailed(probed);
+      }
+      const probe = parseProbe(probed.stdout.toString("utf8"));
+      if (nothingChanged(probe)) {
+        return yield* new NothingChangedError({
+          id: options.id,
+          raw: `${info.dir}/raw.mkv`,
+        });
+      }
+      const actionLog = yield* runHelper(
+        options.id,
+        RECORD_HELPER,
+        ["fetch", ACTION_LOG_PATH],
+        { outcome: "no Proof video was made" },
+      );
+      if (actionLog.code !== 0) {
+        return yield* helperFailed(actionLog);
+      }
+      const marks: number[] = [];
+      const clicks: { t: number; x: number; y: number }[] = [];
+      for (const line of actionLog.stdout.toString("utf8").split("\n")) {
+        if (line.trim() === "") {
+          continue;
+        }
+        const entry = yield* Schema.decodeUnknown(
+          Schema.parseJson(ActionLogLine),
+        )(line);
+        if (entry.t < info.start || entry.t > info.stop) {
+          continue;
+        }
+        if (entry.kind === "mark") {
+          marks.push(entry.t - info.start);
+        } else if (entry.kind === "click") {
+          clicks.push({ t: entry.t - info.start, x: entry.x, y: entry.y });
+        }
+      }
+      const plan = planEdit({
+        duration: probe.duration,
+        freezes: probe.freezes,
+        marks,
+        clicks,
+      });
+      const script = renderEdit(plan, {
+        width: info.width,
+        height: info.height,
+        dir: info.dir,
+        font: CAPTION_FONT,
+      });
+      const encode = (crf: number) =>
+        Effect.gen(function* () {
+          const built = yield* runHelper(
+            options.id,
+            RECORD_HELPER,
+            ["build", info.dir, String(crf)],
+            {
+              outcome: "no Proof video was made",
+              stdin: Stream.make(new TextEncoder().encode(script)),
+            },
+          );
+          if (built.code !== 0) {
+            return yield* helperFailed(built);
+          }
+          return Number(built.stdout.toString("utf8").trim());
+        });
+      yield* encodeUnderLimit(encode, {
+        limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
         raw: `${info.dir}/raw.mkv`,
       });
-    }
-    const actionLog = yield* runHelper(
-      options.id,
-      RECORD_HELPER,
-      ["fetch", ACTION_LOG_PATH],
-      { outcome: "no Proof video was made" },
-    );
-    if (actionLog.code !== 0) {
-      return yield* helperFailed(actionLog);
-    }
-    const marks: number[] = [];
-    const clicks: { t: number; x: number; y: number }[] = [];
-    for (const line of actionLog.stdout.toString("utf8").split("\n")) {
-      if (line.trim() === "") {
-        continue;
-      }
-      const entry = yield* Schema.decodeUnknown(
-        Schema.parseJson(ActionLogLine),
-      )(line);
-      if (entry.t < info.start || entry.t > info.stop) {
-        continue;
-      }
-      if (entry.kind === "mark") {
-        marks.push(entry.t - info.start);
-      } else if (entry.kind === "click") {
-        clicks.push({ t: entry.t - info.start, x: entry.x, y: entry.y });
-      }
-    }
-    const plan = planEdit({
-      duration: probe.duration,
-      freezes: probe.freezes,
-      marks,
-      clicks,
     });
-    const script = renderEdit(plan, {
-      width: info.width,
-      height: info.height,
-      dir: info.dir,
-      font: CAPTION_FONT,
-    });
-    const encode = (crf: number) =>
-      Effect.gen(function* () {
-        const built = yield* runHelper(
-          options.id,
-          RECORD_HELPER,
-          ["build", info.dir, String(crf)],
-          {
-            outcome: "no Proof video was made",
-            stdin: Stream.make(new TextEncoder().encode(script)),
-          },
-        );
-        if (built.code !== 0) {
-          return yield* helperFailed(built);
-        }
-        return Number(built.stdout.toString("utf8").trim());
-      });
-    yield* encodeUnderLimit(encode, {
-      limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
-      raw: `${info.dir}/raw.mkv`,
-    });
+    const progress = yield* Progress;
+    yield* progress.step("building the Proof video", buildProof);
     const video = yield* runHelper(
       options.id,
       RECORD_HELPER,
