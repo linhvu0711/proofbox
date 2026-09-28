@@ -1,27 +1,18 @@
 import { Command } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
-import { Effect, Ref, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import {
   ProviderError,
   UploadFailedError,
   WorkFileGrewError,
 } from "../errors.ts";
+import { tarFileBytes } from "./tar-file-bytes.ts";
 
 const local = (cause: unknown) =>
   new ProviderError({
     provider: "local",
     reason: cause instanceof Error ? cause.message : String(cause),
   });
-
-// Room for tar's own bytes on top of the file data: a 512-byte header per
-// entry, data padded to 512, a long-name or pax header for a long or
-// non-ASCII path, and two zero blocks padded to a 10240-byte record. Loose on
-// purpose; it only has to stop a file that grew after the size check.
-const tarAllowance = (paths: ReadonlyArray<string>) =>
-  paths.reduce(
-    (total, path) => total + 2048 + 2 * Buffer.byteLength(path),
-    20_480,
-  );
 
 export const packFiles = (
   folder: string,
@@ -53,19 +44,15 @@ export const packFiles = (
         ),
       ).pipe(Effect.mapError(local));
       // The size check ran on the list; a file that grew since then reaches
-      // tar at its new size, so the limit is held again on the bytes sent.
-      const cap = limit + tarAllowance(paths);
-      const sent = yield* Ref.make(0);
+      // tar at its new size, so the limit is held again on the file bytes
+      // the tar headers state as they go out.
+      const fileBytes = tarFileBytes();
       const outputs = process.stdout.pipe(
         Stream.mapError(local),
         Stream.mapEffect((chunk) =>
-          Ref.updateAndGet(sent, (total) => total + chunk.length).pipe(
-            Effect.filterOrFail(
-              (total) => total <= cap,
-              () => new WorkFileGrewError({ limit }),
-            ),
-            Effect.as(chunk),
-          ),
+          fileBytes(chunk) > limit
+            ? Effect.fail(new WorkFileGrewError({ limit }))
+            : Effect.succeed(chunk),
         ),
       );
       const drained = Stream.fromEffect(

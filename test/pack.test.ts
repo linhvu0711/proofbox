@@ -20,6 +20,17 @@ const grownFolder = Effect.gen(function* () {
   return { folder, paths: files.map((file) => file.path) };
 });
 
+// 1000 files of 999 bytes (999,000 bytes), one under a 150-character path.
+const smallFiles = () => {
+  const committed: Record<string, string> = {
+    [`${"d".repeat(70)}/${"f".repeat(79)}`]: "x".repeat(999),
+  };
+  for (let i = 1; i < 1000; i += 1) {
+    committed[`f${String(i).padStart(4, "0")}.txt`] = "x".repeat(999);
+  }
+  return committed;
+};
+
 describe("pack", () => {
   afterEach(cleanupEnvs);
 
@@ -61,17 +72,10 @@ describe("pack", () => {
 
   it.scopedLive("many small files just under the limit pack in full", () =>
     Effect.gen(function* () {
-      // Given: 1000 files of 999 bytes (999,000 bytes), one of them under a
-      // path long enough to need a long-name header
-      const long = `${"d".repeat(70)}/${"f".repeat(79)}`;
-      const committed: Record<string, string> = {
-        [long]: "x".repeat(999),
-      };
-      for (let i = 1; i < 1000; i += 1) {
-        committed[`f${String(i).padStart(4, "0")}.txt`] = "x".repeat(999);
-      }
-      const folder = makeGitFolder({ committed });
-      const files = yield* readWorkFolder(folder, 1_000_000);
+      // Given: 999,000 bytes of files under a 999,001-byte limit, one of them
+      // under a path long enough to need a long-name header
+      const folder = makeGitFolder({ committed: smallFiles() });
+      const files = yield* readWorkFolder(folder, 999_001);
       // When
       const exit = yield* Effect.exit(
         Stream.runDrain(
@@ -79,12 +83,39 @@ describe("pack", () => {
             folder,
             "fake:x",
             files.map((file) => file.path),
-            1_000_000,
+            999_001,
           ),
         ),
       );
       // Then
       expect(exit._tag).toBe("Success");
     }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.scopedLive(
+    "a small growth past the limit across many files stops the tar stream",
+    () =>
+      Effect.gen(function* () {
+        // Given: 999,000 bytes of files passed a 1 MB check; one file then
+        // grew by 2,001 bytes, to 1,001,001 bytes in all
+        const folder = makeGitFolder({ committed: smallFiles() });
+        const files = yield* readWorkFolder(folder, 1_000_000);
+        writeFileSync(join(folder, "f0001.txt"), "x".repeat(3000));
+        // When
+        const error = yield* Effect.flip(
+          Stream.runDrain(
+            packFiles(
+              folder,
+              "fake:x",
+              files.map((file) => file.path),
+              1_000_000,
+            ),
+          ),
+        );
+        // Then
+        expect(error.message).toBe(
+          "A Work file grew while uploading, so the upload stopped past the 1.0 MB limit. Run it again, or raise the limit with --max-size.",
+        );
+      }).pipe(Effect.provide(NodeContext.layer)),
   );
 });
