@@ -1,3 +1,4 @@
 node_modules/
 repos/*
 !repos/README.md
+dist/
