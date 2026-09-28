@@ -28,7 +28,16 @@ import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NscClient } from "./nsc-client.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
+const SIZES: ReadonlyArray<Size> = [
+  { cpu: 4, ramGb: 8 },
+  { cpu: 8, ramGb: 16 },
+  { cpu: 16, ramGb: 32 },
+];
 const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
+
+// The host holds Docker itself plus the Sandbox container; keep 1 GB of the
+// Namespace size outside the container's limit so the host stays healthy.
+const MEMORY_RESERVE_GB = 1;
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -278,6 +287,7 @@ export const makeNamespaceProvider = (deps: {
           client: deps.dockerFor(link),
           imageTag: `nscr.io/${registry}/${baseImageTag(version)}`,
           registry: true,
+          memoryReserveGb: MEMORY_RESERVE_GB,
           runArgs: [],
           brand: brandFor(id),
         });
@@ -371,7 +381,7 @@ export const makeNamespaceProvider = (deps: {
     name: "namespace",
     idPrefix: "ns",
     capabilities: new Set(["os:linux"]),
-    sizes: [DEFAULT_SIZE],
+    sizes: SIZES,
     create,
     get,
     list,

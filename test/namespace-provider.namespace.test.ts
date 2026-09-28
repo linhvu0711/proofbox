@@ -151,6 +151,85 @@ describe("Namespace Provider", () => {
     expect(millis).toBeLessThan(3000);
   });
 
+  it("create with no --size makes a 4x8 host", async () => {
+    // Given: a real account
+    const env = makeEnv({ docker: true, namespace: true });
+    // When
+    const created = await create(env);
+    const host = created.stdout.trim().slice("ns:".length);
+    // Then
+    const entry = (await liveList()).find((item) => item.cluster_id === host);
+    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
+    expect(shape.virtual_cpu).toBe(4);
+    expect(shape.memory_megabytes).toBe(8192);
+    expect(shape.machine_arch).toBe("amd64");
+    expect(shape.os).toBe("linux");
+  });
+
+  it("create --size 8x16 makes an 8x16 host", async () => {
+    // Given: a real account
+    const env = makeEnv({ docker: true, namespace: true });
+    // When
+    const created = await create(env, ["--size", "8x16"]);
+    const host = created.stdout.trim().slice("ns:".length);
+    // Then
+    const entry = (await liveList()).find((item) => item.cluster_id === host);
+    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
+    expect(shape.virtual_cpu).toBe(8);
+    expect(shape.memory_megabytes).toBe(16384);
+  });
+
+  it("a command killed for memory on 4x8 says Try --size 8x16", async () => {
+    // Given: a 4x8 Sandbox (container limit 7 GB)
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "head -c 8000m /dev/zero | tail",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(122);
+    expect(
+      result.stderr.endsWith(
+        "Sandbox ran out of memory (4x8). Try --size 8x16.\n",
+      ),
+    ).toBe(true);
+  });
+
+  it("at 16x32 the memory error says it is the largest size", async () => {
+    // Given: a 16x32 Sandbox (container limit 31 GB)
+    const env = makeEnv({ docker: true, namespace: true });
+    const created = await create(env, ["--size", "16x32"]);
+    const id = created.stdout.trim();
+    const host = id.slice("ns:".length);
+    const entry = (await liveList()).find((item) => item.cluster_id === host);
+    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
+    expect(shape.virtual_cpu).toBe(16);
+    expect(shape.memory_megabytes).toBe(32768);
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "head -c 33000m /dev/zero | tail",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(122);
+    expect(
+      result.stderr.endsWith(
+        "Sandbox ran out of memory (16x32). 16x32 is the largest size.\n",
+      ),
+    ).toBe(true);
+  });
+
   it("the host is deleted at its Deadline with no Caller alive", async () => {
     // Given: a created ns: Sandbox with a 2 m idle; its Keeper is then killed
     const env = makeEnv({ docker: true, namespace: true });

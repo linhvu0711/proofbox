@@ -92,6 +92,7 @@ export const makeDockerProvider = (options: {
   readonly imageTag?: string;
   readonly runArgs?: ReadonlyArray<string>;
   readonly registry?: boolean;
+  readonly memoryReserveGb?: number;
   readonly brand?: ProviderBrand;
 }): Provider => {
   const client = options.client;
@@ -255,9 +256,9 @@ export const makeDockerProvider = (options: {
                 "--cpus",
                 String(size.cpu),
                 "--memory",
-                `${size.ramGb}g`,
+                `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
                 "--memory-swap",
-                `${size.ramGb}g`,
+                `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
                 "--label",
                 `proofbox.size=${formatSize(size)}`,
               ]),
