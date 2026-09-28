@@ -1,5 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import { Clock, Duration, Effect, Schema, Stream } from "effect";
@@ -87,14 +95,28 @@ export const makeFakeProvider = (options: {
       return info;
     });
 
+  // Write a temp file and rename it over sandbox.json, so a concurrent read
+  // sees the old file or the new one, never a half-written one.
   const writeFileInfo = (name: string, file: SandboxFile) =>
-    Effect.tryPromise({
-      try: () =>
-        writeFile(
-          join(root, name, "sandbox.json"),
-          `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+    Effect.gen(function* () {
+      const path = join(root, name, "sandbox.json");
+      const temp = `${path}.${randomUUID()}.tmp`;
+      yield* Effect.tryPromise({
+        try: async () => {
+          await writeFile(
+            temp,
+            `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+          );
+          await rename(temp, path);
+        },
+        catch: (cause) => fail(describe(cause)),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.tryPromise(() => rm(temp, { force: true })).pipe(
+            Effect.ignore,
+          ),
         ),
-      catch: (cause) => fail(describe(cause)),
+      );
     });
 
   const createWork = (req: {
