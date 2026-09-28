@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -289,6 +289,9 @@ describe("Namespace macOS Provider", () => {
       expect(at("rm -f /var/run/nsc/token.json")).toBeLessThan(
         at("test ! -e /var/run/nsc/token.json"),
       );
+      expect(at("test ! -e /var/run/nsc/token.json")).toBeLessThan(
+        at("screencapture"),
+      );
     }).pipe(withRuntime(runtimeDir())),
   );
 
@@ -330,5 +333,76 @@ describe("Namespace macOS Provider", () => {
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
       }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("a blocked test screenshot fails create and deletes the Mac", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac((line) =>
+        line.includes("/tmp/proofbox-test.png") ? { exitCode: 1 } : undefined,
+      );
+      // When
+      const error = yield* Effect.flip(mac.provider.create(createMac()));
+      // Then
+      expect(error.message).toBe(
+        "Sandbox ns:abc123def4567 failed the macOS prepare check (the test screenshot is blocked); deleted the Mac",
+      );
+      expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  const PngHead = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
+
+  it.effect(
+    "a blocked test capture fails create, saves the screen, and deletes the Mac",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("/tmp/proofbox-test.mov")
+            ? { exitCode: 1 }
+            : line.includes("/tmp/proofbox-fail.png")
+              ? { stdout: PngHead }
+              : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
+        expect(error.message).toBe(
+          `Sandbox ns:abc123def4567 failed the macOS prepare check (the test capture is blocked); saved the screen to ${saved} and deleted the Mac`,
+        );
+        expect(new Uint8Array(readFileSync(saved))).toEqual(PngHead);
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect(
+    "a test capture that hangs names the alert, saves the screen, and deletes the Mac",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: the capture is killed by its 15 s timer
+        const mac = yield* makeMac((line) =>
+          line.includes("/tmp/proofbox-test.mov")
+            ? { exitCode: 137 }
+            : line.includes("/tmp/proofbox-fail.png")
+              ? { stdout: PngHead }
+              : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
+        expect(error.message).toBe(
+          `Sandbox ns:abc123def4567 failed the macOS prepare check (an alert is on screen); saved the screen to ${saved} and deleted the Mac`,
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtime));
+    },
   );
 });

@@ -231,6 +231,26 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
   }
 }
 
+export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
+  readonly id: string;
+  readonly what:
+    | "the test screenshot is blocked"
+    | "the test capture is blocked"
+    | "an alert is on screen";
+  readonly screenshot?: string | undefined;
+}> {
+  get message() {
+    const saved =
+      this.screenshot === undefined
+        ? ""
+        : `saved the screen to ${this.screenshot} and `;
+    return `Sandbox ${this.id} failed the macOS prepare check (${this.what}); ${saved}deleted the Mac`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class EnvFileUnreadableError extends Data.TaggedError(
   "EnvFileUnreadableError",
 )<{

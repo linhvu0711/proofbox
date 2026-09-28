@@ -8,6 +8,7 @@ import {
   type Stream,
 } from "effect";
 import {
+  type MacPrepareError,
   MissingCapabilityError,
   type ProviderError,
   type ProviderLimitError,
@@ -91,7 +92,8 @@ export interface Provider {
     | ProviderLimitError
     | ProviderUnavailableError
     | ToolBundleHashError
-    | TokenExposedError,
+    | TokenExposedError
+    | MacPrepareError,
     Progress
   >;
   readonly extend: (

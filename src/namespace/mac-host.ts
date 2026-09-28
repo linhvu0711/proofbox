@@ -1,14 +1,16 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import {
+  MacPrepareError,
   ProviderError,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
+import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { type ExecOptions, SandboxInfo } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
@@ -183,6 +185,97 @@ const dropToken = (link: Link, id: string) =>
     }
   });
 
+// Screen and input commands only work in the desktop session of `runner`.
+const GUI = "sudo -n launchctl asuser 501 sudo -n -u runner";
+const VMGUEST = "/opt/namespace/vmguest";
+const TCC_DB = "/Library/Application Support/com.apple.TCC/TCC.db";
+const REPLAYD =
+  "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
+
+// ADR 0012: grant screen and input to vmguest in the system TCC.db, and
+// pre-answer replayd's "bypass the private window picker" alert.
+const grantPrivacy = (link: Link) =>
+  Effect.gen(function* () {
+    const rows = [
+      "kTCCServiceScreenCapture",
+      "kTCCServiceAccessibility",
+      "kTCCServicePostEvent",
+    ]
+      .map(
+        (service) =>
+          `('${service}', '${VMGUEST}', 1, 2, 4, 1, 'UNUSED', 0, CAST(strftime('%s','now') AS INTEGER))`,
+      )
+      .join(", ");
+    yield* step(
+      link,
+      "granting screen and input access",
+      `sudo -n sqlite3 ${shellJoin([TCC_DB])} ${shellJoin([
+        `INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ${rows}`,
+      ])}`,
+    );
+    const plist = shellJoin([REPLAYD]);
+    yield* step(
+      link,
+      "pre-answering the screen capture alert",
+      `mkdir -p "$(dirname ${plist})" && { [ -e ${plist} ] || plutil -create xml1 ${plist}; } && { plutil -remove ${VMGUEST} ${plist} 2>/dev/null; plutil -insert ${VMGUEST} -dictionary ${plist} && plutil -insert ${VMGUEST}.kScreenCapturePrivacyHintDate -date 4000-01-01T00:00:00Z ${plist}; }`,
+    );
+  });
+
+// The screen as it is now, saved next to the host's other files, so a
+// failed prepare shows what was in the way.
+const saveScreen = (link: Link, id: string) =>
+  Effect.gen(function* () {
+    const events = yield* link
+      .stream(
+        `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-fail.png && cat /tmp/proofbox-fail.png`,
+      )
+      .pipe(Stream.runCollect);
+    const bytes = Buffer.concat(
+      Chunk.toReadonlyArray(events).flatMap((event) =>
+        event._tag === "Stdout" ? [event.bytes] : [],
+      ),
+    );
+    const path = join(
+      (yield* keeperPaths({ provider: "ns", name: id })).dir,
+      `ns-${id}-prepare.png`,
+    );
+    yield* Effect.tryPromise({
+      try: () => writeFile(path, bytes, { mode: 0o600 }),
+      catch: (cause) =>
+        fail(cause instanceof Error ? cause.message : String(cause)),
+    });
+    return path;
+  });
+
+// A test screenshot, then a 1 s capture. The capture waits on any alert, so
+// one its 15 s timer kills (137) means an alert is on screen.
+const checkScreen = (link: Link, id: string) =>
+  Effect.gen(function* () {
+    const shot = yield* link.run(
+      `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-test.png && test -s /tmp/proofbox-test.png`,
+    );
+    if (shot.exitCode !== 0) {
+      return yield* new MacPrepareError({
+        id: `ns:${id}`,
+        what: "the test screenshot is blocked",
+      });
+    }
+    const capture = yield* link.run(
+      `${GUI} /opt/proofbox/tools/ffmpeg -loglevel error -f avfoundation -i 'Capture screen 0' -t 1 -y /tmp/proofbox-test.mov & p=$!; (sleep 15; kill -9 $p 2>/dev/null; pkill -9 -x ffmpeg) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
+    );
+    if (capture.exitCode !== 0) {
+      const screenshot = yield* saveScreen(link, id);
+      return yield* new MacPrepareError({
+        id: `ns:${id}`,
+        what:
+          capture.exitCode === 137
+            ? "an alert is on screen"
+            : "the test capture is blocked",
+        screenshot,
+      });
+    }
+  });
+
 // Everything a Mac needs before user code arrives, in order.
 export const prepareMac = (
   link: Link,
@@ -198,6 +291,11 @@ export const prepareMac = (
     yield* progress.step(
       "checking the Namespace token is out of reach",
       dropToken(link, req.id),
+    );
+    yield* progress.step("setting up screen access", grantPrivacy(link));
+    yield* progress.step(
+      "taking a test screenshot and capture",
+      checkScreen(link, req.id),
     );
     return info;
   });
