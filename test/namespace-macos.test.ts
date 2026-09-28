@@ -121,10 +121,16 @@ const pinnedShasum = (line: string) =>
     })
     .join("");
 
+// replayd keeps the far-future hint date proofbox wrote when no alert
+// showed; when it shows one it moves the date to 30 days out.
+const replaydKept = { stdout: "4000-01-01T00:00:00Z\n" };
+
 const defaultAnswer = (line: string): Answer | undefined =>
   line.startsWith("shasum -a 256 ")
     ? { stdout: pinnedShasum(line) }
-    : undefined;
+    : line.startsWith("plutil -extract")
+      ? replaydKept
+      : undefined;
 
 const runtimeDir = () => mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
 
@@ -404,5 +410,53 @@ describe("Namespace macOS Provider", () => {
         expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
       }).pipe(withRuntime(runtime));
     },
+  );
+
+  it.effect(
+    "a replayd alert at the test capture names the alert, saves the screen, and deletes the Mac",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: replayd showed its alert and moved the hint date
+        const mac = yield* makeMac((line) =>
+          line.startsWith("plutil -extract")
+            ? { stdout: "2026-10-28T17:49:21Z\n" }
+            : line.includes("/tmp/proofbox-fail.png")
+              ? { stdout: PngHead }
+              : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
+        expect(error.message).toBe(
+          `Sandbox ns:abc123def4567 failed the macOS prepare check (an alert is on screen); saved the screen to ${saved} and deleted the Mac`,
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect("macOS create restarts replayd after it writes the approval", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const approval = lines.findIndex((line) =>
+        line.includes("kScreenCaptureApprovalLastAlerted"),
+      );
+      const restart = lines.findIndex((line) =>
+        line.includes("killall -9 replayd"),
+      );
+      const capture = lines.findIndex((line) =>
+        line.includes("/tmp/proofbox-test.png"),
+      );
+      expect(approval).toBeGreaterThanOrEqual(0);
+      expect(restart).toBeGreaterThanOrEqual(approval);
+      expect(restart).toBeLessThan(capture);
+    }).pipe(withRuntime(runtimeDir())),
   );
 });

@@ -192,6 +192,7 @@ const VMGUEST = "/opt/namespace/vmguest";
 const TCC_DB = "/Library/Application Support/com.apple.TCC/TCC.db";
 const REPLAYD =
   "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
+const REPLAYD_HINT = "4000-01-01T00:00:00Z";
 
 // ADR 0012: grant screen and input to vmguest in the system TCC.db, and
 // pre-answer replayd's "bypass the private window picker" alert.
@@ -214,11 +215,15 @@ const grantPrivacy = (link: Link) =>
         `INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ${rows}`,
       ])}`,
     );
+    // replayd keeps the approvals in memory, saves them over the file on a
+    // normal stop, and alerts on an entry without its dates; so the full
+    // entry goes in, then `kill -9` makes it read the file again.
     const plist = shellJoin([REPLAYD]);
+    const entry = `${VMGUEST}.kScreenCapture`;
     yield* step(
       link,
       "pre-answering the screen capture alert",
-      `mkdir -p "$(dirname ${plist})" && { [ -e ${plist} ] || plutil -create xml1 ${plist}; } && { plutil -remove ${VMGUEST} ${plist} 2>/dev/null; plutil -insert ${VMGUEST} -dictionary ${plist} && plutil -insert ${VMGUEST}.kScreenCapturePrivacyHintDate -date 4000-01-01T00:00:00Z ${plist}; }`,
+      `now=$(date -u +%Y-%m-%dT%H:%M:%SZ) && mkdir -p "$(dirname ${plist})" && { [ -e ${plist} ] || plutil -create xml1 ${plist}; } && { plutil -remove ${VMGUEST} ${plist} 2>/dev/null; plutil -insert ${VMGUEST} -dictionary ${plist} && plutil -insert ${entry}PrivacyHintDate -date ${REPLAYD_HINT} ${plist} && plutil -insert ${entry}PrivacyHintPolicy -integer 999999999 ${plist} && plutil -insert ${entry}ApprovalLastAlerted -date "$now" ${plist} && plutil -insert ${entry}ApprovalLastUsed -date "$now" ${plist} && plutil -insert ${entry}AlertableUsageCount -integer 1 ${plist}; } && { killall -9 replayd 2>/dev/null; true; }`,
     );
   });
 
@@ -248,8 +253,9 @@ const saveScreen = (link: Link, id: string) =>
     return path;
   });
 
-// A test screenshot, then a 1 s capture. The capture waits on any alert, so
-// one its 15 s timer kills (137) means an alert is on screen.
+// A test screenshot, then a 1 s capture. A capture its 15 s timer kills
+// (137), or a replayd alert (the capture itself does not wait on that one),
+// means an alert is on screen.
 const checkScreen = (link: Link, id: string) =>
   Effect.gen(function* () {
     const shot = yield* link.run(
@@ -264,12 +270,18 @@ const checkScreen = (link: Link, id: string) =>
     const capture = yield* link.run(
       `${GUI} /opt/proofbox/tools/ffmpeg -loglevel error -f avfoundation -i 'Capture screen 0' -t 1 -y /tmp/proofbox-test.mov & p=$!; (sleep 15; kill -9 $p 2>/dev/null; pkill -9 -x ffmpeg) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
     );
-    if (capture.exitCode !== 0) {
+    // The capture does not wait on replayd's alert; replayd moving the hint
+    // date away from the one proofbox wrote is the sign it showed one.
+    const hint = yield* link.run(
+      `plutil -extract ${shellJoin([`${VMGUEST}.kScreenCapturePrivacyHintDate`])} raw ${shellJoin([REPLAYD])}`,
+    );
+    const alerted = hint.stdout.trim() !== REPLAYD_HINT;
+    if (capture.exitCode !== 0 || alerted) {
       const screenshot = yield* saveScreen(link, id);
       return yield* new MacPrepareError({
         id: `ns:${id}`,
         what:
-          capture.exitCode === 137
+          capture.exitCode === 0 || capture.exitCode === 137
             ? "an alert is on screen"
             : "the test capture is blocked",
         screenshot,
