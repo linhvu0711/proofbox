@@ -286,5 +286,6 @@ export const makeFakeProvider = (options: {
     delete: del,
     extend,
     connect,
+    memoryKills: () => Effect.succeed(0),
   };
 };

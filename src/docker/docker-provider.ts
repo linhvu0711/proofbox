@@ -297,6 +297,17 @@ export const makeDockerProvider = (options: {
       };
     });
 
+  const memoryKills = (name: string) =>
+    Effect.gen(function* () {
+      yield* get(name);
+      const read = yield* client.execText(containerOf(name), "root", [
+        "cat",
+        "/sys/fs/cgroup/memory.events",
+      ]);
+      const match = /^oom_kill (\d+)$/m.exec(read.stdout);
+      return match === null ? 0 : Number(match[1]);
+    });
+
   return {
     name: "docker",
     capabilities: new Set(["os:linux"]),
@@ -307,5 +318,6 @@ export const makeDockerProvider = (options: {
     delete: del,
     extend,
     connect,
+    memoryKills,
   };
 };

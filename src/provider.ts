@@ -87,6 +87,12 @@ export interface Provider {
     SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
+  readonly memoryKills: (
+    name: string,
+  ) => Effect.Effect<
+    number,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
 }
 
 export class Providers extends Context.Tag("proofbox/Providers")<

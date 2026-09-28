@@ -310,6 +310,29 @@ describe("Docker Provider", () => {
     expect(inspected).toBe("0 0\n");
   });
 
+  it("a command killed for memory exits 122 and names the next size", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env, ["--size", "1x1"]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "head -c 3000m /dev/zero | tail",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(122);
+    expect(
+      result.stderr.endsWith(
+        "Sandbox ran out of memory (1x1). Try --size 2x2.\n",
+      ),
+    ).toBe(true);
+  });
+
   it("delete removes the container", async () => {
     // Given
     const env = makeEnv({ docker: true });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { parseSize } from "../src/size.ts";
+import { outOfMemoryMessage, parseSize } from "../src/size.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("--size", () => {
@@ -88,5 +88,27 @@ describe("--size", () => {
       readFileSync(join(env.root, name, "sandbox.json"), "utf8"),
     ) as { size?: { cpu: number; ramGb: number } };
     expect(file.size).toEqual({ cpu: 8, ramGb: 16 });
+  });
+
+  it("outOfMemoryMessage names the next size", () => {
+    // Given
+    const offered = [
+      { cpu: 4, ramGb: 8 },
+      { cpu: 8, ramGb: 16 },
+      { cpu: 16, ramGb: 32 },
+    ];
+    // Then
+    expect(outOfMemoryMessage({ cpu: 4, ramGb: 8 }, offered)).toBe(
+      "Sandbox ran out of memory (4x8). Try --size 8x16.",
+    );
+    expect(outOfMemoryMessage({ cpu: 16, ramGb: 32 }, offered)).toBe(
+      "Sandbox ran out of memory (16x32). 16x32 is the largest size.",
+    );
+    expect(outOfMemoryMessage({ cpu: 1, ramGb: 1 }, "any")).toBe(
+      "Sandbox ran out of memory (1x1). Try --size 2x2.",
+    );
+    expect(outOfMemoryMessage(undefined, "any")).toBe(
+      "Sandbox ran out of memory (no size limit). The host has no free memory left.",
+    );
   });
 });

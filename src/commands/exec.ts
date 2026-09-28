@@ -4,6 +4,7 @@ import { nextDeadline } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
+import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -29,6 +30,7 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       ),
     );
     yield* push;
+    const killsBefore = yield* provider.memoryKills(id.name);
     const keeper = yield* KeeperClient;
     const events = yield* keeper.exec(rawId, argv);
     const pushWhileRunning = Effect.repeat(
@@ -48,5 +50,10 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       }),
       Effect.raceFirst(pushWhileRunning),
     );
+    const killsAfter = yield* provider.memoryKills(id.name);
+    if (killsAfter > killsBefore) {
+      yield* output.err(`${outOfMemoryMessage(info.size, provider.sizes)}\n`);
+      yield* output.setExitCode(OUT_OF_MEMORY_EXIT);
+    }
     yield* push;
   }).pipe(Effect.scoped);
