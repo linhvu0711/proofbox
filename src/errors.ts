@@ -142,6 +142,16 @@ export class ProofTooBigError extends Data.TaggedError("ProofTooBigError")<{
   }
 }
 
+export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
+  readonly both: boolean;
+}> {
+  get message() {
+    return this.both
+      ? "record stop takes --out <file> or --discard, not both"
+      : "record stop needs --out <file>, or --discard to make no Proof video";
+  }
+}
+
 export class SetupNeedsWorkError extends Data.TaggedError(
   "SetupNeedsWorkError",
 )<Record<never, never>> {

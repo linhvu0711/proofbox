@@ -1,6 +1,6 @@
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { ProviderError } from "../errors.ts";
+import { ProviderError, StopFlagsError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
@@ -39,10 +39,17 @@ export const startRecording = (id: string) =>
 
 export const stopRecording = (options: {
   readonly id: string;
-  readonly out: string;
+  readonly out?: string | undefined;
+  readonly discard?: boolean | undefined;
   readonly maxSize?: number | undefined;
 }) =>
   Effect.gen(function* () {
+    if (options.out === undefined && options.discard !== true) {
+      return yield* new StopFlagsError({ both: false });
+    }
+    if (options.out !== undefined && options.discard === true) {
+      return yield* new StopFlagsError({ both: true });
+    }
     const helperFailed = (result: {
       readonly provider: string;
       readonly code: number | undefined;
@@ -61,6 +68,17 @@ export const stopRecording = (options: {
     const info = yield* Schema.decodeUnknown(
       Schema.parseJson(StoppedRecording),
     )(stopped.stdout.toString("utf8").trim());
+    if (options.discard === true) {
+      const output = yield* CliOutput;
+      yield* output.err(
+        `proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv\n`,
+      );
+      return;
+    }
+    const out = options.out;
+    if (out === undefined) {
+      return yield* Effect.die(new Error("record stop lost --out"));
+    }
     const probed = yield* runHelper(
       options.id,
       RECORD_HELPER,
@@ -139,9 +157,9 @@ export const stopRecording = (options: {
     if (video.code !== 0) {
       return yield* helperFailed(video);
     }
-    yield* writeOut(options.out, video.stdout);
-    const base = options.out.replace(/\.[^./\\]+$/, "");
-    const lines = [options.out];
+    yield* writeOut(out, video.stdout);
+    const base = out.replace(/\.[^./\\]+$/, "");
+    const lines = [out];
     for (let k = 1; k <= info.steps; k++) {
       const shot = yield* runHelper(
         options.id,

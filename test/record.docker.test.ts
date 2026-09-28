@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -275,4 +275,50 @@ describe("Recording and the Proof video", () => {
       expect(raw.exitCode).toBe(0);
     },
   );
+
+  it("record stop --discard downloads nothing and keeps the raw Recording and the Action log", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, ["record", "stop", id, "--discard"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv\n",
+    );
+    expect(readdirSync(dir)).toEqual([]);
+    const raw = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "test",
+      "-s",
+      "/run/proofbox/recordings/1/raw.mkv",
+    ]);
+    expect(raw.exitCode).toBe(0);
+    const log = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/action-log.jsonl",
+    ]);
+    expect(log.stdout).toContain('"kind":"click"');
+  });
 });
