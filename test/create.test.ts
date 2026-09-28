@@ -432,6 +432,28 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
+  it("an env line with an unclosed quote fails create with its line number", async () => {
+    // Given: an env file whose third line opens a quote it never closes
+    const env = makeEnv();
+    const path = envFile('# first\nAPI_TOKEN=tok-5f2a9c\nTOKEN="abc\n');
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
   it("create with a missing env file makes nothing", async () => {
     // Given: an env file path that does not exist
     const env = makeEnv();

@@ -44,10 +44,13 @@ export const parseEnvFile = (path: string, text: string) =>
       const rawValue = line.slice(at + 1);
       const trimmed = rawValue.trimStart();
       const quote = trimmed.at(0);
-      const close =
-        quote === '"' || quote === "'" ? trimmed.indexOf(quote, 1) : -1;
+      const quoted = quote === '"' || quote === "'";
+      const close = quoted ? trimmed.indexOf(quote, 1) : -1;
       let value: string;
-      if (close !== -1) {
+      if (quoted && close === -1) {
+        // A value that opens a quote must close it on the same line.
+        return yield* new EnvFileLineError({ path, line: lineNumber });
+      } else if (close !== -1) {
         // A quoted value keeps its `#`; after the closing quote only a
         // comment may follow (Docker Compose's rule).
         if (!/^\s*(?:#.*)?$/.test(trimmed.slice(close + 1))) {
