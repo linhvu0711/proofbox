@@ -239,8 +239,16 @@ const recordStop = Command.make(
   {
     id: Args.text({ name: "id" }),
     out: Options.text("out"),
+    maxSize: Options.text("max-size").pipe(Options.optional),
   },
-  ({ id, out }) => stopRecording({ id, out }),
+  ({ id, out, maxSize }) =>
+    Effect.gen(function* () {
+      const limit = yield* maxSize.pipe(
+        Option.map(parseMaxSize),
+        Option.getOrElse(() => Effect.succeed(undefined)),
+      );
+      yield* stopRecording({ id, out, maxSize: limit });
+    }),
 );
 
 const record = Command.make("record").pipe(

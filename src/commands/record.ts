@@ -6,6 +6,7 @@ import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
 import { parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
+import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 
 export const RECORD_HELPER: Partial<Record<Os, string>> = {
   linux: "/opt/proofbox/record",
@@ -39,6 +40,7 @@ export const startRecording = (id: string) =>
 export const stopRecording = (options: {
   readonly id: string;
   readonly out: string;
+  readonly maxSize?: number | undefined;
 }) =>
   Effect.gen(function* () {
     const helperFailed = (result: {
@@ -108,18 +110,26 @@ export const stopRecording = (options: {
       dir: info.dir,
       font: CAPTION_FONT,
     });
-    const built = yield* runHelper(
-      options.id,
-      RECORD_HELPER,
-      ["build", info.dir, "23"],
-      {
-        outcome: "no Proof video was made",
-        stdin: Stream.make(new TextEncoder().encode(script)),
-      },
-    );
-    if (built.code !== 0) {
-      return yield* helperFailed(built);
-    }
+    const encode = (crf: number) =>
+      Effect.gen(function* () {
+        const built = yield* runHelper(
+          options.id,
+          RECORD_HELPER,
+          ["build", info.dir, String(crf)],
+          {
+            outcome: "no Proof video was made",
+            stdin: Stream.make(new TextEncoder().encode(script)),
+          },
+        );
+        if (built.code !== 0) {
+          return yield* helperFailed(built);
+        }
+        return Number(built.stdout.toString("utf8").trim());
+      });
+    yield* encodeUnderLimit(encode, {
+      limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
+      raw: `${info.dir}/raw.mkv`,
+    });
     const video = yield* runHelper(
       options.id,
       RECORD_HELPER,

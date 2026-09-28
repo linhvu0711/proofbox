@@ -132,6 +132,16 @@ export class WorkFileGrewError extends Data.TaggedError("WorkFileGrewError")<{
   }
 }
 
+export class ProofTooBigError extends Data.TaggedError("ProofTooBigError")<{
+  readonly bytes: number;
+  readonly limit: number;
+  readonly raw: string;
+}> {
+  get message() {
+    return `Proof video is ${formatMb(this.bytes)} MB at the lowest quality, over the ${formatMb(this.limit)} MB Size limit, so nothing was downloaded. The raw Recording stays at ${this.raw}; record a shorter walk, or raise --max-size.`;
+  }
+}
+
 export class SetupNeedsWorkError extends Data.TaggedError(
   "SetupNeedsWorkError",
 )<Record<never, never>> {

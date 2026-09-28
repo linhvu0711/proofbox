@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { startNoise } from "./support/noise.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -228,6 +229,50 @@ describe("Recording and the Proof video", () => {
         Number(duration?.[3]);
       expect(seconds).toBeLessThan(30);
       expect(seconds).toBeGreaterThanOrEqual(9);
+    },
+  );
+
+  it(
+    "a Proof video over --max-size exits with its size and keeps the raw Recording",
+    { timeout: 300_000 },
+    async () => {
+      // Given
+      const env = makeEnv({ docker: true });
+      const created = await create(env);
+      const id = created.stdout.trim();
+      const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+      const noise = await startNoise(env, id);
+      expect(noise.exitCode).toBe(0);
+      await runCli(env, ["record", "start", id]);
+      await wait(10_000);
+      // When
+      const result = await runCli(env, [
+        "record",
+        "stop",
+        id,
+        "--out",
+        join(dir, "big.mp4"),
+        "--max-size",
+        "1MB",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(125);
+      expect(
+        result.stderr.match(/trying lower quality/g),
+      ).toHaveLength(2);
+      expect(result.stderr).toMatch(
+        /Proof video is \d+\.\d MB at the lowest quality, over the 1\.0 MB Size limit/,
+      );
+      expect(existsSync(join(dir, "big.mp4"))).toBe(false);
+      const raw = await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "test",
+        "-s",
+        "/run/proofbox/recordings/1/raw.mkv",
+      ]);
+      expect(raw.exitCode).toBe(0);
     },
   );
 });
