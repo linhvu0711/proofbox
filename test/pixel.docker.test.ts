@@ -82,6 +82,74 @@ describe("Pixel actions", () => {
     ]);
   });
 
+  it("click glides at human pace by default", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const start = Date.now();
+    const result = await runCli(env, ["click", id, "100", "100"]);
+    const elapsed = Date.now() - start;
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(elapsed).toBeGreaterThanOrEqual(1100);
+    const events = await readXev(env, id);
+    const pressAt = events.findIndex((event) => event.type === "ButtonPress");
+    const before = pressAt === -1 ? [] : events.slice(0, pressAt);
+    expect(
+      before.filter((event) => event.type === "MotionNotify").length,
+    ).toBeGreaterThanOrEqual(10);
+  });
+
+  it("click --pace fast jumps to the point", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, ["click", id, "100", "100", "--pace", "fast"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    const pressAt = events.findIndex((event) => event.type === "ButtonPress");
+    const before = pressAt === -1 ? [] : events.slice(0, pressAt);
+    expect(
+      before.filter((event) => event.type === "MotionNotify").length,
+    ).toBeLessThanOrEqual(2);
+  });
+
+  it("click --pace fast --screenshot takes under 2 s", async () => {
+    // Given: a warm Keeper
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-shot-"));
+    await runCli(env, ["screenshot", id, "--out", join(dir, "warm.png")]);
+    const out = join(dir, "shot.png");
+    // When
+    const start = Date.now();
+    const result = await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--pace",
+      "fast",
+      "--screenshot",
+      out,
+    ]);
+    const elapsed = Date.now() - start;
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(elapsed).toBeLessThan(2000);
+    const bytes = readFileSync(out);
+    expect(bytes.readUInt32BE(16)).toBe(1440);
+    expect(bytes.readUInt32BE(20)).toBe(900);
+  });
+
   it("click --screenshot writes the screen after the click", async () => {
     // Given
     const env = makeEnv({ docker: true });

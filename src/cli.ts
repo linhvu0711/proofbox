@@ -37,6 +37,13 @@ const exec = Command.make(
 
 const actionOptions = {
   screenshot: Options.text("screenshot").pipe(Options.optional),
+  pace: Options.choice("pace", ["human", "fast"]).pipe(
+    Options.withDefault("human" as const),
+  ),
+  glide: Options.text("glide").pipe(Options.optional),
+  letter: Options.text("letter").pipe(Options.optional),
+  typeMax: Options.text("type-max").pipe(Options.optional),
+  settle: Options.text("settle").pipe(Options.optional),
 };
 
 const click = Command.make(
@@ -50,13 +57,18 @@ const click = Command.make(
     ),
     ...actionOptions,
   },
-  ({ id, x, y, button, screenshot }) =>
+  ({ id, x, y, button, screenshot, pace, glide, letter, typeMax, settle }) =>
     clickAt({
       id,
       x,
       y,
       button,
       screenshot: Option.getOrUndefined(screenshot),
+      pace,
+      glide: Option.getOrUndefined(glide),
+      letter: Option.getOrUndefined(letter),
+      typeMax: Option.getOrUndefined(typeMax),
+      settle: Option.getOrUndefined(settle),
     }),
 );
 

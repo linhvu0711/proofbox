@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { PACE_HUMAN, runPixel } from "../pixel.ts";
+import { resolvePace, runPixel } from "../pixel.ts";
 
 const BUTTONS = { left: "1", middle: "2", right: "3" } as const;
 
@@ -9,8 +9,14 @@ export const clickAt = (options: {
   readonly y: number;
   readonly button: keyof typeof BUTTONS;
   readonly screenshot?: string | undefined;
+  readonly pace: "human" | "fast";
+  readonly glide?: string | undefined;
+  readonly letter?: string | undefined;
+  readonly typeMax?: string | undefined;
+  readonly settle?: string | undefined;
 }) =>
   Effect.gen(function* () {
+    const pace = yield* resolvePace(options);
     const shot = options.screenshot === undefined ? "0" : "1";
     yield* runPixel(
       options.id,
@@ -19,8 +25,8 @@ export const clickAt = (options: {
         String(options.x),
         String(options.y),
         BUTTONS[options.button],
-        String(PACE_HUMAN.glideMs),
-        String(PACE_HUMAN.settleMs),
+        String(pace.glideMs),
+        String(pace.settleMs),
         shot,
       ],
       { screenshot: options.screenshot },

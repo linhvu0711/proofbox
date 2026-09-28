@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
-import { Effect, Stream } from "effect";
-import { withDeadlinePush } from "./deadline.ts";
+import { Duration, Effect, Stream } from "effect";
+import { PACE_SPAN, parseSpan, withDeadlinePush } from "./deadline.ts";
 import {
+  type BadSpanError,
   MissingCapabilityError,
   OutFileError,
   ProviderError,
@@ -20,6 +21,67 @@ export const PACE_HUMAN = {
   typeMaxMs: 3000,
   settleMs: 700,
 };
+
+export const PACE_FAST = {
+  glideMs: 0,
+  letterMs: 12,
+  typeMaxMs: 3000,
+  settleMs: 0,
+};
+
+export interface Pace {
+  readonly glideMs: number;
+  readonly letterMs: number;
+  readonly typeMaxMs: number;
+  readonly settleMs: number;
+}
+
+export const resolvePace = (
+  options: {
+    readonly pace: "human" | "fast";
+    readonly glide?: string | undefined;
+    readonly letter?: string | undefined;
+    readonly typeMax?: string | undefined;
+    readonly settle?: string | undefined;
+  },
+  textLength = 0,
+): Effect.Effect<Pace, BadSpanError> =>
+  Effect.gen(function* () {
+    const preset = options.pace === "human" ? PACE_HUMAN : PACE_FAST;
+    const glideMs =
+      options.glide === undefined
+        ? preset.glideMs
+        : Duration.toMillis(
+            yield* parseSpan("glide", options.glide, PACE_SPAN),
+          );
+    const letterMs =
+      options.letter === undefined
+        ? preset.letterMs
+        : Duration.toMillis(
+            yield* parseSpan("letter", options.letter, PACE_SPAN),
+          );
+    const typeMaxMs =
+      options.typeMax === undefined
+        ? preset.typeMaxMs
+        : Duration.toMillis(
+            yield* parseSpan("type-max", options.typeMax, PACE_SPAN),
+          );
+    const settleMs =
+      options.settle === undefined
+        ? preset.settleMs
+        : Duration.toMillis(
+            yield* parseSpan("settle", options.settle, PACE_SPAN),
+          );
+    return {
+      glideMs,
+      letterMs:
+        textLength > 0
+          ? Math.min(letterMs, Math.floor(typeMaxMs / textLength))
+          : letterMs,
+      typeMaxMs,
+      settleMs,
+    };
+  });
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);

@@ -46,9 +46,15 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
 export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   readonly flag: string;
   readonly value: string;
+  readonly units: ReadonlyArray<string>;
+  readonly example: string;
 }> {
   get message() {
-    return `Bad --${this.flag} "${this.value}": use a whole number with s, m, or h, for example 15m`;
+    const list =
+      this.units.length <= 2
+        ? this.units.join(" or ")
+        : `${this.units.slice(0, -1).join(", ")}, or ${this.units[this.units.length - 1]}`;
+    return `Bad --${this.flag} "${this.value}": use a whole number with ${list}, for example ${this.example}`;
   }
 }
 
