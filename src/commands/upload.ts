@@ -7,7 +7,12 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
-import { HashList, hashListPath, toHashList } from "../upload/hash-list.ts";
+import {
+  diffHashList,
+  HashList,
+  hashListPath,
+  toHashList,
+} from "../upload/hash-list.ts";
 import { packFiles } from "../upload/pack.ts";
 import { listWorkFiles, type WorkFile } from "../upload/work-files.ts";
 
@@ -75,7 +80,7 @@ export const sendWorkFolder = (
     const keeper = yield* KeeperClient;
     const info = yield* provider.get(id.name);
     const listPath = hashListPath(provider.stateDir(id.name));
-    yield* progress.step(
+    const diff = yield* progress.step(
       "uploading Work folder",
       withDeadlinePush(
         provider,
@@ -83,30 +88,59 @@ export const sendWorkFolder = (
         info,
       )(
         Effect.gen(function* () {
-          yield* runInSandbox(
-            keeper,
-            rawId,
-            ["tar", "-x", "-f", "-"],
-            packFiles(
-              folder,
-              rawId,
-              files.map((file) => file.path),
+          const old = yield* runInSandbox(keeper, rawId, [
+            "cat",
+            listPath,
+          ]).pipe(
+            Effect.flatMap((raw) =>
+              Schema.decodeUnknown(Schema.parseJson(HashList))(raw),
             ),
+            Effect.catchAll(() => Effect.succeed(undefined)),
           );
-          const list = new TextEncoder().encode(
-            JSON.stringify(Schema.encodeSync(HashList)(toHashList(files))),
-          );
-          yield* runInSandbox(
-            keeper,
-            rawId,
-            ["sh", "-c", 'cat > "$1.tmp" && mv "$1.tmp" "$1"', "sh", listPath],
-            Stream.make(list),
-          );
+          const diff = diffHashList(old, files);
+          if (diff.send.length !== 0) {
+            yield* runInSandbox(
+              keeper,
+              rawId,
+              ["tar", "-x", "-f", "-"],
+              packFiles(folder, rawId, diff.send),
+            );
+          }
+          if (diff.remove.length !== 0) {
+            yield* runInSandbox(
+              keeper,
+              rawId,
+              ["xargs", "-0", "rm", "-f", "--"],
+              Stream.make(new TextEncoder().encode(diff.remove.join("\0"))),
+            );
+          }
+          if (
+            diff.send.length !== 0 ||
+            diff.remove.length !== 0 ||
+            old === undefined
+          ) {
+            const list = new TextEncoder().encode(
+              JSON.stringify(Schema.encodeSync(HashList)(toHashList(files))),
+            );
+            yield* runInSandbox(
+              keeper,
+              rawId,
+              [
+                "sh",
+                "-c",
+                'cat > "$1.tmp" && mv "$1.tmp" "$1"',
+                "sh",
+                listPath,
+              ],
+              Stream.make(list),
+            );
+          }
+          return diff;
         }),
       ),
     );
     yield* output.err(
-      `proofbox: sent ${files.length} ${files.length === 1 ? "file" : "files"}, removed 0 files\n`,
+      `proofbox: sent ${diff.send.length} ${diff.send.length === 1 ? "file" : "files"}, removed ${diff.remove.length} ${diff.remove.length === 1 ? "file" : "files"}\n`,
     );
   });
 
