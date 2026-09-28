@@ -134,7 +134,6 @@ export const makeDockerProvider = (options: {
     readonly maxLife: Duration.Duration;
   }) =>
     Effect.gen(function* () {
-      yield* client.serverArch;
       const version = yield* baseImageVersion(BASE_IMAGE_DIR, []);
       const tag = options.imageTag ?? baseImageTag(version);
       yield* ensureBaseImage(client, {
@@ -216,9 +215,13 @@ export const makeDockerProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
   }) =>
-    Effect.flatMap(Progress, (progress) =>
-      progress.step("creating docker Sandbox", createWork(req)),
-    );
+    Effect.gen(function* () {
+      // Prove the daemon answers before anything is made — and before the
+      // progress line prints, so a dead daemon reports only the error.
+      yield* client.serverArch;
+      const progress = yield* Progress;
+      return yield* progress.step("creating docker Sandbox", createWork(req));
+    });
 
   const connect = (name: string) =>
     Effect.gen(function* () {

@@ -59,6 +59,22 @@ describe("Provider registry", () => {
     expect(listed.stdout).toContain(created.stdout.trim());
   });
 
+  it("without PROOFBOX_FAKE_ROOT the Unknown Provider list names only docker", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "nope"],
+      { unset: ["PROOFBOX_FAKE_ROOT"] },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      'Unknown Provider "nope": use one of: docker\n',
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("without PROOFBOX_FAKE_ROOT list shows no fake Sandbox", async () => {
     // Given: a fake Sandbox on disk the CLI must not see
     const env = makeEnv();
