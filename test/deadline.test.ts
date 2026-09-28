@@ -109,18 +109,16 @@ describe("Deadline", () => {
     expect(linux).toBe(15);
   });
 
-  it("parseSpan reads s, m, and h", async () => {
-    // When / Then
-    expect(
-      Duration.toSeconds(await Effect.runPromise(parseSpan("idle", "90s"))),
-    ).toBe(90);
-    expect(
-      Duration.toSeconds(await Effect.runPromise(parseSpan("idle", "15m"))),
-    ).toBe(900);
-    expect(
-      Duration.toSeconds(await Effect.runPromise(parseSpan("max-life", "3h"))),
-    ).toBe(10800);
-  });
+  it.effect("parseSpan reads s, m, and h", () =>
+    Effect.gen(function* () {
+      // When / Then
+      expect(Duration.toSeconds(yield* parseSpan("idle", "90s"))).toBe(90);
+      expect(Duration.toSeconds(yield* parseSpan("idle", "15m"))).toBe(900);
+      expect(Duration.toSeconds(yield* parseSpan("max-life", "3h"))).toBe(
+        10800,
+      );
+    }),
+  );
 
   it.effect("create uses the Linux defaults", () =>
     Effect.gen(function* () {
