@@ -52,17 +52,16 @@ const step = (link: Link, what: string, commandLine: string) =>
     return result;
   });
 
-// The labels and the first Deadline, as the Docker Provider writes them for
-// a container, so `sandboxInfoFromLabels` reads both.
-export const writeMacState = (
-  link: Link,
-  req: {
-    readonly id: string;
-    readonly idle: Duration.Duration;
-    readonly maxLifeAt: Date;
-    readonly size: Size;
-  },
-) =>
+interface MacRequest {
+  readonly id: string;
+  readonly idle: Duration.Duration;
+  readonly maxLifeAt: Date;
+  readonly size: Size;
+}
+
+// The Sandbox as of the create call, so its first Deadline matches the
+// duration nsc was given.
+const macInfo = (req: MacRequest) =>
   Effect.gen(function* () {
     const createdAt = new Date(yield* Clock.currentTimeMillis);
     const deadline = Math.floor(
@@ -70,19 +69,6 @@ export const writeMacState = (
         createdAt.getTime() + Duration.toMillis(req.idle) + 60_000,
         req.maxLifeAt.getTime(),
       ) / 1000,
-    );
-    const labels = JSON.stringify({
-      "proofbox.name": req.id,
-      "proofbox.os": "macos",
-      "proofbox.created-at": createdAt.toISOString(),
-      "proofbox.idle-seconds": String(Duration.toSeconds(req.idle)),
-      "proofbox.max-life-at": req.maxLifeAt.toISOString(),
-      "proofbox.size": formatSize(req.size),
-    });
-    yield* step(
-      link,
-      "making the proofbox folders",
-      `sudo -n mkdir -p ${MAC_STATE_DIR} /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR} && printf '%s\\n' ${shellJoin([labels])} > ${LABELS} && printf '%s\\n' ${deadline} > ${DEADLINE}`,
     );
     return new SandboxInfo({
       name: req.id,
@@ -94,6 +80,33 @@ export const writeMacState = (
       size: req.size,
     });
   });
+
+const makeMacFolders = (link: Link) =>
+  step(
+    link,
+    "making the proofbox folders",
+    `sudo -n mkdir -p ${MAC_STATE_DIR} /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
+  );
+
+// The labels and the first Deadline, as the Docker Provider writes them for
+// a container, so `sandboxInfoFromLabels` reads both. Written last: until
+// they exist, `get` finds no Sandbox, so no command reaches a Mac that
+// still has its workload token.
+const writeMacState = (link: Link, req: MacRequest, info: SandboxInfo) => {
+  const labels = JSON.stringify({
+    "proofbox.name": info.name,
+    "proofbox.os": "macos",
+    "proofbox.created-at": info.createdAt.toISOString(),
+    "proofbox.idle-seconds": String(info.idleSeconds),
+    "proofbox.max-life-at": info.maxLifeAt.toISOString(),
+    "proofbox.size": formatSize(req.size),
+  });
+  return step(
+    link,
+    "saving the Sandbox state",
+    `printf '%s\\n' ${shellJoin([labels])} > ${LABELS} && printf '%s\\n' ${Math.floor(info.deadline.getTime() / 1000)} > ${DEADLINE}`,
+  );
+};
 
 // Sends a file of this repo to `remote` on the Mac, executable.
 const sendFile = (link: Link, local: string, remote: string) =>
@@ -319,13 +332,11 @@ const checkScreen = (link: Link, id: string) =>
   });
 
 // Everything a Mac needs before user code arrives, in order.
-export const prepareMac = (
-  link: Link,
-  req: Parameters<typeof writeMacState>[1],
-) =>
+export const prepareMac = (link: Link, req: MacRequest) =>
   Effect.gen(function* () {
     const progress = yield* Progress;
-    const info = yield* writeMacState(link, req);
+    const info = yield* macInfo(req);
+    yield* makeMacFolders(link);
     yield* progress.step(
       "installing the Tool bundle",
       installTools(link, req.id),
@@ -342,6 +353,7 @@ export const prepareMac = (
       "taking a test screenshot and capture",
       checkScreen(link, req.id),
     );
+    yield* writeMacState(link, req, info);
     return info;
   });
 

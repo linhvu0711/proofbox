@@ -307,6 +307,8 @@ describe("Namespace macOS Provider", () => {
       expect(at("test ! -e /var/run/nsc/token.json")).toBeLessThan(
         at("screencapture"),
       );
+      // The Mac is a Sandbox only once it is prepared.
+      expect(at("/tmp/proofbox-test.mov")).toBeLessThan(at("labels.json"));
     }).pipe(withRuntime(runtimeDir())),
   );
 
