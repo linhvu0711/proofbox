@@ -5,6 +5,7 @@ ARG FFMPEG_SHA256
 RUN mkdir -p /opt/proofbox/tools && curl -fsSL "$FFMPEG_URL" -o /tmp/ffmpeg.tar.xz && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp --wildcards --strip-components=2 '*/bin/ffmpeg' && install -m 0755 /tmp/ffmpeg /opt/proofbox/tools/ffmpeg && echo "$FFMPEG_SHA256  /opt/proofbox/tools/ffmpeg" | sha256sum -c - && rm /tmp/ffmpeg.tar.xz /tmp/ffmpeg
 RUN useradd --create-home --uid 1000 --shell /bin/bash app
 COPY --chmod=0755 init.sh /opt/proofbox/init.sh
+COPY --chmod=0755 pixel.sh /opt/proofbox/pixel
 ENV DISPLAY=:99
 ARG BASE_VERSION
 LABEL proofbox.base-version=$BASE_VERSION

@@ -4,6 +4,7 @@ import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { listSandboxes } from "./commands/list.ts";
+import { takeScreenshot } from "./commands/screenshot.ts";
 
 const create = Command.make(
   "create",
@@ -33,6 +34,15 @@ const exec = Command.make(
   ({ id, command }) => execInSandbox(id, command),
 );
 
+const screenshot = Command.make(
+  "screenshot",
+  {
+    id: Args.text({ name: "id" }),
+    out: Options.text("out"),
+  },
+  ({ id, out }) => takeScreenshot(id, out),
+);
+
 const list = Command.make(
   "list",
   { json: Options.boolean("json") },
@@ -46,7 +56,7 @@ const del = Command.make(
 );
 
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, list, del]),
+  Command.withSubcommands([create, exec, screenshot, list, del]),
 );
 
 export const cli = Command.run(command, {

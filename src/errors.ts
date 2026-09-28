@@ -52,6 +52,15 @@ export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   }
 }
 
+export class OutFileError extends Data.TaggedError("OutFileError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Could not write ${this.path}: ${this.reason}. Check the folder exists and try again.`;
+  }
+}
+
 export class BadSizeError extends Data.TaggedError("BadSizeError")<{
   readonly value: string;
 }> {

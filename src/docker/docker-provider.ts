@@ -323,7 +323,7 @@ export const makeDockerProvider = (options: {
 
   return {
     name: "docker",
-    capabilities: new Set(["os:linux"]),
+    capabilities: new Set(["os:linux", "desktop"]),
     sizes: "any",
     create,
     get,
