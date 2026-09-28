@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { rename, rm } from "node:fs/promises";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
@@ -215,6 +215,7 @@ export const makeNamespaceProvider = (deps: {
         Promise.all([
           rm(dir.key, { force: true }).catch(() => {}),
           rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
+          rm(dir.maxLife, { force: true }).catch(() => {}),
         ]).then(() => {}),
       );
       return "deleted" as const;
@@ -255,6 +256,7 @@ export const makeNamespaceProvider = (deps: {
             Promise.all([
               rm(hostPaths.key, { force: true }).catch(() => {}),
               rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
+              rm(hostPaths.maxLife, { force: true }).catch(() => {}),
             ]).then(() => {}),
           );
           yield* nsc.destroy(hostId).pipe(Effect.orElseSucceed(() => {}));
@@ -290,11 +292,6 @@ export const makeNamespaceProvider = (deps: {
               "proofbox.os": "linux",
               "proofbox.size": formatSize(size),
               "proofbox.create-token": createToken,
-              "proofbox.max-life-at": String(
-                Math.floor(
-                  (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
-                ),
-              ),
             },
             cidfile,
           })
@@ -321,23 +318,40 @@ export const makeNamespaceProvider = (deps: {
             ),
           );
         hostId = id;
-        // Provisioning can outlast the create duration (a cold image build):
-        // keep the host's own Deadline ahead until the Sandbox takes over.
-        yield* Effect.forkScoped(
-          Effect.repeat(
-            nsc.extend(id, durationSeconds).pipe(Effect.ignore),
-            Schedule.spaced(Duration.seconds(15)),
-          ),
-        );
         const hostPaths = yield* paths(id);
+        // Max life counts from the create call, so the Sandbox's
+        // maxLifeAt, the host-cap file the detached pushes read, and the
+        // provisioning keepalive all stop at the same instant.
+        const maxLifeSeconds = Math.floor(
+          (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
+        );
         yield* Effect.tryPromise({
           try: async () => {
             await rename(keyBase, hostPaths.key);
             await rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
+            await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
+              mode: 0o600,
+            });
           },
           catch: (cause) =>
             fail(`could not store the host key: ${describe(cause)}`),
         });
+        // Provisioning can outlast the create duration (a cold image build):
+        // keep the host's own Deadline ahead until the Sandbox takes over,
+        // but never past the Max life.
+        yield* Effect.forkScoped(
+          Effect.repeat(
+            Effect.gen(function* () {
+              const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
+              if (left > 0) {
+                yield* nsc
+                  .extend(id, Math.min(durationSeconds, left))
+                  .pipe(Effect.ignore);
+              }
+            }),
+            Schedule.spaced(Duration.seconds(15)),
+          ),
+        );
         const link = yield* deps.openLink(id, hostPaths, "cli");
         const tenant = yield* link.run(
           `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
@@ -362,6 +376,7 @@ export const makeNamespaceProvider = (deps: {
           ...req,
           size,
           name: id.slice(0, 6),
+          maxLifeAt: new Date(maxLifeSeconds * 1000),
         });
         // The Base image must hide the host's workload token from user code:
         // neither the token file nor the link-local token service may answer.

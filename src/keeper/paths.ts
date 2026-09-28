@@ -10,6 +10,7 @@ export interface KeeperPaths {
   readonly pid: string;
   readonly key: string;
   readonly control: string;
+  readonly maxLife: string;
 }
 
 export const keeperPaths = (id: {
@@ -47,5 +48,6 @@ export const keeperPaths = (id: {
       pid: join(dir, `${stem}.pid`),
       key: join(dir, `${stem}.key`),
       control: join(dir, `${stem}.ctl`),
+      maxLife: join(dir, `${stem}.max-life`),
     };
   });

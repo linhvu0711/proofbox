@@ -23,9 +23,6 @@ export const NscInstance = Schema.Struct({
   clusterId: Schema.propertySignature(Schema.String).pipe(
     Schema.fromKey("cluster_id"),
   ),
-  labels: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
 });
 export type NscInstance = typeof NscInstance.Type;
 

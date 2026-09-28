@@ -204,6 +204,7 @@ export const makeDockerProvider = (options: {
       readonly os: Os;
       readonly idle: Duration.Duration;
       readonly maxLife: Duration.Duration;
+      readonly maxLifeAt?: Date | undefined;
       readonly name?: string | undefined;
     },
     image: {
@@ -216,9 +217,9 @@ export const makeDockerProvider = (options: {
     Effect.gen(function* () {
       const { version, tag, bundle } = image;
       const createdAt = yield* now;
-      const maxLifeAt = new Date(
-        createdAt.getTime() + Duration.toMillis(req.maxLife),
-      );
+      const maxLifeAt =
+        req.maxLifeAt ??
+        new Date(createdAt.getTime() + Duration.toMillis(req.maxLife));
       const firstDeadline = new Date(
         Math.min(
           createdAt.getTime() + Duration.toMillis(req.idle) + 60_000,
