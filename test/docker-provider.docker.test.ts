@@ -112,6 +112,41 @@ describe("Docker Provider", () => {
     expect(uidPwd.stdout).toBe("1000\n/home/app\n");
   });
 
+  it("list shows the Base image version", async () => {
+    // Given: a created docker Sandbox and its image's version label
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const tag = (
+      await docker(["inspect", containerOf(id), "--format", "{{.Config.Image}}"])
+    ).trim();
+    const version = (
+      await docker([
+        "image",
+        "inspect",
+        tag,
+        "--format",
+        '{{index .Config.Labels "proofbox.base-version"}}',
+      ])
+    ).trim();
+    // When
+    const listed = await runCli(env, ["list"]);
+    const json = await runCli(env, ["list", "--json"]);
+    // Then
+    const row = listed.stdout
+      .split("\n")
+      .find((line) => line.startsWith(`${id} `) || line.startsWith(id));
+    expect(row).toMatch(
+      /^docker:[a-z0-9]{6}  linux  base [0-9a-f]{12}  deadline \S+  max life \S+$/,
+    );
+    expect(row).toContain(`base ${version}`);
+    const rows = JSON.parse(json.stdout) as ReadonlyArray<{
+      id: string;
+      base?: string;
+    }>;
+    expect(rows.find((entry) => entry.id === id)?.base).toBe(version);
+  });
+
   it("delete removes the container", async () => {
     // Given
     const env = makeEnv({ docker: true });

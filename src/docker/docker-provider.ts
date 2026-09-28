@@ -62,6 +62,7 @@ export const makeDockerProvider = (options: {
         idleSeconds: labels["proofbox.idle-seconds"],
         deadline: new Date(seconds * 1000),
         maxLifeAt: labels["proofbox.max-life-at"],
+        base: labels["proofbox.base-version"],
       });
     });
 

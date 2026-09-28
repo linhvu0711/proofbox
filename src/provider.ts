@@ -29,6 +29,7 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
+  base: Schema.optional(Schema.String),
 }) {}
 
 export type ExecEvent =
