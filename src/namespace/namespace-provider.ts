@@ -15,6 +15,7 @@ import {
 } from "../docker/docker-provider.ts";
 import {
   ProviderError,
+  ProviderLimitError,
   type ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
@@ -228,6 +229,7 @@ export const makeNamespaceProvider = (deps: {
       });
       // Whatever part of the make is left — key files, the host — leaves
       // nothing behind on a failed create.
+      const createToken = makeSandboxName();
       let hostId: string | undefined;
       const cleanup = Effect.gen(function* () {
         yield* Effect.promise(() =>
@@ -250,20 +252,43 @@ export const makeNamespaceProvider = (deps: {
       });
       return yield* Effect.gen(function* () {
         const progress = yield* Progress;
-        const id = yield* nsc.create({
-          machineType: `linux/amd64:${formatSize(size)}`,
-          durationSeconds: Math.min(
-            Duration.toSeconds(req.idle) + 60,
-            Duration.toSeconds(req.maxLife),
-          ),
-          sshKeyFile: `${keyBase}.pub`,
-          labels: {
-            "proofbox.os": "linux",
-            "proofbox.size": formatSize(size),
-            "proofbox.create-token": makeSandboxName(),
-          },
-          cidfile,
-        });
+        const id = yield* nsc
+          .create({
+            machineType: `linux/amd64:${formatSize(size)}`,
+            durationSeconds: Math.min(
+              Duration.toSeconds(req.idle) + 60,
+              Duration.toSeconds(req.maxLife),
+            ),
+            sshKeyFile: `${keyBase}.pub`,
+            labels: {
+              "proofbox.os": "linux",
+              "proofbox.size": formatSize(size),
+              "proofbox.create-token": createToken,
+            },
+            cidfile,
+          })
+          .pipe(
+            // A failed create can leave a half-made host (a timed-out nsc
+            // may have registered it). A limit makes nothing, so skip the
+            // sweep there.
+            Effect.tapError((error) =>
+              error instanceof ProviderLimitError
+                ? Effect.void
+                : Effect.gen(function* () {
+                    const left = yield* nsc
+                      .list({ "proofbox.create-token": createToken })
+                      .pipe(Effect.orElseSucceed(() => []));
+                    yield* Effect.forEach(
+                      left,
+                      (instance) =>
+                        nsc
+                          .destroy(instance.clusterId)
+                          .pipe(Effect.orElseSucceed(() => undefined)),
+                      { discard: true },
+                    );
+                  }),
+            ),
+          );
         hostId = id;
         const hostPaths = yield* paths(id);
         yield* Effect.tryPromise({

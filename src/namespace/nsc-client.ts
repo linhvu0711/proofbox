@@ -4,13 +4,16 @@ import {
   Config,
   Deferred,
   Effect,
+  Fiber,
   Ref,
   Schema,
   type Scope,
   Stream,
 } from "effect";
+import { parseSpan } from "../deadline.ts";
 import {
   ProviderError,
+  ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
 } from "../errors.ts";
@@ -47,7 +50,7 @@ export interface NscClient {
     readonly sshKeyFile: string;
     readonly labels: Readonly<Record<string, string>>;
     readonly cidfile: string;
-  }) => Effect.Effect<string, NscError>;
+  }) => Effect.Effect<string, NscError | ProviderLimitError>;
   readonly destroy: (id: string) => Effect.Effect<void, NscError>;
   readonly extend: (
     id: string,
@@ -166,6 +169,12 @@ export const makeNscClient = (
     }
   });
 
+  const createTimeout = Config.string("PROOFBOX_NS_CREATE_TIMEOUT").pipe(
+    Config.withDefault("60s"),
+  );
+
+  // nsc sometimes hangs mid-create; bound the wait, then interrupt it and
+  // clean up whatever it half-made.
   const create = (req: {
     readonly machineType: string;
     readonly durationSeconds: number;
@@ -174,24 +183,91 @@ export const makeNscClient = (
     readonly cidfile: string;
   }) =>
     Effect.gen(function* () {
-      const result = yield* capture([
-        "create",
-        "--bare",
-        "--machine_type",
-        req.machineType,
-        "--duration",
-        `${req.durationSeconds}s`,
-        "--ssh_key",
-        req.sshKeyFile,
-        ...Object.entries(req.labels).flatMap(([key, value]) => [
-          "--label",
-          `${key}=${value}`,
-        ]),
-        "--cidfile",
-        req.cidfile,
-        "-o",
-        "json",
-      ]);
+      const spanText = yield* createTimeout.pipe(
+        Effect.mapError((error) => fail(error.message)),
+      );
+      const span = yield* parseSpan(
+        "PROOFBOX_NS_CREATE_TIMEOUT",
+        spanText,
+      ).pipe(Effect.mapError((error) => fail(error.message)));
+      const bin = yield* nscBin.pipe(
+        Effect.mapError((error) => fail(error.message)),
+      );
+      const { timedOut, result } = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const process = yield* Command.start(
+            Command.make(
+              bin,
+              "create",
+              "--bare",
+              "--machine_type",
+              req.machineType,
+              "--duration",
+              `${req.durationSeconds}s`,
+              "--ssh_key",
+              req.sshKeyFile,
+              ...Object.entries(req.labels).flatMap(([key, value]) => [
+                "--label",
+                `${key}=${value}`,
+              ]),
+              "--cidfile",
+              req.cidfile,
+              "-o",
+              "json",
+            ),
+          ).pipe(
+            Effect.provideService(CommandExecutor.CommandExecutor, executor),
+            Effect.mapError((error) => spawnError(error)),
+          );
+          const outBytes = yield* Stream.runCollect(process.stdout).pipe(
+            Effect.forkScoped,
+          );
+          const errBytes = yield* Stream.runCollect(process.stderr).pipe(
+            Effect.forkScoped,
+          );
+          const finished = process.exitCode.pipe(Effect.orElseSucceed(() => 1));
+          const timedOut = yield* Effect.raceFirst(
+            finished.pipe(Effect.as(false)),
+            Effect.sleep(span).pipe(Effect.as(true)),
+          );
+          if (timedOut) {
+            yield* Effect.orElseSucceed(
+              process.kill("SIGINT"),
+              () => undefined,
+            );
+            yield* finished;
+          }
+          const [out, err, exitCode] = yield* Effect.all(
+            [Fiber.join(outBytes), Fiber.join(errBytes), finished],
+            { concurrency: "unbounded" },
+          ).pipe(Effect.mapError((error) => fail(describe(error))));
+          return {
+            timedOut,
+            result: {
+              exitCode,
+              stdout: toText(out),
+              stderr: toText(err),
+            } satisfies NscExecResult,
+          };
+        }),
+      );
+      // A refused create names the capacity it wanted; pull the clause that
+      // ends at the first `)` so the size is included.
+      const capacity = /ran out of capacity:[^)]*\)/.exec(
+        result.stderr.replace(/\s+/g, " "),
+      );
+      if (capacity !== null) {
+        return yield* new ProviderLimitError({
+          provider: "namespace",
+          limit: capacity[0],
+        });
+      }
+      if (timedOut) {
+        return yield* new ProviderUnavailableError({
+          provider: "namespace",
+          reason: `Namespace did not make the host in ${spanText.replace(/(\d)([a-z])/g, "$1 $2")}; deleted any half-made host. Try again`,
+        });
+      }
       if (result.exitCode !== 0) {
         return yield* mapExit("create", undefined, result);
       }

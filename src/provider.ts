@@ -9,6 +9,7 @@ import {
 } from "effect";
 import type {
   ProviderError,
+  ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
@@ -66,6 +67,7 @@ export interface Provider {
   }) => Effect.Effect<
     SandboxInfo,
     | ProviderError
+    | ProviderLimitError
     | ProviderUnavailableError
     | ToolBundleHashError
     | TokenExposedError,

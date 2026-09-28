@@ -1,6 +1,15 @@
 import { rm } from "node:fs/promises";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Chunk, Effect, Exit, Ref, Schedule, Scope, Stream } from "effect";
+import {
+  Chunk,
+  Data,
+  Effect,
+  Exit,
+  Ref,
+  Schedule,
+  Scope,
+  Stream,
+} from "effect";
 import {
   ProviderError,
   ProviderUnavailableError,
@@ -53,6 +62,15 @@ const linkLost = (detail: string) =>
     provider: "namespace",
     reason: `lost the link to the Namespace host: ${detail}`,
   });
+
+// Bring-up failures that mean "the host is not ready yet" — sshd still
+// coming up, a tunnel that dropped. Only these are retried; a missing ssh
+// or nsc, or not being logged in, fails at once. After the retries give up
+// it is mapped to the linkLost ProviderUnavailableError.
+class LinkDownError extends Data.TaggedError("LinkDownError")<{
+  readonly detail: string;
+}> {}
+const down = (detail: string) => new LinkDownError({ detail });
 
 export const makeOpenLink = (
   nsc: NscClient,
@@ -217,7 +235,7 @@ export const makeOpenLink = (
           const up = checkCtl(ctl).pipe(
             Effect.filterOrFail(
               (ok) => ok,
-              () => linkLost("ssh did not connect in 15 s"),
+              () => down("ssh did not connect in 15 s"),
             ),
           );
           yield* Effect.raceFirst(
@@ -229,9 +247,7 @@ export const makeOpenLink = (
               Effect.orElseSucceed(() => 255),
               Effect.zipRight(Ref.get(masterLog)),
               Effect.flatMap((text) =>
-                Effect.fail(
-                  linkLost(tail(text === "" ? "ssh exited" : text, 3)),
-                ),
+                Effect.fail(down(tail(text === "" ? "ssh exited" : text, 3))),
               ),
             ),
           );
@@ -249,11 +265,15 @@ export const makeOpenLink = (
         );
       });
       yield* Effect.retry(bringup, {
-        while: (error) => error instanceof ProviderUnavailableError,
+        while: (error) => error instanceof LinkDownError,
         schedule: Schedule.spaced("1 second").pipe(
           Schedule.upTo("120 seconds"),
         ),
-      });
+      }).pipe(
+        Effect.catchTag("LinkDownError", (error) =>
+          Effect.fail(linkLost(error.detail)),
+        ),
+      );
       return { ssh, run } satisfies Link;
     });
 };

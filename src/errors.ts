@@ -150,6 +150,18 @@ export class SizeNotOfferedError extends Data.TaggedError(
   }
 }
 
+export class ProviderLimitError extends Data.TaggedError("ProviderLimitError")<{
+  readonly provider: string;
+  readonly limit: string;
+}> {
+  get message() {
+    return `Namespace refused the Sandbox: ${this.limit}; nothing was created. Delete a Sandbox or use a smaller --size`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{

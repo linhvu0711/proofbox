@@ -49,6 +49,10 @@ export const cleanupEnvs = () => {
   }
 };
 
+export const registerTempDir = (dir: string): void => {
+  made.push(dir);
+};
+
 export const makeGitFolder = (options: {
   readonly committed: Record<string, string>;
   readonly untracked?: Record<string, string>;
