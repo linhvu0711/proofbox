@@ -27,8 +27,9 @@ settle() {
 # shot: write a full-size PNG of the screen to stdout.
 shot() {
   f=$(mktemp /tmp/proofbox-shot.XXXXXX)
-  /usr/sbin/screencapture -x -t png "$f" && cat "$f"
-  rc=$?
+  # `|| rc=$?` keeps set -e from leaving before the file is removed.
+  rc=0
+  { /usr/sbin/screencapture -x -t png "$f" && cat "$f"; } || rc=$?
   rm -f "$f"
   return "$rc"
 }
