@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
@@ -102,6 +103,149 @@ describe("Keeper", () => {
     expect(gone).toBe(true);
     expect(existsSync(join(env.runtime, `fake-${name}.sock`))).toBe(false);
     expect(existsSync(join(env.runtime, `fake-${name}.pid`))).toBe(false);
+  });
+
+  it("an exec that exits before its input ends does not break the Keeper", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const socketPath = join(env.runtime, `fake-${name}.sock`);
+    const socket = createConnection({ path: socketPath });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    // When: `true` exits at once while the Caller keeps writing input
+    socket.write(`${JSON.stringify({ exec: ["true"], stdin: true })}\n`);
+    await sleep(500);
+    let writeError: Error | undefined;
+    socket.on("error", (error) => {
+      writeError = error;
+    });
+    socket.write(
+      `${JSON.stringify({ in: Buffer.from("leftover").toString("base64") })}\n`,
+      (error) => {
+        writeError = error ?? writeError;
+      },
+    );
+    socket.write(`${JSON.stringify({ end: true })}\n`);
+    const replies: Array<unknown> = [];
+    await new Promise<void>((resolve) => {
+      let pending = "";
+      socket.on("data", (chunk) => {
+        pending += chunk.toString("utf8");
+        let newline = pending.indexOf("\n");
+        while (newline !== -1) {
+          replies.push(JSON.parse(pending.slice(0, newline)));
+          pending = pending.slice(newline + 1);
+          newline = pending.indexOf("\n");
+        }
+      });
+      socket.on("close", () => resolve());
+      socket.on("error", () => resolve());
+    });
+    // Then: the input frame landed (no EPIPE), the exit frame came back, and
+    // the Keeper still serves
+    await sleep(200);
+    expect(writeError).toBeUndefined();
+    expect(replies).toEqual([{ exit: 0 }]);
+    const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
+    expect(again.stdout).toBe("still\n");
+    expect(again.exitCode).toBe(0);
+  });
+
+  it("an exec that exits with a full input Mailbox still drains the client's writes", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const socketPath = join(env.runtime, `fake-${name}.sock`);
+    const socket = createConnection({ path: socketPath });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    // When: the command sleeps 0.2s; the Caller pushes more input than the
+    // Mailbox (16) and the process pipe can hold, so an offer is parked
+    // when the exec exits; then the end marker follows
+    socket.write(
+      `${JSON.stringify({ exec: ["sh", "-c", "sleep 0.2"], stdin: true })}\n`,
+    );
+    const chunk = Buffer.alloc(8192, 0x61).toString("base64");
+    for (let i = 0; i < 40; i++) {
+      socket.write(`${JSON.stringify({ in: chunk })}\n`);
+    }
+    socket.write(`${JSON.stringify({ end: true })}\n`);
+    // Then: the parked offer wakes, the end marker lands, the socket closes
+    const replies: Array<unknown> = [];
+    let closed = false;
+    let pending = "";
+    socket.on("data", (data) => {
+      pending += data.toString("utf8");
+      let newline = pending.indexOf("\n");
+      while (newline !== -1) {
+        replies.push(JSON.parse(pending.slice(0, newline)));
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf("\n");
+      }
+    });
+    socket.on("close", () => {
+      closed = true;
+    });
+    for (let i = 0; i < 40 && !closed; i++) {
+      await sleep(100);
+    }
+    // The one reply is the exit frame — or an EPIPE fail frame when the
+    // pipe fills before sleep exits. Either way the socket must close.
+    expect(closed).toBe(true);
+    expect(replies.length).toBe(1);
+    const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
+    expect(again.stdout).toBe("still\n");
+    expect(again.exitCode).toBe(0);
+  });
+
+  it("a client that disconnects mid-exec does not break the Keeper", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const socketPath = join(env.runtime, `fake-${name}.sock`);
+    // When: a client starts a long exec and disappears
+    const socket = createConnection({ path: socketPath });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    socket.write(`${JSON.stringify({ exec: ["sleep", "5"] })}\n`);
+    await sleep(300);
+    socket.destroy();
+    await sleep(300);
+    // Then: the Keeper still serves
+    const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
+    expect(again.stdout).toBe("still\n");
+    expect(again.exitCode).toBe(0);
   });
 
   it("the Keeper stops when its Deadline passes", async () => {

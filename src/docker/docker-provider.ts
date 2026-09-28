@@ -6,7 +6,12 @@ import {
   ToolBundleHashError,
 } from "../errors.ts";
 import { Progress } from "../progress.ts";
-import { Os, type Provider, SandboxInfo } from "../provider.ts";
+import {
+  type ExecOptions,
+  Os,
+  type Provider,
+  SandboxInfo,
+} from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, parseSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
@@ -304,8 +309,8 @@ export const makeDockerProvider = (options: {
       yield* get(name);
       const container = containerOf(name);
       return {
-        exec: (argv: ReadonlyArray<string>) =>
-          client.execStream(container, argv),
+        exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+          client.execStream(container, argv, options),
       };
     });
 
@@ -330,6 +335,7 @@ export const makeDockerProvider = (options: {
     list,
     delete: del,
     extend,
+    stateDir: () => "/var/lib/proofbox",
     connect,
     memoryKills,
   };
