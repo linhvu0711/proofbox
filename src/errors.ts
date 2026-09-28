@@ -64,6 +64,24 @@ export class WorkFolderTooBigError extends Data.TaggedError(
   }
 }
 
+export class SetupNeedsWorkError extends Data.TaggedError(
+  "SetupNeedsWorkError",
+)<Record<never, never>> {
+  get message() {
+    return "--setup needs --work <folder>: the Setup script runs in the Work folder. Nothing was created.";
+  }
+}
+
+export class SetupScriptMissingError extends Data.TaggedError(
+  "SetupScriptMissingError",
+)<{
+  readonly path: string;
+}> {
+  get message() {
+    return `Setup script ${this.path} not found. Nothing was created.`;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{

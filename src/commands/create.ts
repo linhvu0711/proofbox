@@ -1,16 +1,29 @@
+import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
-import { MissingCapabilityError, UnknownProviderError } from "../errors.ts";
+import {
+  MissingCapabilityError,
+  ProviderError,
+  SetupNeedsWorkError,
+  SetupScriptMissingError,
+  UnknownProviderError,
+} from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
+import { runSetupScript } from "../setup-script.ts";
+import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
+import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
 export const createSandbox = (options: {
   readonly os: Os;
   readonly provider: string;
   readonly idle?: string | undefined;
   readonly maxLife?: string | undefined;
+  readonly work?: string | undefined;
+  readonly setup?: string | undefined;
+  readonly maxSize?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
@@ -36,6 +49,35 @@ export const createSandbox = (options: {
       options.maxLife === undefined
         ? MAX_LIFE_DEFAULT
         : yield* parseSpan("max-life", options.maxLife);
+    const setupPath = options.setup;
+    if (setupPath !== undefined && options.work === undefined) {
+      return yield* new SetupNeedsWorkError();
+    }
+    const maxSize =
+      options.maxSize === undefined
+        ? undefined
+        : yield* parseMaxSize(options.maxSize);
+    const script =
+      setupPath === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => readFile(setupPath),
+            catch: (cause) =>
+              typeof cause === "object" &&
+              cause !== null &&
+              "code" in cause &&
+              cause.code === "ENOENT"
+                ? new SetupScriptMissingError({ path: setupPath })
+                : new ProviderError({
+                    provider: "local",
+                    reason:
+                      cause instanceof Error ? cause.message : String(cause),
+                  }),
+          });
+    const files =
+      options.work === undefined
+        ? undefined
+        : yield* readWorkFolder(options.work, maxSize ?? MAX_SIZE_DEFAULT);
     const info = yield* provider.create({
       os: options.os,
       idle,
@@ -54,5 +96,11 @@ export const createSandbox = (options: {
           ),
         ),
       );
+    if (options.work !== undefined && files !== undefined) {
+      yield* sendWorkFolder(id, options.work, files);
+    }
+    if (script !== undefined) {
+      yield* runSetupScript(id, script);
+    }
     yield* output.out(`${id}\n`);
-  });
+  }).pipe(Effect.scoped);

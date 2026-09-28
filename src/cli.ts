@@ -14,13 +14,19 @@ const create = Command.make(
     provider: Options.text("provider"),
     idle: Options.text("idle").pipe(Options.optional),
     maxLife: Options.text("max-life").pipe(Options.optional),
+    work: Options.text("work").pipe(Options.optional),
+    setup: Options.text("setup").pipe(Options.optional),
+    maxSize: Options.text("max-size").pipe(Options.optional),
   },
-  ({ os, provider, idle, maxLife }) =>
+  ({ os, provider, idle, maxLife, work, setup, maxSize }) =>
     createSandbox({
       os,
       provider,
       idle: Option.getOrUndefined(idle),
       maxLife: Option.getOrUndefined(maxLife),
+      work: Option.getOrUndefined(work),
+      setup: Option.getOrUndefined(setup),
+      maxSize: Option.getOrUndefined(maxSize),
     }),
 );
 

@@ -1,0 +1,89 @@
+import { posix } from "node:path";
+import { Effect, Stream } from "effect";
+import { withDeadlinePush } from "./deadline.ts";
+import { UploadFailedError } from "./errors.ts";
+import { KeeperClient } from "./keeper/keeper-client.ts";
+import { Progress } from "./progress.ts";
+import { Providers } from "./provider.ts";
+import { parseSandboxId } from "./sandbox-id.ts";
+
+const KEEP_LINES = 50;
+
+export const runSetupScript = (rawId: string, script: Uint8Array) =>
+  Effect.gen(function* () {
+    const providers = yield* Providers;
+    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
+    const provider = providers.get(id.provider);
+    if (provider === undefined) {
+      return yield* Effect.die(
+        new Error(`Provider ${id.provider} passed parsing but is unknown`),
+      );
+    }
+    const info = yield* provider.get(id.name);
+    const progress = yield* Progress;
+    const keeper = yield* KeeperClient;
+    const setupPath = posix.join(provider.stateDir(id.name), "setup");
+    yield* progress.step(
+      "running Setup script",
+      withDeadlinePush(
+        provider,
+        id.name,
+        info,
+      )(
+        Effect.gen(function* () {
+          const written = yield* keeper.exec(
+            rawId,
+            ["sh", "-c", 'cat > "$1" && chmod 700 "$1"', "sh", setupPath],
+            { stdin: Stream.make(script) },
+          );
+          let writeCode = 0;
+          yield* written.pipe(
+            Stream.runForEach((event) =>
+              event._tag === "Exit"
+                ? Effect.sync(() => {
+                    writeCode = event.code;
+                  })
+                : Effect.void,
+            ),
+          );
+          if (writeCode !== 0) {
+            return yield* new UploadFailedError({
+              id: rawId,
+              command: "sh",
+              code: writeCode,
+            });
+          }
+          const lines: Array<string> = [];
+          let pending = "";
+          const keep = (chunk: Uint8Array) => {
+            pending += Buffer.from(chunk).toString("utf8");
+            let newline = pending.indexOf("\n");
+            while (newline !== -1) {
+              lines.push(pending.slice(0, newline + 1));
+              if (lines.length > KEEP_LINES) {
+                lines.shift();
+              }
+              pending = pending.slice(newline + 1);
+              newline = pending.indexOf("\n");
+            }
+          };
+          const ran = yield* keeper.exec(rawId, [setupPath]);
+          let code = 0;
+          yield* ran.pipe(
+            Stream.runForEach((event) => {
+              switch (event._tag) {
+                case "Stdout":
+                case "Stderr":
+                  return Effect.sync(() => keep(event.bytes));
+                case "Exit":
+                  return Effect.sync(() => {
+                    code = event.code;
+                  });
+              }
+            }),
+          );
+          return { code, lines, pending } as const;
+        }),
+      ),
+    );
+  });
