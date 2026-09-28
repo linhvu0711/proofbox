@@ -201,6 +201,8 @@ export const makeDockerProvider = (options: {
           containerOf(candidate),
           "--shm-size",
           "512m",
+          "--tmpfs",
+          "/run/proofbox/secrets:mode=0700,uid=1000,gid=1000,size=1m",
           "--label",
           `proofbox.name=${candidate}`,
           "--label",
@@ -336,6 +338,7 @@ export const makeDockerProvider = (options: {
     delete: del,
     extend,
     stateDir: () => "/var/lib/proofbox",
+    secretsDir: () => "/run/proofbox/secrets",
     connect,
     memoryKills,
   };

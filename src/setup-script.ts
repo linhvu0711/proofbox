@@ -6,6 +6,7 @@ import { SetupScriptFailedError, UploadFailedError } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
+import { writeSandboxFile } from "./sandbox-file.ts";
 import { parseSandboxId } from "./sandbox-id.ts";
 
 const KEEP_LINES = 50;
@@ -32,27 +33,9 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
         info,
       )(
         Effect.gen(function* () {
-          const written = yield* keeper.exec(
-            rawId,
-            [
-              "sh",
-              "-c",
-              'umask 077; cat > "$1" && chmod 700 "$1"',
-              "sh",
-              setupPath,
-            ],
-            { stdin: Stream.make(script) },
-          );
-          let writeCode = 0;
-          yield* written.pipe(
-            Stream.runForEach((event) =>
-              event._tag === "Exit"
-                ? Effect.sync(() => {
-                    writeCode = event.code;
-                  })
-                : Effect.void,
-            ),
-          );
+          const writeCode = yield* writeSandboxFile(rawId, setupPath, script, {
+            executable: true,
+          });
           if (writeCode !== 0) {
             return yield* new UploadFailedError({
               id: rawId,

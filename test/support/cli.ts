@@ -44,6 +44,10 @@ export const cleanupEnvs = () => {
   }
 };
 
+export const trackTempDir = (dir: string): void => {
+  made.push(dir);
+};
+
 export const makeGitFolder = (options: {
   readonly committed: Record<string, string>;
   readonly untracked?: Record<string, string>;
@@ -102,7 +106,9 @@ export const runCli = (
     }
     execFile(
       process.execPath,
-      ["--disable-warning=ExperimentalWarning", "src/main.ts", ...args],
+      // `--` ends Node's own flag scan; without it Node treats a
+      // `--env-file` meant for the CLI as its own (nodejs/node#54232).
+      ["--disable-warning=ExperimentalWarning", "--", "src/main.ts", ...args],
       {
         cwd: repoRoot,
         env: childEnv,

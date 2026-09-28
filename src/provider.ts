@@ -86,6 +86,7 @@ export interface Provider {
     ProviderError | ProviderUnavailableError
   >;
   readonly stateDir: (name: string) => string;
+  readonly secretsDir: (name: string) => string;
   readonly connect: (
     name: string,
   ) => Effect.Effect<

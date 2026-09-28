@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
@@ -26,6 +33,7 @@ import {
   makeEnv,
   makeGitFolder,
   runCli,
+  trackTempDir,
 } from "./support/cli.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
@@ -472,5 +480,57 @@ describe("Docker Provider", () => {
         30_000,
       ),
     ).toBe(true);
+  });
+
+  it("the Secrets live only in a tmpfs, and docker commit holds none", {
+    timeout: 300_000,
+  }, async () => {
+    // Given: a docker Sandbox created with an env file
+    const env = makeEnv({ docker: true });
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    trackTempDir(dir);
+    const path = join(dir, "app.env");
+    writeFileSync(path, "API_TOKEN=tok-5f2a9c\n");
+    chmodSync(path, 0o600);
+    const created = await create(env, ["--env-file", path]);
+    const id = created.stdout.trim();
+    const name = id.slice("docker:".length);
+    const tag = `proofbox-test-commit:${name}`;
+    try {
+      // When
+      const mount = await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "sh",
+        "-c",
+        "stat -c %a /run/proofbox/secrets; stat -f -c %T /run/proofbox/secrets",
+      ]);
+      const seen = await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "printenv",
+        "API_TOKEN",
+      ]);
+      await docker(["commit", containerOf(id), tag]);
+      const found = await docker([
+        "run",
+        "--rm",
+        "--entrypoint",
+        "sh",
+        tag,
+        "-c",
+        "if grep -rqsF tok-5f2a9c / --exclude-dir=proc --exclude-dir=sys --exclude-dir=dev; then echo found; else echo clean; fi; ls -A /run/proofbox/secrets",
+      ]);
+      const inspected = await docker(["image", "inspect", tag]);
+      // Then
+      expect(mount.stdout).toBe("700\ntmpfs\n");
+      expect(seen.stdout).toBe("tok-5f2a9c\n");
+      expect(found).toBe("clean\n");
+      expect(inspected).not.toContain("tok-5f2a9c");
+    } finally {
+      await docker(["image", "rm", tag]).catch(() => {});
+    }
   });
 });

@@ -97,6 +97,17 @@ export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
   }
 }
 
+export class SecretsSendFailedError extends Data.TaggedError(
+  "SecretsSendFailedError",
+)<{
+  readonly id: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Sending Secrets to ${this.id} failed: sh exited ${this.code}. This Sandbox was deleted; create again.`;
+  }
+}
+
 export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
   readonly value: string;
 }> {
@@ -139,6 +150,26 @@ export class SetupScriptMissingError extends Data.TaggedError(
 }> {
   get message() {
     return `Setup script ${this.path} not found. Nothing was created.`;
+  }
+}
+
+export class EnvFileUnreadableError extends Data.TaggedError(
+  "EnvFileUnreadableError",
+)<{
+  readonly path: string;
+  readonly reason: "not found" | "is not readable" | "is a folder";
+}> {
+  get message() {
+    return `Env file ${this.path} ${this.reason}. Nothing was created.`;
+  }
+}
+
+export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
+  readonly path: string;
+  readonly line: number;
+}> {
+  get message() {
+    return `Env file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
   }
 }
 
