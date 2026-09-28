@@ -30,6 +30,9 @@ cmd=${1:-}
 [ $# -gt 0 ] && shift
 case "$cmd" in
   start)
+    if [ -L "$CUR" ]; then
+      exit 4
+    fi
     n=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)
     DIR=$ROOT/$((n + 1))
     mkdir -p "$DIR"
@@ -49,6 +52,9 @@ case "$cmd" in
     exit 1
     ;;
   stop)
+    if [ ! -L "$CUR" ]; then
+      exit 5
+    fi
     DIR=$(readlink "$CUR")
     steps=$(cat "$DIR/steps" 2>/dev/null || echo 0)
     if [ "$steps" -ge 1 ]; then
@@ -67,6 +73,9 @@ case "$cmd" in
   mark)
     # mark LABEL: save the closing shot of the step now ending, then start
     # a new numbered step with its caption text.
+    if [ ! -L "$CUR" ]; then
+      exit 5
+    fi
     DIR=$(readlink "$CUR")
     n=$(cat "$DIR/steps" 2>/dev/null || echo 0)
     if [ "$n" -ge 1 ]; then

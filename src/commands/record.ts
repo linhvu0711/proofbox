@@ -1,6 +1,11 @@
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { ProviderError, StopFlagsError } from "../errors.ts";
+import {
+  NoRecordingError,
+  ProviderError,
+  RecordingRunningError,
+  StopFlagsError,
+} from "../errors.ts";
 import { runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
@@ -29,6 +34,9 @@ export const startRecording = (id: string) =>
     const started = yield* runHelper(id, RECORD_HELPER, ["start"], {
       outcome: "no Recording was started",
     });
+    if (started.code === 4) {
+      return yield* new RecordingRunningError({ id });
+    }
     if (started.code !== 0) {
       return yield* new ProviderError({
         provider: started.provider,
@@ -62,6 +70,9 @@ export const stopRecording = (options: {
     const stopped = yield* runHelper(options.id, RECORD_HELPER, ["stop"], {
       outcome: "no Recording was stopped",
     });
+    if (stopped.code === 5) {
+      return yield* new NoRecordingError({ id: options.id });
+    }
     if (stopped.code !== 0) {
       return yield* helperFailed(stopped);
     }

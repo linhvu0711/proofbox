@@ -142,6 +142,24 @@ export class ProofTooBigError extends Data.TaggedError("ProofTooBigError")<{
   }
 }
 
+export class RecordingRunningError extends Data.TaggedError(
+  "RecordingRunningError",
+)<{
+  readonly id: string;
+}> {
+  get message() {
+    return `A Recording is already running on ${this.id}; run record stop first`;
+  }
+}
+
+export class NoRecordingError extends Data.TaggedError("NoRecordingError")<{
+  readonly id: string;
+}> {
+  get message() {
+    return `No Recording is running on ${this.id}; run record start first`;
+  }
+}
+
 export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
   readonly both: boolean;
 }> {

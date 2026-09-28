@@ -321,4 +321,56 @@ describe("Recording and the Proof video", () => {
     ]);
     expect(log.stdout).toContain('"kind":"click"');
   });
+
+  it("record start twice is refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    // When
+    const result = await runCli(env, ["record", "start", id]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `A Recording is already running on ${id}; run record stop first\n`,
+    );
+  });
+
+  it("record stop with no Recording is refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "p.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `No Recording is running on ${id}; run record start first\n`,
+    );
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("mark with no Recording is refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["mark", id, "step 1"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `No Recording is running on ${id}; run record start first\n`,
+    );
+  });
 });
