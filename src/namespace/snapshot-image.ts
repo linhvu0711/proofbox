@@ -26,10 +26,13 @@ export const pullSnapshot = (link: Link, tag: string) =>
     return yield* fail(`docker pull failed: ${result.stderr.trim()}`);
   });
 
+// No pause: a paused container fails every `docker exec`, and the Keeper
+// reads that as a broken Sandbox and closes the link this push runs on.
+// The Setup script has ended by now, so nothing is mid-write.
 export const pushSnapshot = (link: Link, container: string, tag: string) =>
   Effect.gen(function* () {
     const result = yield* link.run(
-      `docker commit ${container} ${tag} && docker push ${tag}`,
+      `docker commit --pause=false ${container} ${tag} && docker push ${tag}`,
     );
     if (result.exitCode !== 0) {
       return yield* fail(`docker push failed: ${result.stderr.trim()}`);

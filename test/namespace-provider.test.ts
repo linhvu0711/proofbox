@@ -434,7 +434,7 @@ describe("Namespace Provider", () => {
           ),
         }).toEqual({
           pushed: [
-            "docker commit proofbox-abc123 nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e && docker push nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
+            "docker commit --pause=false proofbox-abc123 nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e && docker push nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
           ],
           expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
         });
