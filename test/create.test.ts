@@ -380,4 +380,48 @@ describe("create", () => {
       "tok-later|postgres://app:pw@db:5432/app|hi there|abc#def|it's|",
     );
   });
+
+  it("an env line with no = fails create with its line number", async () => {
+    // Given: an env file whose second line is not NAME=VALUE
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\nnot a line\n");
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 2 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("an env line with a bad name fails create without its value", async () => {
+    // Given: an env file whose third line has a name that is not a valid name
+    const env = makeEnv();
+    const path = envFile("# first\nAPI_TOKEN=tok-5f2a9c\n1BAD=tok-9d3e71\n");
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+    );
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
 });

@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import { posix } from "node:path";
 import { Effect, Redacted } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
-import { ProviderError, SecretsSendFailedError } from "./errors.ts";
+import {
+  EnvFileLineError,
+  ProviderError,
+  SecretsSendFailedError,
+} from "./errors.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { writeSandboxFile } from "./sandbox-file.ts";
@@ -14,40 +18,45 @@ export interface Secret {
   readonly value: Redacted.Redacted<string>;
 }
 
-export const parseEnvFile = (
-  _path: string,
-  text: string,
-): ReadonlyArray<Secret> => {
-  const secrets: Array<Secret> = [];
-  for (const raw of text.split("\n")) {
-    let line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-    if (line.trim() === "" || line.trimStart().startsWith("#")) {
-      continue;
+const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export const parseEnvFile = (path: string, text: string) =>
+  Effect.gen(function* () {
+    const secrets: Array<Secret> = [];
+    let lineNumber = 0;
+    for (const raw of text.split("\n")) {
+      lineNumber += 1;
+      let line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      if (line.trim() === "" || line.trimStart().startsWith("#")) {
+        continue;
+      }
+      if (line.startsWith("export ")) {
+        line = line.slice("export".length).trimStart();
+      }
+      const at = line.indexOf("=");
+      const name = line.slice(0, at).trim();
+      if (at === -1 || !NAME.test(name)) {
+        return yield* new EnvFileLineError({ path, line: lineNumber });
+      }
+      let value = line.slice(at + 1).trim();
+      const quote = value.at(0);
+      if (
+        value.length >= 2 &&
+        (quote === '"' || quote === "'") &&
+        value.endsWith(quote)
+      ) {
+        value = value.slice(1, -1);
+      }
+      const secret: Secret = { name, value: Redacted.make(value) };
+      const existing = secrets.findIndex((known) => known.name === name);
+      if (existing === -1) {
+        secrets.push(secret);
+      } else {
+        secrets[existing] = secret;
+      }
     }
-    if (line.startsWith("export ")) {
-      line = line.slice("export".length).trimStart();
-    }
-    const at = line.indexOf("=");
-    const name = line.slice(0, at).trim();
-    let value = line.slice(at + 1).trim();
-    const quote = value.at(0);
-    if (
-      value.length >= 2 &&
-      (quote === '"' || quote === "'") &&
-      value.endsWith(quote)
-    ) {
-      value = value.slice(1, -1);
-    }
-    const secret: Secret = { name, value: Redacted.make(value) };
-    const existing = secrets.findIndex((known) => known.name === name);
-    if (existing === -1) {
-      secrets.push(secret);
-    } else {
-      secrets[existing] = secret;
-    }
-  }
-  return secrets;
-};
+    return secrets;
+  });
 
 export const readEnvFile = (path: string) =>
   Effect.gen(function* () {
@@ -59,7 +68,7 @@ export const readEnvFile = (path: string) =>
           reason: cause instanceof Error ? cause.message : String(cause),
         }),
     });
-    return parseEnvFile(path, text);
+    return yield* parseEnvFile(path, text);
   });
 
 export const sendSecrets = (rawId: string, secrets: ReadonlyArray<Secret>) =>

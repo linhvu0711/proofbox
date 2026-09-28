@@ -153,6 +153,15 @@ export class SetupScriptMissingError extends Data.TaggedError(
   }
 }
 
+export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
+  readonly path: string;
+  readonly line: number;
+}> {
+  get message() {
+    return `Env file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{
