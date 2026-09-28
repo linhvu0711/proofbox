@@ -55,6 +55,9 @@ export const makeFakeProvider = (options: {
 
   const readFileInfo = (name: string) =>
     Effect.gen(function* () {
+      if (!/^[a-z0-9]{6}$/.test(name)) {
+        return yield* gone(name);
+      }
       const dir = join(root, name);
       const text = yield* Effect.tryPromise({
         try: () => readFile(join(dir, "sandbox.json"), "utf8"),
@@ -105,6 +108,10 @@ export const makeFakeProvider = (options: {
     readonly maxLife: Duration.Duration;
   }) =>
     Effect.gen(function* () {
+      yield* Effect.tryPromise({
+        try: () => mkdir(root, { recursive: true }),
+        catch: (cause) => fail(describe(cause)),
+      });
       let name: string | undefined;
       for (let i = 0; i < 5 && name === undefined; i++) {
         const candidate = makeName();

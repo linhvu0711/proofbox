@@ -14,7 +14,7 @@ import { Progress } from "./progress.ts";
 const dispatch = (argv: ReadonlyArray<string>) => {
   if (argv[2] === "exec") {
     const separator = argv.indexOf("--", 3);
-    if (separator > 3) {
+    if (separator > 3 && separator < argv.length - 1) {
       return execInSandbox(argv[3] as string, argv.slice(separator + 1));
     }
   }

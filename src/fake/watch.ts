@@ -19,6 +19,12 @@ export const watchSandbox = (root: string, name: string): Effect.Effect<void> =>
     }
     const deadline = yield* readDeadline(root, name).pipe(Effect.option);
     if (deadline._tag === "None") {
+      // A concurrent extend can leave a partially written sandbox.json; retry
+      // instead of stopping the watcher.
+      if (existsSync(join(root, name))) {
+        yield* Effect.sleep("1 seconds");
+        return yield* watchSandbox(root, name);
+      }
       return;
     }
     const remaining = deadline.value.getTime() - Date.now();

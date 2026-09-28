@@ -18,14 +18,15 @@ export const parseSpan = (
     return Effect.fail(new BadSpanError({ flag, value }));
   }
   const count = Number(match[1]);
-  switch (match[2]) {
-    case "s":
-      return Effect.succeed(Duration.seconds(count));
-    case "m":
-      return Effect.succeed(Duration.minutes(count));
-    default:
-      return Effect.succeed(Duration.hours(count));
+  const unit = match[2] === "s" ? 1_000 : match[2] === "m" ? 60_000 : 3_600_000;
+  const millis = count * unit;
+  if (
+    !Number.isFinite(millis) ||
+    Number.isNaN(new Date(Date.now() + millis).getTime())
+  ) {
+    return Effect.fail(new BadSpanError({ flag, value }));
   }
+  return Effect.succeed(Duration.millis(millis));
 };
 
 export const nextDeadline = (options: {

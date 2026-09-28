@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
+import { promisify } from "node:util";
 import { Effect, Layer, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { ProviderError } from "../errors.ts";
@@ -113,7 +115,13 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               socket.once("close", () => {
                 if (!done) {
                   done = true;
-                  emit.end();
+                  emit.fail(
+                    new ProviderError({
+                      provider,
+                      reason:
+                        "Keeper closed the connection before the command exited",
+                    }),
+                  );
                 }
               });
               socket.once("error", (error) => {
@@ -189,13 +197,22 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         );
         const pid = Number.parseInt(pidText.trim(), 10);
         if (Number.isFinite(pid)) {
-          yield* Effect.sync(() => {
-            try {
-              process.kill(pid, "SIGTERM");
-            } catch {
-              // ESRCH and friends: Keeper already gone
-            }
-          });
+          // A stale pid file can name a reused, unrelated pid; only signal a
+          // process that still runs keeper-main.
+          const isKeeper = yield* Effect.promise(() =>
+            promisify(execFile)("ps", ["-p", String(pid), "-o", "command="])
+              .then(({ stdout }) => stdout.includes("keeper-main"))
+              .catch(() => false),
+          );
+          if (isKeeper) {
+            yield* Effect.sync(() => {
+              try {
+                process.kill(pid, "SIGTERM");
+              } catch {
+                // ESRCH and friends: Keeper already gone
+              }
+            });
+          }
         }
         yield* Effect.promise(() =>
           Promise.all([

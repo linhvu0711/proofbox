@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, Effect } from "effect";
@@ -26,7 +26,12 @@ export const keeperPaths = (id: {
       ),
     );
     yield* Effect.tryPromise({
-      try: () => mkdir(dir, { recursive: true, mode: 0o700 }),
+      try: async () => {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        // mkdir's mode only applies to a new dir; the socket must stay
+        // unreachable by other local users even for a preexisting dir.
+        await chmod(dir, 0o700);
+      },
       catch: (cause) =>
         new ProviderError({
           provider: id.provider,
