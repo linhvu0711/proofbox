@@ -11,6 +11,7 @@ import { Progress } from "../progress.ts";
 import {
   type Connection,
   type ExecEvent,
+  IdleSeconds,
   Os,
   type Provider,
   Providers,
@@ -29,7 +30,7 @@ const makeName = () =>
 export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
-  idleSeconds: Schema.Number,
+  idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
 }) {}
@@ -108,6 +109,15 @@ export const makeFakeProvider = (options: {
     readonly maxLife: Duration.Duration;
   }) =>
     Effect.gen(function* () {
+      const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
+        Duration.toSeconds(req.idle),
+      ).pipe(
+        Effect.mapError(() =>
+          fail(
+            `idle must be a whole number of seconds above 0, got ${Duration.format(req.idle)}`,
+          ),
+        ),
+      );
       yield* Effect.tryPromise({
         try: () => mkdir(root, { recursive: true }),
         catch: (cause) => fail(describe(cause)),
@@ -141,7 +151,7 @@ export const makeFakeProvider = (options: {
       const file = new SandboxFile({
         os: req.os,
         createdAt,
-        idleSeconds: Duration.toSeconds(req.idle),
+        idleSeconds,
         deadline: nextDeadline({
           now: createdAt,
           idle: req.idle,

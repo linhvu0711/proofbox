@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
-const writeFakeSandbox = (root: string, name: string) => {
+const writeFakeSandbox = (root: string, name: string, idleSeconds = 900) => {
   mkdirSync(join(root, name, "home"), { recursive: true });
   writeFileSync(
     join(root, name, "sandbox.json"),
     `${JSON.stringify({
       os: "linux",
-      idleSeconds: 900,
+      idleSeconds,
       createdAt: "2999-01-01T00:00:00.000Z",
       deadline: "2999-01-01T00:15:00.000Z",
       maxLifeAt: "2999-01-01T03:00:00.000Z",
@@ -31,6 +31,20 @@ describe("list", () => {
       "fake:qqqqqq  linux  deadline 2999-01-01T00:15:00Z  max life 2999-01-01T03:00:00Z\n",
     );
     expect(result.exitCode).toBe(0);
+  });
+
+  it("list refuses a Sandbox whose idle time is not a whole number of seconds", async () => {
+    // Given: hand-written Sandboxes with a negative and a fractional idle time
+    for (const idle of [-3, 1.5]) {
+      const env = makeEnv();
+      writeFakeSandbox(env.root, "qqqqqq", idle);
+      // When
+      const result = await runCli(env, ["list"]);
+      // Then
+      expect(result.stderr).toContain('["idleSeconds"]');
+      expect(result.stdout).toBe("");
+      expect(result.exitCode).toBe(125);
+    }
   });
 
   it("list --json gives id, os, deadline, and maxLife", async () => {
