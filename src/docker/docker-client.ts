@@ -305,8 +305,14 @@ export const makeDockerClient = (
         const exit = Stream.fromEffect(
           process.exitCode.pipe(
             Effect.mapError((error) => fail(describe(error))),
+            Effect.flatMap((code) =>
+              remote !== undefined && code === 255
+                ? Effect.fail(linkLost("the ssh link dropped mid-command"))
+                : Effect.succeed(code),
+            ),
+            Effect.map((code): ExecEvent => ({ _tag: "Exit", code })),
           ),
-        ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
+        );
         return Stream.concat(events, exit);
       }),
     );
