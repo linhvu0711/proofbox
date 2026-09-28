@@ -12,7 +12,7 @@ const create = Command.make(
   "create",
   {
     os: Options.choice("os", ["linux", "macos"]),
-    provider: Options.text("provider"),
+    provider: Options.text("provider").pipe(Options.optional),
     idle: Options.text("idle").pipe(Options.optional),
     maxLife: Options.text("max-life").pipe(Options.optional),
     work: Options.text("work").pipe(Options.optional),
@@ -23,7 +23,7 @@ const create = Command.make(
   ({ os, provider, idle, maxLife, work, setup, maxSize, size }) =>
     createSandbox({
       os,
-      provider,
+      provider: Option.getOrUndefined(provider),
       idle: Option.getOrUndefined(idle),
       maxLife: Option.getOrUndefined(maxLife),
       work: Option.getOrUndefined(work),

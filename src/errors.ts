@@ -174,6 +174,15 @@ export class MissingCapabilityError extends Data.TaggedError(
   }
 }
 
+export class BadConfigError extends Data.TaggedError("BadConfigError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Bad config ${this.path}: ${this.reason}; use JSON like {"linux": "docker", "macos": "namespace"}`;
+  }
+}
+
 export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
