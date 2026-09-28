@@ -35,6 +35,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   size: Schema.optional(Size),
+  snapshot: Schema.optional(Schema.String),
 }) {}
 
 export const describe = (cause: unknown) =>
@@ -92,6 +93,7 @@ export const makeFakeProvider = (options: {
         deadline: file.deadline,
         maxLifeAt: file.maxLifeAt,
         size: file.size,
+        snapshot: file.snapshot,
       });
       const current = yield* now;
       if (info.deadline.getTime() <= current.getTime()) {
@@ -133,6 +135,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -174,6 +177,14 @@ export const makeFakeProvider = (options: {
       const maxLifeAt = new Date(
         createdAt.getTime() + Duration.toMillis(req.maxLife),
       );
+      // A missing Snapshot is not an error: the Sandbox starts empty and
+      // the Setup script runs.
+      const saved =
+        req.snapshot === undefined || options.snapshots === undefined
+          ? undefined
+          : join(options.snapshots.root, req.snapshot);
+      const entry =
+        saved !== undefined && existsSync(saved) ? saved : undefined;
       const file = new SandboxFile({
         os: req.os,
         createdAt,
@@ -185,6 +196,7 @@ export const makeFakeProvider = (options: {
         }),
         maxLifeAt,
         size: req.size,
+        snapshot: entry === undefined ? undefined : req.snapshot,
       });
       yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
@@ -195,6 +207,19 @@ export const makeFakeProvider = (options: {
         },
         catch: (cause) => fail(describe(cause)),
       });
+      if (entry !== undefined) {
+        yield* Effect.tryPromise({
+          try: async () => {
+            await cp(join(entry, "home"), join(dir, "home"), {
+              recursive: true,
+            });
+            await cp(join(entry, "state"), join(dir, "state"), {
+              recursive: true,
+            });
+          },
+          catch: (cause) => fail(describe(cause)),
+        });
+      }
       if (options.watch === "process") {
         yield* spawnDetached("fake", "fake/watch-main", [root, name]);
       }
@@ -206,6 +231,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),
@@ -262,6 +288,7 @@ export const makeFakeProvider = (options: {
         deadline,
         maxLifeAt: info.maxLifeAt,
         size: info.size,
+        snapshot: info.snapshot,
       });
       yield* writeFileInfo(name, file);
     });

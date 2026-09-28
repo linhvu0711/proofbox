@@ -129,6 +129,9 @@ export const createSandbox = (options: {
       size,
       snapshot: fp,
     });
+    // A Sandbox that started from the Snapshot already has the Setup
+    // script's work in it.
+    const reused = fp !== undefined && info.snapshot === fp;
     const output = yield* CliOutput;
     const id = `${provider.idPrefix}:${info.name}`;
     const keeper = yield* KeeperClient;
@@ -149,11 +152,13 @@ export const createSandbox = (options: {
       if (options.work !== undefined && files !== undefined) {
         yield* sendWorkFolder(id, options.work, files, workLimit);
       }
-      if (script !== undefined) {
+      if (reused) {
+        yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);
+      } else if (script !== undefined) {
         yield* runSetupScript(id, script);
       }
       // The Snapshot is saved before the Secrets go in, so it holds none.
-      if (fp !== undefined && snapshots !== undefined) {
+      if (!reused && fp !== undefined && snapshots !== undefined) {
         yield* progress.step(
           "saving the Snapshot",
           withDeadlinePush(
