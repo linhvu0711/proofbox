@@ -245,6 +245,23 @@ describe("Pixel actions", () => {
     ]);
   });
 
+  it("a scroll with zero steps is refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, ["scroll", id, "700", "400", "down", "0"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe("Bad steps 0: scroll needs at least 1\n");
+    const events = await readXev(env, id);
+    expect(events.filter((event) => event.type === "ButtonPress")).toHaveLength(
+      0,
+    );
+  });
+
   it("drag presses, moves, and releases", async () => {
     // Given
     const env = makeEnv({ docker: true });

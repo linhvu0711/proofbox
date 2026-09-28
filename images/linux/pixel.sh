@@ -13,15 +13,20 @@ glide() {
     return
   fi
   eval "$(xdotool getmouselocation --shell)"
-  # shellcheck disable=SC2046
-  xdotool $(awk -v x0="$X" -v y0="$Y" -v x1="$1" -v y1="$2" -v ms="$3" 'BEGIN {
+  # One xdotool call per 200 steps keeps the command line under the argument
+  # limit no matter how long the glide is.
+  awk -v x0="$X" -v y0="$Y" -v x1="$1" -v y1="$2" -v ms="$3" 'BEGIN {
     n = int((ms + 19) / 20)
     for (i = 1; i <= n; i++) {
       p = i / n
       e = p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ^ 2 / 2
-      printf "mousemove %.0f %.0f sleep %s ", x0 + (x1 - x0) * e, y0 + (y1 - y0) * e, ms / n / 1000
+      printf "mousemove %.0f %.0f sleep %s", x0 + (x1 - x0) * e, y0 + (y1 - y0) * e, ms / n / 1000
+      if (i % 200 == 0 || i == n) printf "\n"; else printf " "
     }
-  }')
+  }' | while IFS= read -r batch; do
+    # shellcheck disable=SC2086
+    xdotool $batch || exit 1
+  done
 }
 
 # inside X Y: refuse a point that is outside the screen.

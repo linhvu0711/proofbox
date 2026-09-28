@@ -20,26 +20,28 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
     const info = yield* provider.get(id.name);
     const killsBefore = yield* provider.memoryKills(id.name);
     const keeper = yield* KeeperClient;
-    const events = yield* keeper.exec(rawId, argv);
     let exitCode: number | undefined;
     yield* withDeadlinePush(
       provider,
       id.name,
       info,
     )(
-      events.pipe(
-        Stream.runForEach((event) => {
-          switch (event._tag) {
-            case "Stdout":
-              return output.out(event.bytes);
-            case "Stderr":
-              return output.err(event.bytes);
-            case "Exit":
-              exitCode = event.code;
-              return output.setExitCode(event.code);
-          }
-        }),
-      ),
+      Effect.gen(function* () {
+        const events = yield* keeper.exec(rawId, argv);
+        yield* events.pipe(
+          Stream.runForEach((event) => {
+            switch (event._tag) {
+              case "Stdout":
+                return output.out(event.bytes);
+              case "Stderr":
+                return output.err(event.bytes);
+              case "Exit":
+                exitCode = event.code;
+                return output.setExitCode(event.code);
+            }
+          }),
+        );
+      }),
     );
     const killsAfter = yield* provider.memoryKills(id.name);
     // The kill count is container-wide; a new kill plus a clean or 137 exit

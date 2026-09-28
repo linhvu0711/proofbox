@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { BadStepsError } from "../errors.ts";
 import { resolvePace, runPixel } from "../pixel.ts";
 
 const BUTTONS = { up: "4", down: "5", left: "6", right: "7" } as const;
@@ -17,6 +18,9 @@ export const scrollAt = (options: {
   readonly settle?: string | undefined;
 }) =>
   Effect.gen(function* () {
+    if (options.steps < 1) {
+      return yield* new BadStepsError({ steps: options.steps });
+    }
     const pace = yield* resolvePace(options);
     const shot = options.screenshot === undefined ? "0" : "1";
     yield* runPixel(

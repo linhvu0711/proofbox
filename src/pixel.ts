@@ -155,9 +155,11 @@ export const runPixel = (
             (acc, event) => {
               switch (event._tag) {
                 case "Stdout":
-                  return { ...acc, stdout: [...acc.stdout, event.bytes] };
+                  acc.stdout.push(event.bytes);
+                  return acc;
                 case "Stderr":
-                  return { ...acc, stderr: [...acc.stderr, event.bytes] };
+                  acc.stderr.push(event.bytes);
+                  return acc;
                 case "Exit":
                   return { ...acc, code: event.code };
               }

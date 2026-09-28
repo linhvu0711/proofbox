@@ -176,6 +176,14 @@ export class MissingCapabilityError extends Data.TaggedError(
   }
 }
 
+export class BadStepsError extends Data.TaggedError("BadStepsError")<{
+  readonly steps: number;
+}> {
+  get message() {
+    return `Bad steps ${this.steps}: scroll needs at least 1`;
+  }
+}
+
 export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
