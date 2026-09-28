@@ -20,7 +20,13 @@ import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
-import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  type CliEnv,
+  cleanupEnvs,
+  makeEnv,
+  makeGitFolder,
+  runCli,
+} from "./support/cli.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -149,6 +155,30 @@ describe("Docker Provider", () => {
     // Then
     expect(user.stdout).toBe("app\n");
     expect(uidPwd.stdout).toBe("1000\n/home/app\n");
+  });
+
+  it("upload sends the Work folder into a docker Sandbox", async () => {
+    // Given: a docker Sandbox and the git folder fixture
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const folder = makeGitFolder({
+      committed: {
+        "a.txt": "a\n",
+        "src/b.txt": "b\n",
+        ".gitignore": "dist/\n",
+      },
+      untracked: { "new.txt": "n\n", "dist/out.js": "x\n" },
+    });
+    // When
+    const uploaded = await runCli(env, ["upload", id, folder]);
+    const read = await runCli(env, ["exec", id, "--", "cat", "a.txt"]);
+    // Then
+    expect(uploaded.exitCode).toBe(0);
+    expect(uploaded.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 4 files, removed 0 files\n",
+    );
+    expect(read.stdout).toBe("a\n");
   });
 
   it("list shows the Base image version", async () => {

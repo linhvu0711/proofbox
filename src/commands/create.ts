@@ -1,21 +1,31 @@
+import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
 import {
   MissingCapabilityError,
+  ProviderError,
+  SetupNeedsWorkError,
+  SetupScriptMissingError,
   SizeNotOfferedError,
   UnknownProviderError,
 } from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
+import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
+import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
+import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
 export const createSandbox = (options: {
   readonly os: Os;
   readonly provider: string;
   readonly idle?: string | undefined;
   readonly maxLife?: string | undefined;
+  readonly work?: string | undefined;
+  readonly setup?: string | undefined;
+  readonly maxSize?: string | undefined;
   readonly size?: string | undefined;
 }) =>
   Effect.gen(function* () {
@@ -43,6 +53,35 @@ export const createSandbox = (options: {
       options.maxLife === undefined
         ? MAX_LIFE_DEFAULT
         : yield* parseSpan("max-life", options.maxLife);
+    const setupPath = options.setup;
+    if (setupPath !== undefined && options.work === undefined) {
+      return yield* new SetupNeedsWorkError();
+    }
+    const maxSize =
+      options.maxSize === undefined
+        ? undefined
+        : yield* parseMaxSize(options.maxSize);
+    const script =
+      setupPath === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => readFile(setupPath),
+            catch: (cause) =>
+              typeof cause === "object" &&
+              cause !== null &&
+              "code" in cause &&
+              cause.code === "ENOENT"
+                ? new SetupScriptMissingError({ path: setupPath })
+                : new ProviderError({
+                    provider: "local",
+                    reason:
+                      cause instanceof Error ? cause.message : String(cause),
+                  }),
+          });
+    const files =
+      options.work === undefined
+        ? undefined
+        : yield* readWorkFolder(options.work, maxSize ?? MAX_SIZE_DEFAULT);
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
     if (size !== undefined && provider.sizes !== "any") {
@@ -76,5 +115,23 @@ export const createSandbox = (options: {
           ),
         ),
       );
+    // A failed upload or Setup script must not leave the made Sandbox
+    // behind; runSetupScript already deletes it for a non-zero script exit,
+    // and this covers every other way the steps fail.
+    yield* Effect.gen(function* () {
+      if (options.work !== undefined && files !== undefined) {
+        yield* sendWorkFolder(id, options.work, files);
+      }
+      if (script !== undefined) {
+        yield* runSetupScript(id, script);
+      }
+    }).pipe(
+      Effect.tapError(() =>
+        provider.delete(info.name).pipe(
+          Effect.zipRight(keeper.stop(id)),
+          Effect.catchAll(() => Effect.void),
+        ),
+      ),
+    );
     yield* output.out(`${id}\n`);
-  });
+  }).pipe(Effect.scoped);

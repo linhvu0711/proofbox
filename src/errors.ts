@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import { formatMb } from "./upload/max-size.ts";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;
@@ -75,6 +76,71 @@ export class OutsideScreenError extends Data.TaggedError("OutsideScreenError")<{
 }> {
   get message() {
     return `Point ${this.x},${this.y} is outside the screen (${this.width}x${this.height}); use x 0 to ${this.width - 1} and y 0 to ${this.height - 1}`;
+  }
+}
+
+export class NotGitFolderError extends Data.TaggedError("NotGitFolderError")<{
+  readonly folder: string;
+}> {
+  get message() {
+    return `Upload needs a git folder: ${this.folder} is not a git folder. Run git init there, or pass a git folder.`;
+  }
+}
+
+export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
+  readonly id: string;
+  readonly command: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Upload to ${this.id} failed: ${this.command} exited ${this.code}. Run upload again; it sends every file.`;
+  }
+}
+
+export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
+  readonly value: string;
+}> {
+  get message() {
+    return `Bad --max-size "${this.value}": use a whole number with MB or GB, for example 800MB`;
+  }
+}
+
+export class WorkFolderTooBigError extends Data.TaggedError(
+  "WorkFolderTooBigError",
+)<{
+  readonly bytes: number;
+  readonly limit: number;
+}> {
+  get message() {
+    return `Work folder is ${formatMb(this.bytes)} MB, over the ${formatMb(this.limit)} MB limit, so nothing was sent. Git-ignore the big files, or raise the limit with --max-size.`;
+  }
+}
+
+export class SetupNeedsWorkError extends Data.TaggedError(
+  "SetupNeedsWorkError",
+)<Record<never, never>> {
+  get message() {
+    return "--setup needs --work <folder>: the Setup script runs in the Work folder. Nothing was created.";
+  }
+}
+
+export class SetupScriptMissingError extends Data.TaggedError(
+  "SetupScriptMissingError",
+)<{
+  readonly path: string;
+}> {
+  get message() {
+    return `Setup script ${this.path} not found. Nothing was created.`;
+  }
+}
+
+export class SetupScriptFailedError extends Data.TaggedError(
+  "SetupScriptFailedError",
+)<{
+  readonly code: number;
+}> {
+  get message() {
+    return `Setup script failed with exit code ${this.code}; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.`;
   }
 }
 

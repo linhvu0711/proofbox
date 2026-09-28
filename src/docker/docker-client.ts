@@ -1,7 +1,7 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Option, Stream } from "effect";
 import { ProviderError, ProviderUnavailableError } from "../errors.ts";
-import type { ExecEvent } from "../provider.ts";
+import type { ExecEvent, ExecOptions } from "../provider.ts";
 
 export interface DockerExecResult {
   readonly exitCode: number;
@@ -35,6 +35,7 @@ export interface DockerClient {
   readonly execStream: (
     container: string,
     argv: ReadonlyArray<string>,
+    options?: ExecOptions,
   ) => Stream.Stream<ExecEvent, DockerError>;
   readonly inspect: (
     container: string,
@@ -167,6 +168,7 @@ export const makeDockerClient = (
   const execStream = (
     container: string,
     argv: ReadonlyArray<string>,
+    options?: ExecOptions,
   ): Stream.Stream<ExecEvent, DockerError> =>
     Stream.unwrapScoped(
       Effect.gen(function* () {
@@ -174,6 +176,7 @@ export const makeDockerClient = (
           Command.make(
             "docker",
             "exec",
+            ...(options?.stdin === undefined ? [] : ["-i"]),
             "-u",
             "app",
             "-w",
@@ -185,7 +188,19 @@ export const makeDockerClient = (
           Effect.provideService(CommandExecutor.CommandExecutor, executor),
           Effect.mapError((error) => spawnError(error)),
         );
-        const events = Stream.merge(
+        const feed =
+          options?.stdin === undefined
+            ? undefined
+            : Stream.run(options.stdin, process.stdin).pipe(
+                // A command may exit before its stdin reports "finish"
+                // (tar -x stops at the end-of-archive marker); when the
+                // process is gone the feed is done by definition.
+                Effect.raceFirst(
+                  process.exitCode.pipe(Effect.orElseSucceed(() => {})),
+                ),
+                Effect.mapError((error) => fail(describe(error))),
+              );
+        const outputs = Stream.merge(
           process.stdout.pipe(
             Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
           ),
@@ -193,6 +208,10 @@ export const makeDockerClient = (
             Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
           ),
         ).pipe(Stream.mapError((error) => fail(describe(error))));
+        const events =
+          feed === undefined
+            ? outputs
+            : Stream.merge(outputs, Stream.fromEffect(feed).pipe(Stream.drain));
         const exit = Stream.fromEffect(
           process.exitCode.pipe(
             Effect.mapError((error) => fail(describe(error))),

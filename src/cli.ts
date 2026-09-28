@@ -1,5 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { clickAt } from "./commands/click.ts";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
@@ -10,6 +10,8 @@ import { listSandboxes } from "./commands/list.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
 import { scrollAt } from "./commands/scroll.ts";
 import { typeText } from "./commands/type.ts";
+import { uploadWorkFolder } from "./commands/upload.ts";
+import { parseMaxSize } from "./upload/max-size.ts";
 
 const create = Command.make(
   "create",
@@ -18,14 +20,20 @@ const create = Command.make(
     provider: Options.text("provider"),
     idle: Options.text("idle").pipe(Options.optional),
     maxLife: Options.text("max-life").pipe(Options.optional),
+    work: Options.text("work").pipe(Options.optional),
+    setup: Options.text("setup").pipe(Options.optional),
+    maxSize: Options.text("max-size").pipe(Options.optional),
     size: Options.text("size").pipe(Options.optional),
   },
-  ({ os, provider, idle, maxLife, size }) =>
+  ({ os, provider, idle, maxLife, work, setup, maxSize, size }) =>
     createSandbox({
       os,
       provider,
       idle: Option.getOrUndefined(idle),
       maxLife: Option.getOrUndefined(maxLife),
+      work: Option.getOrUndefined(work),
+      setup: Option.getOrUndefined(setup),
+      maxSize: Option.getOrUndefined(maxSize),
       size: Option.getOrUndefined(size),
     }),
 );
@@ -209,6 +217,23 @@ const del = Command.make(
   ({ id }) => deleteSandbox(id),
 );
 
+const upload = Command.make(
+  "upload",
+  {
+    id: Args.text({ name: "id" }),
+    folder: Args.text({ name: "folder" }),
+    maxSize: Options.text("max-size").pipe(Options.optional),
+  },
+  ({ id, folder, maxSize }) =>
+    Effect.gen(function* () {
+      const limit = yield* maxSize.pipe(
+        Option.map(parseMaxSize),
+        Option.getOrElse(() => Effect.succeed(undefined)),
+      );
+      yield* uploadWorkFolder({ id, folder, maxSize: limit });
+    }),
+);
+
 const command = Command.make("proofbox").pipe(
   Command.withSubcommands([
     create,
@@ -221,6 +246,7 @@ const command = Command.make("proofbox").pipe(
     drag,
     list,
     del,
+    upload,
   ]),
 );
 
