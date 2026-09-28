@@ -196,6 +196,48 @@ describe("edit-plan", () => {
     });
   });
 
+  it("an instant change between two still parts is kept", () => {
+    // Given
+    const input = {
+      duration: 57.5,
+      freezes: [
+        [2.93, 30.77],
+        [30.77, 57.5],
+      ] as const,
+      marks: [1.58, 29.82],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const rounded = plan.clips.map((clip) =>
+      clip.kind === "cut"
+        ? { ...clip, from: round2(clip.from), to: round2(clip.to) }
+        : { ...clip, at: round2(clip.at) },
+    );
+    expect(rounded).toEqual([
+      { kind: "cut", from: 0, to: 1.58, step: 0 },
+      { kind: "cut", from: 1.58, to: 4.93, step: 1 },
+      {
+        kind: "still",
+        at: 4.93,
+        seconds: 2,
+        label: "» 25 s later",
+        step: 1,
+      },
+      { kind: "cut", from: 29.82, to: 32.77, step: 2 },
+      {
+        kind: "still",
+        at: 32.77,
+        seconds: 2,
+        label: "» 25 s later",
+        step: 2,
+      },
+    ]);
+    expect(plan.seconds).toBeCloseTo(11.88);
+  });
+
   it("a Recording with under 1 s of change is found as nothing changed", () => {
     // Given
     const still = { duration: 6.03, freezes: [[0, undefined] as const] };

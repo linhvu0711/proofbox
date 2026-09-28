@@ -126,6 +126,8 @@ export const planEdit = (input: PlanInput): EditPlan => {
     for (const [a, b] of stills) {
       if (a > position) {
         changing.push([position, a]);
+      } else if (a === position && position > start) {
+        changing.push([a, a]);
       }
       position = Math.max(position, b);
     }
