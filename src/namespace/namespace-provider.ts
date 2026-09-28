@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Clock, Duration, Effect } from "effect";
+import { Clock, Duration, Effect, Schedule } from "effect";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -410,21 +410,37 @@ export const makeNamespaceProvider = (deps: {
       const link = yield* deps.openLink(name, yield* paths(name), "cli");
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
-      const started = yield* docker.execText(container, "app", [
-        "sh",
-        "-c",
-        'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log',
-        "sh",
-        password,
-      ]);
+      // A live call right after a memory kill can hit a host that is still
+      // reclaiming; give x11vnc a few tries before giving up.
+      const startX11vnc = docker
+        .execText(container, "app", [
+          "sh",
+          "-c",
+          'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log',
+          "sh",
+          password,
+        ])
+        .pipe(
+          Effect.filterOrFail(
+            (result) => result.exitCode === 0,
+            (result) => `x11vnc did not start: ${result.stderr.trim()}`,
+          ),
+        );
+      yield* Effect.retry(
+        startX11vnc,
+        Schedule.spaced(Duration.seconds(1)).pipe(
+          Schedule.upTo(Duration.seconds(10)),
+        ),
+      ).pipe(
+        Effect.mapError((e) =>
+          fail(typeof e === "string" ? e : `docker exec failed: ${e.message}`),
+        ),
+      );
       yield* Effect.addFinalizer(() =>
         docker
           .execText(container, "app", ["pkill", "-x", "x11vnc"])
           .pipe(Effect.ignore),
       );
-      if (started.exitCode !== 0) {
-        return yield* fail(`x11vnc did not start: ${started.stderr.trim()}`);
-      }
       const port = yield* nsc.portForward(name, 5900);
       return { address: `127.0.0.1:${port}`, password };
     });
