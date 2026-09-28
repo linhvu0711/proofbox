@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
   Chunk,
@@ -96,7 +97,9 @@ export const makeOpenLink = (
       : new ProviderError({ provider: "namespace", reason: error.message });
 
   // Every independent CLI link gets its own control socket; two opens racing
-  // on the same pid-named socket would unlink each other's live master.
+  // on the same pid-named socket would unlink each other's live master. The
+  // name stays short: ssh adds 17 characters while it binds, and macOS caps
+  // a socket path at 103.
   let cliSeq = 0;
 
   const sshBase = (ctl: string, key: string): ReadonlyArray<string> => [
@@ -202,7 +205,7 @@ export const makeOpenLink = (
       const ctl =
         owner === "keeper"
           ? paths.control
-          : paths.control.replace(/\.ctl$/, `-${process.pid}-${cliSeq++}.ctl`);
+          : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
       const ssh = sshBase(ctl, paths.key);
       const run = runWith(ssh);
       const stream = streamWith(ssh);
