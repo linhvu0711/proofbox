@@ -129,7 +129,14 @@ export const runKeeper = (rawId: string) =>
             ),
         );
         yield* Effect.acquireRelease(
-          Effect.promise(() => writeFile(paths.pid, `${process.pid}\n`)),
+          Effect.tryPromise({
+            try: () => writeFile(paths.pid, `${process.pid}\n`),
+            catch: (cause) =>
+              new ProviderError({
+                provider: id.provider,
+                reason: cause instanceof Error ? cause.message : String(cause),
+              }),
+          }),
           () =>
             Effect.promise(() =>
               Promise.all([
