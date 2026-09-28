@@ -28,6 +28,7 @@ export const Capability = Schema.Literal(
   "os:macos",
   "live-view",
   "desktop",
+  "snapshot",
 );
 export type Capability = typeof Capability.Type;
 
@@ -39,6 +40,7 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   base: Schema.optional(Schema.String),
+  snapshot: Schema.optional(Schema.String),
   size: Schema.optional(Size),
 }) {}
 
@@ -73,6 +75,7 @@ export interface Provider {
     readonly maxLifeAt?: Date | undefined;
     readonly size?: Size | undefined;
     readonly name?: string | undefined;
+    readonly snapshot?: string | undefined;
   }) => Effect.Effect<
     SandboxInfo,
     | ProviderError
@@ -103,6 +106,20 @@ export interface Provider {
     SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope
   >;
+  // Providers that save a Sandbox as a Snapshot image expose `baseVersion`
+  // (the Fingerprint's Base image part) and `save`; both run only when the
+  // "snapshot" Capability is set.
+  readonly snapshots?: {
+    readonly baseVersion: Effect.Effect<string, ProviderError>;
+    readonly save: (
+      name: string,
+      fingerprint: string,
+    ) => Effect.Effect<
+      void,
+      ProviderError | ProviderUnavailableError | SandboxGoneError,
+      Progress
+    >;
+  };
   readonly get: (
     name: string,
   ) => Effect.Effect<

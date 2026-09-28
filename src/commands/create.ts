@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
+import {
+  idleDefault,
+  MAX_LIFE_DEFAULT,
+  parseSpan,
+  withDeadlinePush,
+} from "../deadline.ts";
 import {
   MissingCapabilityError,
   ProviderError,
@@ -10,6 +15,7 @@ import {
   SizeNotOfferedError,
   UnknownProviderError,
 } from "../errors.ts";
+import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
@@ -91,6 +97,18 @@ export const createSandbox = (options: {
       options.work === undefined
         ? undefined
         : yield* readWorkFolder(options.work, workLimit);
+    const snapshots = provider.snapshots;
+    const fp =
+      script !== undefined &&
+      files !== undefined &&
+      provider.capabilities.has("snapshot") &&
+      snapshots !== undefined
+        ? yield* snapshots.baseVersion.pipe(
+            Effect.map((baseVersion) =>
+              fingerprint({ baseVersion, script, files }),
+            ),
+          )
+        : undefined;
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
     if (size !== undefined && provider.sizes !== "any") {
@@ -110,6 +128,7 @@ export const createSandbox = (options: {
       idle,
       maxLife,
       size,
+      snapshot: fp,
     });
     const output = yield* CliOutput;
     const id = `${provider.idPrefix}:${info.name}`;
@@ -134,7 +153,15 @@ export const createSandbox = (options: {
       if (script !== undefined) {
         yield* runSetupScript(id, script);
       }
-      // #13 saves the Snapshot here; the Secrets go in only after it.
+      if (fp !== undefined && snapshots !== undefined) {
+        yield* progress.step(
+          "saving the Snapshot",
+          withDeadlinePush(provider, info.name, info)(
+            snapshots.save(info.name, fp),
+          ),
+        );
+        yield* output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`);
+      }
       if (secrets !== undefined) {
         yield* sendSecrets(id, secrets);
       }

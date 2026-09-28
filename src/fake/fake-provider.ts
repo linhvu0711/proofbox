@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  cp,
   mkdir,
   readdir,
   readFile,
@@ -15,6 +16,7 @@ import { nextDeadline } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import { Progress } from "../progress.ts";
 import {
+  type Capability,
   type Connection,
   type ExecEvent,
   IdleSeconds,
@@ -48,6 +50,12 @@ const hasCode = (cause: unknown, code: string) =>
 export const makeFakeProvider = (options: {
   readonly root: string;
   readonly watch: "process" | "none";
+  readonly snapshots?:
+    | {
+        readonly root: string;
+        readonly fail?: "push" | "pull" | undefined;
+      }
+    | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -204,6 +212,35 @@ export const makeFakeProvider = (options: {
 
   const get = (name: string) => readFileInfo(name);
 
+  // A Snapshot keeps the Work folder and the state dir (the hash list the
+  // next upload diffs against); the Secrets folder never leaves the Sandbox.
+  // The staging dir lands on the same filesystem, so the rename is atomic.
+  const saveSnapshot = (name: string, fp: string) =>
+    Effect.gen(function* () {
+      const snapshots = options.snapshots;
+      if (snapshots === undefined) {
+        return;
+      }
+      yield* Effect.tryPromise({
+        try: async () => {
+          const dir = join(root, name);
+          const staging = join(snapshots.root, `.new-${fp}`);
+          const target = join(snapshots.root, fp);
+          await rm(staging, { recursive: true, force: true });
+          await mkdir(staging, { recursive: true });
+          await cp(join(dir, "home"), join(staging, "home"), {
+            recursive: true,
+          });
+          await cp(join(dir, "state"), join(staging, "state"), {
+            recursive: true,
+          });
+          await rm(target, { recursive: true, force: true });
+          await rename(staging, target);
+        },
+        catch: (cause) => fail(describe(cause)),
+      });
+    });
+
   const list = Effect.gen(function* () {
     const entries = yield* Effect.tryPromise({
       try: () =>
@@ -319,7 +356,11 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
-    capabilities: new Set(["os:linux"]),
+    capabilities: new Set<Capability>(
+      options.snapshots === undefined
+        ? ["os:linux"]
+        : ["os:linux", "snapshot"],
+    ),
     sizes: [
       { cpu: 4, ramGb: 8 },
       { cpu: 8, ramGb: 16 },
@@ -327,6 +368,14 @@ export const makeFakeProvider = (options: {
     ],
     create,
     get,
+    ...(options.snapshots === undefined
+      ? {}
+      : {
+          snapshots: {
+            baseVersion: Effect.succeed("fake"),
+            save: saveSnapshot,
+          },
+        }),
     list,
     delete: del,
     extend,
