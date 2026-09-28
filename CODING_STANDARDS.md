@@ -46,7 +46,7 @@ One rule per line. A rule a tool checks names the tool in brackets. Effect examp
 
 ## Commits
 
-- Commit messages follow Conventional Commits: `type(scope): intent`.
+- Commit messages follow Conventional Commits: `type(scope): intent`. [commitlint, in CI on each PR]
 - Branches are `type/slug`, for example `feat/6-cli-core`.
 - One PR is one reviewable change.
 
