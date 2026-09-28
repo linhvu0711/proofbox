@@ -1,7 +1,8 @@
 import { posix } from "node:path";
 import { Effect, Stream } from "effect";
+import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
-import { UploadFailedError } from "./errors.ts";
+import { SetupScriptFailedError, UploadFailedError } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
@@ -23,7 +24,7 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
     const progress = yield* Progress;
     const keeper = yield* KeeperClient;
     const setupPath = posix.join(provider.stateDir(id.name), "setup");
-    yield* progress.step(
+    const result = yield* progress.step(
       "running Setup script",
       withDeadlinePush(
         provider,
@@ -82,8 +83,23 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
               }
             }),
           );
-          return { code, lines, pending } as const;
+          if (pending !== "") {
+            lines.push(`${pending}\n`);
+            if (lines.length > KEEP_LINES) {
+              lines.shift();
+            }
+          }
+          return { code, lines } as const;
         }),
       ),
     );
+    if (result.code !== 0) {
+      const output = yield* CliOutput;
+      for (const line of result.lines) {
+        yield* output.err(line);
+      }
+      yield* provider.delete(id.name);
+      yield* keeper.stop(rawId);
+      return yield* new SetupScriptFailedError({ code: result.code });
+    }
   });

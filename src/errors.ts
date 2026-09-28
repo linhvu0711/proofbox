@@ -82,6 +82,16 @@ export class SetupScriptMissingError extends Data.TaggedError(
   }
 }
 
+export class SetupScriptFailedError extends Data.TaggedError(
+  "SetupScriptFailedError",
+)<{
+  readonly code: number;
+}> {
+  get message() {
+    return `Setup script failed with exit code ${this.code}; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.`;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{
