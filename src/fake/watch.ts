@@ -2,15 +2,27 @@ import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Duration, Effect, Schema } from "effect";
-import { SandboxFile } from "./fake-provider.ts";
+import { ProviderError } from "../errors.ts";
+import { describe, SandboxFile } from "./fake-provider.ts";
+
+const fail = (reason: string) =>
+  new ProviderError({ provider: "fake", reason });
 
 const readDeadline = (root: string, name: string) =>
-  Effect.promise(() => readFile(join(root, name, "sandbox.json"), "utf8")).pipe(
-    Effect.map((text) =>
-      Schema.decodeUnknownSync(SandboxFile)(JSON.parse(text)),
-    ),
-    Effect.map((file) => file.deadline),
-  );
+  Effect.gen(function* () {
+    const text = yield* Effect.tryPromise({
+      try: () => readFile(join(root, name, "sandbox.json"), "utf8"),
+      catch: (cause) => fail(describe(cause)),
+    });
+    const json = yield* Effect.try({
+      try: () => JSON.parse(text) as unknown,
+      catch: (cause) => fail(describe(cause)),
+    });
+    const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
+      Effect.mapError((error) => fail(error.message)),
+    );
+    return file.deadline;
+  });
 
 export const watchSandbox = (root: string, name: string): Effect.Effect<void> =>
   Effect.gen(function* () {

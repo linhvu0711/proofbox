@@ -35,7 +35,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   maxLifeAt: Schema.Date,
 }) {}
 
-const describe = (cause: unknown) =>
+export const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
 const hasCode = (cause: unknown, code: string) =>
