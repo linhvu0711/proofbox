@@ -451,4 +451,40 @@ describe("Recording and the Proof video", () => {
     ).toBe(true);
     expect(result.stdout).toBe(`${join(dir, "proof.mp4")}\n`);
   });
+
+  it("record stop --out into a missing folder says it could not write the file", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(3000);
+    // When
+    const out = join(dir, "missing", "proof.mp4");
+    const result = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    const lines = result.stderr.split("\n").filter((line) => line !== "");
+    const last = lines[lines.length - 1] ?? "";
+    expect(last.startsWith(`Could not write ${out}: `)).toBe(true);
+    expect(last.endsWith(". Check the folder exists and try again.")).toBe(
+      true,
+    );
+    for (const line of lines) {
+      expect(line.includes("Error:")).toBe(false);
+      expect(line.startsWith("    at ")).toBe(false);
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
 });

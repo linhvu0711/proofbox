@@ -2,13 +2,16 @@ import { createWriteStream } from "node:fs";
 import { rename, unlink } from "node:fs/promises";
 import { Effect, Exit, Stream } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
-import { MissingCapabilityError } from "./errors.ts";
+import { MissingCapabilityError, OutFileError } from "./errors.ts";
 import {
   KeeperClient,
   type KeeperExecOptions,
 } from "./keeper/keeper-client.ts";
 import { type Os, Providers } from "./provider.ts";
 import { parseSandboxId } from "./sandbox-id.ts";
+
+const describe = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause);
 
 const resolveHelper = (
   rawId: string,
@@ -137,14 +140,24 @@ export const fetchHelper = (
                 Stream.runForEach((event) => {
                   if (event._tag === "Stdout") {
                     if (writeError !== undefined) {
-                      return Effect.die(writeError);
+                      return Effect.fail(
+                        new OutFileError({
+                          path: dest,
+                          reason: describe(writeError),
+                        }),
+                      );
                     }
-                    return Effect.async<void>((resume) => {
+                    return Effect.async<void, OutFileError>((resume) => {
                       stream.write(event.bytes, (error) => {
                         resume(
                           error === undefined || error === null
                             ? Effect.void
-                            : Effect.die(error),
+                            : Effect.fail(
+                                new OutFileError({
+                                  path: dest,
+                                  reason: describe(error),
+                                }),
+                              ),
                         );
                       });
                     });
@@ -166,10 +179,20 @@ export const fetchHelper = (
                 stream.end(() => resume(Effect.void));
               });
               if (writeError !== undefined) {
-                return yield* Effect.die(writeError);
+                return yield* new OutFileError({
+                  path: dest,
+                  reason: describe(writeError),
+                });
               }
               if (code === 0) {
-                yield* Effect.promise(() => rename(part, dest));
+                yield* Effect.tryPromise({
+                  try: () => rename(part, dest),
+                  catch: (cause) =>
+                    new OutFileError({
+                      path: dest,
+                      reason: describe(cause),
+                    }),
+                });
               }
               return {
                 provider: id.provider,
