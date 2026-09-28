@@ -204,12 +204,15 @@ export const makeNamespaceProvider = (deps: {
       const instances = yield* nsc
         .list({ "proofbox.os": "linux" })
         .pipe(Effect.catchTag("SandboxGoneError", () => Effect.succeed([])));
-      if (!instances.some((instance) => instance.clusterId === name)) {
-        return "gone" as const;
+      const present = instances.some((instance) => instance.clusterId === name);
+      if (present) {
+        yield* nsc
+          .destroy(name)
+          .pipe(Effect.catchTag("SandboxGoneError", () => Effect.void));
       }
-      yield* nsc
-        .destroy(name)
-        .pipe(Effect.catchTag("SandboxGoneError", () => Effect.void));
+      // Hosts that expire on their own never reach destroy, so the local
+      // keypair and Max-life cap are removed whether or not the host is
+      // still listed.
       const dir = yield* paths(name);
       yield* Effect.promise(() =>
         Promise.all([
@@ -218,7 +221,7 @@ export const makeNamespaceProvider = (deps: {
           rm(dir.maxLife, { force: true }).catch(() => {}),
         ]).then(() => {}),
       );
-      return "deleted" as const;
+      return present ? ("deleted" as const) : ("gone" as const);
     });
 
   const create = (req: {
@@ -476,7 +479,7 @@ export const makeNamespaceProvider = (deps: {
           [
             "sh",
             "-c",
-            'umask 077; mkdir -p ~/.vnc /tmp/proofbox-live; exec 9>/tmp/proofbox-live/.lock; flock -w 15 9 || exit 1; if [ -s /tmp/proofbox-live/.password ]; then pw=$(cat /tmp/proofbox-live/.password); else IFS= read -r pw || exit 1; printf "%s\\n%s\\ny\\n" "$pw" "$pw" | x11vnc -storepasswd ~/.vnc/passwd >/dev/null || exit 1; printf "%s\\n" "$pw" > /tmp/proofbox-live/.password; fi; touch "/tmp/proofbox-live/$0"; pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log >/dev/null || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; printf "%s" "$pw"',
+            'umask 077; mkdir -p ~/.vnc /tmp/proofbox-live; exec 9>/tmp/proofbox-live/.lock; flock -w 15 9 || exit 1; if [ -s /tmp/proofbox-live/.password ]; then pw=$(cat /tmp/proofbox-live/.password); else IFS= read -r pw || exit 1; printf "%s\\n%s\\ny\\n" "$pw" "$pw" | x11vnc -storepasswd ~/.vnc/passwd >/dev/null || exit 1; printf "%s\\n" "$pw" > /tmp/proofbox-live/.password; fi; pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log >/dev/null || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; touch "/tmp/proofbox-live/$0"; printf "%s" "$pw"',
             session,
           ],
           {
