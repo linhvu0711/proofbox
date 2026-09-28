@@ -16,6 +16,7 @@ import {
   SandboxInfo,
 } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
+import { spawnDetached } from "../spawn-detached.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -24,7 +25,7 @@ const makeName = () =>
     "",
   );
 
-class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
+export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
   idleSeconds: Schema.Number,
@@ -145,6 +146,9 @@ export const makeFakeProvider = (options: {
         try: () => mkdir(join(dir, "home")),
         catch: (cause) => fail(describe(cause)),
       });
+      if (options.watch === "process") {
+        yield* spawnDetached("fake/watch-main", [root, name]);
+      }
       return new SandboxInfo({ name, ...file });
     });
 

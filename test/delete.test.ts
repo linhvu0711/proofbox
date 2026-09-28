@@ -34,4 +34,42 @@ describe("delete", () => {
     expect(result.stdout).toBe("Sandbox fake:qqqqqq is already gone\n");
     expect(result.exitCode).toBe(0);
   });
+
+  it("a second delete says already gone and exits 0", async () => {
+    // Given: a created id, deleted once
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    await runCli(env, ["delete", id]);
+    // When
+    const result = await runCli(env, ["delete", id]);
+    // Then
+    expect(result.stdout).toBe(`Sandbox ${id} is already gone\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("exec after delete says the Sandbox is gone", async () => {
+    // Given: a created id, then deleted
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    await runCli(env, ["delete", id]);
+    // When
+    const result = await runCli(env, ["exec", id, "--", "true"]);
+    // Then
+    expect(result.stderr).toBe(`Sandbox ${id} is gone\n`);
+    expect(result.exitCode).toBe(125);
+  });
 });
