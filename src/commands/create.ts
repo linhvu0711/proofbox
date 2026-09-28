@@ -150,10 +150,15 @@ export const createSandbox = (options: {
       if (options.work !== undefined && files !== undefined) {
         yield* sendWorkFolder(id, options.work, files, workLimit);
       }
+      const reused = fp !== undefined && info.snapshot === fp;
       if (script !== undefined) {
-        yield* runSetupScript(id, script);
+        if (reused) {
+          yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);
+        } else {
+          yield* runSetupScript(id, script);
+        }
       }
-      if (fp !== undefined && snapshots !== undefined) {
+      if (fp !== undefined && !reused && snapshots !== undefined) {
         yield* progress.step(
           "saving the Snapshot",
           withDeadlinePush(provider, info.name, info)(

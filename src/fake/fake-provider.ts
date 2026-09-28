@@ -36,6 +36,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   size: Schema.optional(Size),
+  snapshot: Schema.optional(Schema.String),
 }) {}
 
 export const describe = (cause: unknown) =>
@@ -91,6 +92,7 @@ export const makeFakeProvider = (options: {
         deadline: file.deadline,
         maxLifeAt: file.maxLifeAt,
         size: file.size,
+        snapshot: file.snapshot,
       });
       const current = yield* now;
       if (info.deadline.getTime() <= current.getTime()) {
@@ -132,6 +134,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -173,6 +176,36 @@ export const makeFakeProvider = (options: {
       const maxLifeAt = new Date(
         createdAt.getTime() + Duration.toMillis(req.maxLife),
       );
+      yield* Effect.tryPromise({
+        try: async () => {
+          await mkdir(join(dir, "home"));
+          await mkdir(join(dir, "state"));
+          await mkdir(join(dir, "secrets"), { mode: 0o700 });
+        },
+        catch: (cause) => fail(describe(cause)),
+      });
+      let pulled: string | undefined;
+      if (options.snapshots !== undefined && req.snapshot !== undefined) {
+        const entry = join(options.snapshots.root, req.snapshot);
+        const found = yield* Effect.tryPromise({
+          try: async () => {
+            if (!existsSync(entry)) {
+              return false;
+            }
+            await cp(join(entry, "home"), join(dir, "home"), {
+              recursive: true,
+            });
+            await cp(join(entry, "state"), join(dir, "state"), {
+              recursive: true,
+            });
+            return true;
+          },
+          catch: (cause) => fail(describe(cause)),
+        });
+        if (found) {
+          pulled = req.snapshot;
+        }
+      }
       const file = new SandboxFile({
         os: req.os,
         createdAt,
@@ -184,16 +217,9 @@ export const makeFakeProvider = (options: {
         }),
         maxLifeAt,
         size: req.size,
+        snapshot: pulled,
       });
       yield* writeFileInfo(name, file);
-      yield* Effect.tryPromise({
-        try: async () => {
-          await mkdir(join(dir, "home"));
-          await mkdir(join(dir, "state"));
-          await mkdir(join(dir, "secrets"), { mode: 0o700 });
-        },
-        catch: (cause) => fail(describe(cause)),
-      });
       if (options.watch === "process") {
         yield* spawnDetached("fake", "fake/watch-main", [root, name]);
       }
@@ -205,6 +231,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),
@@ -290,6 +317,7 @@ export const makeFakeProvider = (options: {
         deadline,
         maxLifeAt: info.maxLifeAt,
         size: info.size,
+        snapshot: info.snapshot,
       });
       yield* writeFileInfo(name, file);
     });

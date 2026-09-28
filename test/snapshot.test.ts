@@ -92,6 +92,55 @@ describe("Snapshots", () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it("a second create with the same Setup script and lockfiles reuses the Snapshot", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFolder();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    await create(env, folder, script, { PROOFBOX_FAKE_SNAPSHOTS: dir });
+    const second = await create(env, folder, script, {
+      PROOFBOX_FAKE_SNAPSHOTS: dir,
+    });
+    // Then
+    expect(second.exitCode).toBe(0);
+    expect(second.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 0 files, removed 0 files\nproofbox: Snapshot reused, Fingerprint 22d0cf15eb8e\n",
+    );
+    const runs = await runCli(env, [
+      "exec",
+      second.stdout.trim(),
+      "--",
+      "cat",
+      "runs.txt",
+    ]);
+    expect(runs.stdout).toBe("ran\n");
+  });
+
+  it("a changed lockfile gives a new Fingerprint and a new Snapshot", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFolder();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    await create(env, folder, script, { PROOFBOX_FAKE_SNAPSHOTS: dir });
+    writeFileSync(join(folder, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
+    const second = await create(env, folder, script, {
+      PROOFBOX_FAKE_SNAPSHOTS: dir,
+    });
+    // Then
+    expect(second.exitCode).toBe(0);
+    expect(second.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: Snapshot saved, Fingerprint 6a421451fe60\n",
+    );
+    expect(readdirSync(dir).sort()).toEqual([
+      "22d0cf15eb8e",
+      "6a421451fe60",
+    ]);
+  });
+
   it("a Provider without Snapshots runs the Setup script on every create", async () => {
     // Given: no PROOFBOX_FAKE_SNAPSHOTS
     const env = makeEnv();
