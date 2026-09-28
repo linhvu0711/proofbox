@@ -416,7 +416,7 @@ export const makeNamespaceProvider = (deps: {
         .execText(container, "app", [
           "sh",
           "-c",
-          'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log',
+          'pkill -x x11vnc; mkdir -p ~/.vnc && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && { x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
           "sh",
           password,
         ])
