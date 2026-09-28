@@ -20,11 +20,13 @@ export const openLive = (rawId: string) =>
     }
     const output = yield* CliOutput;
     const info = yield* provider.get(id.name);
+    const idle = Duration.seconds(info.idleSeconds);
+    const push = deadlinePush(provider, id.name, info);
+    // Live setup holds the link for a while; push the Deadline first.
+    yield* push;
     const view = yield* liveView(id.name);
     yield* output.out(`${view.address}\npassword ${view.password}\n`);
     yield* output.err("proofbox: Live view open; press Ctrl-C to close\n");
-    const idle = Duration.seconds(info.idleSeconds);
-    const push = deadlinePush(provider, id.name, info);
     // The Live view stays open until Ctrl-C interrupts the loop or the
     // port-forward dies — a dead forward means the address is useless.
     yield* Effect.raceFirst(

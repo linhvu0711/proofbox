@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Clock, Duration, Effect, Schedule } from "effect";
+import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -66,6 +66,17 @@ export const makeNamespaceProvider = (deps: {
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
   const containerOf = (name: string) => `proofbox-${name.slice(0, 6)}`;
 
+  // Link bring-up can outlast a short host Deadline, so every open first
+  // bumps the host's own lifetime — detached, since nsc needs no link.
+  const openLink = (name: string, owner: "cli" | "keeper") =>
+    Effect.gen(function* () {
+      yield* deps.spawnDetached("namespace", "namespace/extend-main", [
+        name,
+        "120",
+      ]);
+      return yield* deps.openLink(name, yield* paths(name), owner);
+    });
+
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
   // call so the Keeper's ControlMaster path stays the Keeper's alone.
   const withCliLink = <A, E>(
@@ -77,7 +88,7 @@ export const makeNamespaceProvider = (deps: {
   > =>
     Effect.scoped(
       Effect.gen(function* () {
-        const link = yield* deps.openLink(name, yield* paths(name), "cli");
+        const link = yield* openLink(name, "cli");
         return yield* use(link);
       }),
     );
@@ -91,7 +102,7 @@ export const makeNamespaceProvider = (deps: {
       const first = result.stdout.split("\n", 1)[0] ?? "";
       const separator = first.lastIndexOf("|");
       if (separator === -1) {
-        if (result.stderr.includes("No such object")) {
+        if (result.stderr.toLowerCase().includes("no such object")) {
           return yield* gone(name);
         }
         return yield* fail(
@@ -137,23 +148,25 @@ export const makeNamespaceProvider = (deps: {
       const seconds = Math.ceil(
         (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
       );
+      // The host side first and detached: the nsc call needs no link, and the
+      // link write below can spend a while in bring-up.
+      yield* deps.spawnDetached("namespace", "namespace/extend-main", [
+        name,
+        String(seconds),
+      ]);
       const written = yield* withCliLink(name, (link) =>
         link.run(
           `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
         ),
       );
       if (written.exitCode !== 0) {
-        if (written.stderr.includes("No such container")) {
+        if (written.stderr.toLowerCase().includes("no such container")) {
           return yield* gone(name);
         }
         return yield* fail(
           `could not write the Deadline: ${written.stderr.trim()}`,
         );
       }
-      yield* deps.spawnDetached("namespace", "namespace/extend-main", [
-        name,
-        String(seconds),
-      ]);
     });
 
   const list = Effect.gen(function* () {
@@ -322,8 +335,9 @@ export const makeNamespaceProvider = (deps: {
           imageTag: `nscr.io/${registry}/${baseImageTag(version)}`,
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
-          // Publish the VNC port for the Live view; the host reaches it
-          // only through our own port-forward, never ingress.
+          // Publish the VNC port for the Live view; the host has only a
+          // private address, and nsc forwards onto that address, so the
+          // publish must cover it — loopback binds are unreachable.
           runArgs: ["-p", "5900:5900"],
           brand: brandFor(id),
         });
@@ -385,7 +399,7 @@ export const makeNamespaceProvider = (deps: {
 
   const connect = (name: string) =>
     Effect.gen(function* () {
-      const link = yield* deps.openLink(name, yield* paths(name), "keeper");
+      const link = yield* openLink(name, "keeper");
       yield* getWith(link, name);
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
@@ -416,43 +430,79 @@ export const makeNamespaceProvider = (deps: {
   const liveView = (name: string) =>
     Effect.gen(function* () {
       const password = makeSandboxName(8);
-      const link = yield* deps.openLink(name, yield* paths(name), "cli");
+      const link = yield* openLink(name, "cli");
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
       // A live call right after a memory kill can hit a host that is still
       // reclaiming; give x11vnc a few tries before giving up. Sessions share
       // the one x11vnc (each drops a marker; the last one out stops it) and
-      // the newest password is what the next viewer connection needs.
-      const startX11vnc = docker
-        .execText(container, "app", [
-          "sh",
-          "-c",
-          'mkdir -p ~/.vnc /tmp/proofbox-live && touch "/tmp/proofbox-live/$1" && x11vnc -storepasswd "$1" ~/.vnc/passwd >/dev/null && { pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
-          "sh",
-          password,
-        ])
-        .pipe(
-          Effect.filterOrFail(
-            (result) => result.exitCode === 0,
-            (result) => `x11vnc did not start: ${result.stderr.trim()}`,
-          ),
-        );
+      // the newest password is what the next viewer connection needs. The
+      // password goes through stdin so it never appears in a process argv.
+      const startX11vnc = Effect.gen(function* () {
+        const stored = yield* docker
+          .execStream(
+            container,
+            [
+              "sh",
+              "-c",
+              "umask 077; mkdir -p ~/.vnc; x11vnc -storepasswd ~/.vnc/passwd",
+            ],
+            {
+              stdin: Stream.make(
+                new TextEncoder().encode(`${password}\n${password}\ny\n`),
+              ),
+            },
+          )
+          .pipe(
+            Stream.runCollect,
+            Effect.map((events) => {
+              let exitCode = 1;
+              let stderr = "";
+              for (const event of Chunk.toReadonlyArray(events)) {
+                if (event._tag === "Exit") {
+                  exitCode = event.code;
+                } else if (event._tag === "Stderr") {
+                  stderr += Buffer.from(event.bytes).toString("utf8");
+                }
+              }
+              return { exitCode, stderr };
+            }),
+            Effect.mapError((error) => `docker exec failed: ${error.message}`),
+          );
+        if (stored.exitCode !== 0) {
+          return yield* Effect.fail(
+            `x11vnc could not store the password: ${stored.stderr.trim()}`,
+          );
+        }
+        const started = yield* docker
+          .execText(container, "app", [
+            "sh",
+            "-c",
+            'mkdir -p /tmp/proofbox-live && touch "/tmp/proofbox-live/$1" && { pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
+            "sh",
+            password,
+          ])
+          .pipe(
+            Effect.mapError((error) => `docker exec failed: ${error.message}`),
+          );
+        if (started.exitCode !== 0) {
+          return yield* Effect.fail(
+            `x11vnc did not start: ${started.stderr.trim()}`,
+          );
+        }
+      });
       yield* Effect.retry(
         startX11vnc,
         Schedule.spaced(Duration.seconds(1)).pipe(
           Schedule.upTo(Duration.seconds(10)),
         ),
-      ).pipe(
-        Effect.mapError((e) =>
-          fail(typeof e === "string" ? e : `docker exec failed: ${e.message}`),
-        ),
-      );
+      ).pipe(Effect.mapError((error) => fail(describe(error))));
       yield* Effect.addFinalizer(() =>
         docker
           .execText(container, "app", [
             "sh",
             "-c",
-            'rm -f "/tmp/proofbox-live/$1"; [ -z "$(ls -A /tmp/proofbox-live)" ] && pkill -x x11vnc; true',
+            'rm -f "/tmp/proofbox-live/$1"; if [ -z "$(ls -A /tmp/proofbox-live 2>/dev/null)" ]; then pkill -x x11vnc; rm -f ~/.vnc/passwd; fi; true',
             "sh",
             password,
           ])

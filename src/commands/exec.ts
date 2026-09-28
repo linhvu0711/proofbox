@@ -18,14 +18,16 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       [provider.get(id.name), provider.memoryKills(id.name)],
       { concurrency: 2 },
     );
+    const idle = Duration.seconds(info.idleSeconds);
+    const push = deadlinePush(provider, id.name, info);
+    // A cold Keeper link bring-up can outlast a short host Deadline.
+    yield* push;
     const keeper = yield* KeeperClient;
     const events = yield* keeper.exec(
       rawId,
       withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
     );
     let exitCode: number | undefined;
-    const idle = Duration.seconds(info.idleSeconds);
-    const push = deadlinePush(provider, id.name, info);
     // The repeated push never completes on its own, so the stream's value wins.
     yield* events.pipe(
       Stream.runForEach((event) => {

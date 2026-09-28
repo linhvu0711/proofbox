@@ -329,7 +329,7 @@ export const makeDockerClient = (
         if (isDown(result)) {
           return yield* unavailable();
         }
-        if (result.stderr.includes("No such object")) {
+        if (result.stderr.toLowerCase().includes("no such object")) {
           return Option.none();
         }
         return yield* refuse("docker inspect failed", result);

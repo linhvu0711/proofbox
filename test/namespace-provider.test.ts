@@ -164,6 +164,7 @@ describe("Namespace Provider", () => {
         expect(seen[0]).toContain("900");
         expect(yield* Ref.get(spawned)).toEqual([
           ["namespace", "namespace/extend-main", ["abc123def4567", "900"]],
+          ["namespace", "namespace/extend-main", ["abc123def4567", "120"]],
         ]);
       }),
   );
