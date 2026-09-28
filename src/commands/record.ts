@@ -79,6 +79,7 @@ export const stopRecording = (options: {
       return yield* helperFailed(actionLog);
     }
     const marks: number[] = [];
+    const clicks: { t: number; x: number; y: number }[] = [];
     for (const line of actionLog.stdout.toString("utf8").split("\n")) {
       if (line.trim() === "") {
         continue;
@@ -86,19 +87,20 @@ export const stopRecording = (options: {
       const entry = yield* Schema.decodeUnknown(
         Schema.parseJson(ActionLogLine),
       )(line);
-      if (
-        entry.kind === "mark" &&
-        entry.t >= info.start &&
-        entry.t <= info.stop
-      ) {
+      if (entry.t < info.start || entry.t > info.stop) {
+        continue;
+      }
+      if (entry.kind === "mark") {
         marks.push(entry.t - info.start);
+      } else if (entry.kind === "click") {
+        clicks.push({ t: entry.t - info.start, x: entry.x, y: entry.y });
       }
     }
     const plan = planEdit({
       duration: probe.duration,
       freezes: probe.freezes,
       marks,
-      clicks: [],
+      clicks,
     });
     const script = renderEdit(plan, {
       width: info.width,

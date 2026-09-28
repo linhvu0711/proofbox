@@ -96,6 +96,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
   const captions: Caption[] = [];
   const rings: Ring[] = [];
   const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
+  const cutSpans: { from: number; to: number; out: number }[] = [];
   let out = 0;
   for (let step = 0; step < count; step++) {
     const start = step === 0 ? 0 : (input.marks[step - 1] ?? 0);
@@ -165,6 +166,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
         out += 2;
       }
       clips.push({ kind: "cut", from: a, to: b, step });
+      cutSpans.push({ from: a, to: b, out });
       out += b - a;
       cursor = b;
     }
@@ -187,6 +189,21 @@ export const planEdit = (input: PlanInput): EditPlan => {
         captions.push({ step, from: outStart, to: out });
       }
     }
+  }
+  for (const click of input.clicks) {
+    const span = cutSpans.find(
+      ({ from, to }) => click.t >= from && click.t <= to,
+    );
+    if (span === undefined) {
+      continue;
+    }
+    const from = span.out + click.t - span.from;
+    rings.push({
+      x: click.x,
+      y: click.y,
+      from,
+      to: Math.min(from + 0.8, span.out + span.to - span.from),
+    });
   }
   return { clips, captions, rings, seconds: out };
 };

@@ -46,11 +46,34 @@ export const renderEdit = (
       `:enable='between(t,${num(caption.from)},${num(caption.to)})'`,
   );
   const inputs = plan.clips.map((_, index) => `[c${index}]`).join("");
-  return (
-    `${chains.join(";")};` +
+  const main =
     `${inputs}concat=n=${plan.clips.length}:v=1:a=0` +
     `,pad=${options.width}:${options.height + bar}:0:${bar}:color=0x111111` +
-    (captions.length === 0 ? "" : `,${captions.join(",")}`) +
-    `[out]`
+    (captions.length === 0 ? "" : `,${captions.join(",")}`);
+  if (plan.rings.length === 0) {
+    return `${chains.join(";")};${main}[out]`;
+  }
+  const radius = 2 * Math.round(options.width / 60);
+  const half = radius / 2;
+  const sources = plan.rings.map(
+    (ring, index) =>
+      `color=c=black@0:s=${radius}x${radius}:r=30:d=${num(ring.to)}` +
+      `,format=rgba,geq=r='255':g='59':b='48'` +
+      `:a='if(between(hypot(X-${half},Y-${half}),${half - 4},${half}),230,0)'` +
+      `[r${index}]`,
+  );
+  const overlays = plan.rings.map((ring, index) => {
+    const input = index === 0 ? "v" : `o${index - 1}`;
+    const output =
+      index === plan.rings.length - 1 ? "out" : `o${index}`;
+    return (
+      `[${input}][r${index}]overlay=x=${ring.x - half}` +
+      `:y=${ring.y + bar - half}` +
+      `:enable='between(t,${num(ring.from)},${num(ring.to)})'[${output}]`
+    );
+  });
+  return (
+    `${chains.join(";")};${main}[v];` +
+    `${sources.join(";")};${overlays.join(";")}`
   );
 };

@@ -142,6 +142,31 @@ describe("edit-plan", () => {
     ]);
   });
 
+  it("each click gets a ring for 0.8 s at its place in the video", () => {
+    // Given
+    const input = {
+      duration: 172,
+      freezes: [
+        [2, 58.5],
+        [59, 115.5],
+        [116, undefined],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [1, 58, 115],
+      clicks: [
+        { t: 1.5, x: 700, y: 400 },
+        { t: 3.5, x: 10, y: 20 },
+        { t: 30, x: 5, y: 5 },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.rings).toEqual([
+      { x: 700, y: 400, from: 1.5, to: 2.3 },
+      { x: 10, y: 20, from: 3.5, to: 4 },
+    ]);
+  });
+
   it("parseProbe reads the duration and each still part", () => {
     // Given
     const text = [

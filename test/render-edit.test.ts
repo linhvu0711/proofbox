@@ -58,4 +58,32 @@ describe("render-edit", () => {
       `movie=${DIR}/raw.mkv:seek_point=6.9,trim=start=6.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text='» 22 s later':fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
     );
   });
+
+  it("a ring is drawn at the click, below the bar", () => {
+    // Given
+    const plan = planEdit({
+      duration: 172,
+      freezes: [
+        [2, 58.5],
+        [59, 115.5],
+        [116, undefined],
+      ],
+      marks: [1, 58, 115],
+      clicks: [
+        { t: 1.5, x: 700, y: 400 },
+        { t: 3.5, x: 10, y: 20 },
+        { t: 30, x: 5, y: 5 },
+      ],
+    });
+    const options = { width: 1440, height: 900, dir: DIR, font: FONT };
+    // When
+    const script = renderEdit(plan, options);
+    // Then
+    expect(script).toContain(
+      "color=c=black@0:s=48x48:r=30:d=2.3,format=rgba,geq=r='255':g='59':b='48':a='if(between(hypot(X-24,Y-24),20,24),230,0)'",
+    );
+    expect(script).toContain(
+      "overlay=x=676:y=448:enable='between(t,1.5,2.3)'",
+    );
+  });
 });
