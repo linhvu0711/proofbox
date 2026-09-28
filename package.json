@@ -13,6 +13,7 @@
   "scripts": {
     "postinstall": "bash scripts/sync-repos.sh",
     "test": "vitest run",
+    "test:docker": "vitest run --config vitest.docker.config.ts",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

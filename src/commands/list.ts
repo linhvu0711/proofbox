@@ -26,6 +26,7 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
           sandboxes.map(({ id, info }) => ({
             id,
             os: info.os,
+            ...(info.base === undefined ? {} : { base: info.base }),
             deadline: formatTime(info.deadline),
             maxLife: formatTime(info.maxLifeAt),
           })),
@@ -39,7 +40,7 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
     }
     for (const { id, info } of sandboxes) {
       yield* output.out(
-        `${id}  ${info.os}  deadline ${formatTime(info.deadline)}  max life ${formatTime(
+        `${id}  ${info.os}  ${info.base === undefined ? "" : `base ${info.base}  `}deadline ${formatTime(info.deadline)}  max life ${formatTime(
           info.maxLifeAt,
         )}\n`,
       );

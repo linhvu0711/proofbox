@@ -12,19 +12,29 @@ export interface CliEnv {
   readonly env: {
     readonly PROOFBOX_FAKE_ROOT: string;
     readonly PROOFBOX_RUNTIME_DIR: string;
+    readonly DOCKER_HOST?: string;
   };
 }
 
 const made: string[] = [];
 
-export const makeEnv = (): CliEnv => {
+export const makeEnv = (
+  options: { readonly docker?: boolean } = {},
+): CliEnv => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
   const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
   made.push(root, runtime);
   return {
     root,
     runtime,
-    env: { PROOFBOX_FAKE_ROOT: root, PROOFBOX_RUNTIME_DIR: runtime },
+    env: {
+      PROOFBOX_FAKE_ROOT: root,
+      PROOFBOX_RUNTIME_DIR: runtime,
+      // Plain tests must not touch the host Docker daemon.
+      ...(options.docker === true
+        ? {}
+        : { DOCKER_HOST: "unix:///nonexistent/proofbox-test.sock" }),
+    },
   };
 };
 
@@ -43,14 +53,26 @@ export interface CliResult {
 export const runCli = (
   env: CliEnv,
   args: ReadonlyArray<string>,
+  options: {
+    readonly set?: Readonly<Record<string, string>>;
+    readonly unset?: ReadonlyArray<string>;
+  } = {},
 ): Promise<CliResult> =>
   new Promise((resolve) => {
+    const childEnv: Record<string, string | undefined> = {
+      ...process.env,
+      ...env.env,
+      ...options.set,
+    };
+    for (const key of options.unset ?? []) {
+      delete childEnv[key];
+    }
     execFile(
       process.execPath,
       ["--disable-warning=ExperimentalWarning", "src/main.ts", ...args],
       {
         cwd: repoRoot,
-        env: { ...process.env, ...env.env },
+        env: childEnv,
       },
       (error, stdout, stderr) => {
         resolve({
