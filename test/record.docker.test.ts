@@ -91,4 +91,48 @@ describe("Recording and the Proof video", () => {
     expect(probe.stderr).toContain("h264 (High)");
     expect(probe.stderr).toContain("yuv420p");
   });
+
+  it("each mark gives a caption bar above the picture, so the video grows to 1440x972", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/run/proofbox/recordings/1/proof.mp4",
+    ]);
+    expect(probe.stderr).toContain("1440x972");
+  });
 });

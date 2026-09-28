@@ -6,6 +6,7 @@ import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { pressKey } from "./commands/key.ts";
+import { setMark } from "./commands/mark.ts";
 import { startRecording, stopRecording } from "./commands/record.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
@@ -218,6 +219,15 @@ const del = Command.make(
   ({ id }) => deleteSandbox(id),
 );
 
+const mark = Command.make(
+  "mark",
+  {
+    id: Args.text({ name: "id" }),
+    label: Args.text({ name: "label" }),
+  },
+  ({ id, label }) => setMark({ id, label }),
+);
+
 const recordStart = Command.make(
   "start",
   { id: Args.text({ name: "id" }) },
@@ -268,6 +278,7 @@ const command = Command.make("proofbox").pipe(
     del,
     upload,
     record,
+    mark,
   ]),
 );
 

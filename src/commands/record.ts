@@ -2,7 +2,7 @@ import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { ProviderError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
-import { writeOut } from "../pixel.ts";
+import { ACTION_LOG_PATH, ActionLogLine, writeOut } from "../pixel.ts";
 import { type Os } from "../provider.ts";
 import { parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
@@ -69,10 +69,35 @@ export const stopRecording = (options: {
       return yield* helperFailed(probed);
     }
     const probe = parseProbe(probed.stdout.toString("utf8"));
+    const actionLog = yield* runHelper(
+      options.id,
+      RECORD_HELPER,
+      ["fetch", ACTION_LOG_PATH],
+      { outcome: "no Proof video was made" },
+    );
+    if (actionLog.code !== 0) {
+      return yield* helperFailed(actionLog);
+    }
+    const marks: number[] = [];
+    for (const line of actionLog.stdout.toString("utf8").split("\n")) {
+      if (line.trim() === "") {
+        continue;
+      }
+      const entry = yield* Schema.decodeUnknown(
+        Schema.parseJson(ActionLogLine),
+      )(line);
+      if (
+        entry.kind === "mark" &&
+        entry.t >= info.start &&
+        entry.t <= info.stop
+      ) {
+        marks.push(entry.t - info.start);
+      }
+    }
     const plan = planEdit({
       duration: probe.duration,
       freezes: probe.freezes,
-      marks: [],
+      marks,
       clicks: [],
     });
     const script = renderEdit(plan, {

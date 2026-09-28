@@ -18,11 +18,20 @@ export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";
 
 export const ActionLogLine = Schema.Struct({
   t: Schema.Number,
-  kind: Schema.Literal("screenshot", "click", "type", "key", "scroll", "drag"),
+  kind: Schema.Literal(
+    "screenshot",
+    "click",
+    "type",
+    "key",
+    "scroll",
+    "drag",
+    "mark",
+  ),
   x: Schema.Number.pipe(Schema.int()),
   y: Schema.Number.pipe(Schema.int()),
   toX: Schema.optional(Schema.Number.pipe(Schema.int())),
   toY: Schema.optional(Schema.Number.pipe(Schema.int())),
+  step: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
 
 export const PACE_HUMAN = {

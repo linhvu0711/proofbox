@@ -80,14 +80,27 @@ export const parseProbe = (text: string): ProbeResult => {
 };
 
 export const planEdit = (input: PlanInput): EditPlan => {
-  const clips: Clip[] = [
-    { kind: "cut", from: 0, to: input.duration, step: 0 },
-    { kind: "still", at: input.duration, seconds: 2, step: 0 },
-  ];
-  return {
-    clips,
-    captions: [],
-    rings: [],
-    seconds: input.duration + 2,
-  };
+  const clips: Clip[] = [];
+  const captions: Caption[] = [];
+  const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
+  let out = 0;
+  for (let step = 0; step < count; step++) {
+    const from = step === 0 ? 0 : (input.marks[step - 1] ?? 0);
+    const to =
+      step === count - 1 ? input.duration : (input.marks[step] ?? input.duration);
+    const start = out;
+    if (to > from) {
+      clips.push({ kind: "cut", from, to, step });
+      out += to - from;
+    }
+    if (step > 0 || input.marks.length === 0) {
+      const still = Math.max(2, 3 - (out - start));
+      clips.push({ kind: "still", at: to, seconds: still, step });
+      out += still;
+      if (input.marks.length > 0) {
+        captions.push({ step, from: start, to: out });
+      }
+    }
+  }
+  return { clips, captions, rings: [], seconds: out };
 };

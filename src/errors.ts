@@ -105,6 +105,14 @@ export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
   }
 }
 
+export class BadMarkError extends Data.TaggedError("BadMarkError")<{
+  readonly label: string;
+}> {
+  get message() {
+    return `Bad Step mark "${this.label}": use 1 to 60 characters on one line, for example "step 3: save the post"`;
+  }
+}
+
 export class WorkFolderTooBigError extends Data.TaggedError(
   "WorkFolderTooBigError",
 )<{

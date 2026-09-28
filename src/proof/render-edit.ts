@@ -28,9 +28,22 @@ export const renderEdit = (
       `,loop=loop=${frames}:size=1:start=0,setpts=N/30/TB[c${index}]`
     );
   });
+  const size = Math.round(options.width / 40);
+  const bar = 2 * size;
+  const captions = plan.captions.map(
+    (caption) =>
+      `drawtext=fontfile=${options.font}` +
+      `:textfile=${options.dir}/caption-${caption.step}.txt` +
+      `:fontsize=${size}:fontcolor=white:x=${size}` +
+      `:y=(${bar}-text_h)/2` +
+      `:enable='between(t,${num(caption.from)},${num(caption.to)})'`,
+  );
   const inputs = plan.clips.map((_, index) => `[c${index}]`).join("");
   return (
     `${chains.join(";")};` +
-    `${inputs}concat=n=${plan.clips.length}:v=1:a=0[out]`
+    `${inputs}concat=n=${plan.clips.length}:v=1:a=0` +
+    `,pad=${options.width}:${options.height + bar}:0:${bar}:color=0x111111` +
+    (captions.length === 0 ? "" : `,${captions.join(",")}`) +
+    `[out]`
   );
 };

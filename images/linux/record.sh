@@ -61,6 +61,15 @@ case "$cmd" in
     steps=$(cat "$DIR/steps" 2>/dev/null || echo 0)
     printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
     ;;
+  mark)
+    # mark LABEL: start a new numbered step with its caption text.
+    DIR=$(readlink "$CUR")
+    n=$(cat "$DIR/steps" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    printf '%s' "$1" > "$DIR/caption-$n.txt"
+    echo "$n" > "$DIR/steps"
+    log mark "$n"
+    ;;
   probe)
     # probe DIR: print the Duration line and each freezedetect mark of raw.mkv.
     "$FFMPEG" -hide_banner -nostats -i "$1/raw.mkv" -vf freezedetect=n=0.001:d=3 -an -f null - 2>&1 | grep -E 'Duration:|lavfi.freezedetect'
