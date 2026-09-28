@@ -198,6 +198,26 @@ describe("Pixel actions", () => {
     expect(keys).toEqual(["h", "e", "l", "l", "o"]);
   });
 
+  it("type sends text that starts with a dash as letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, ["type", id, "-n", "--pace", "fast"]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const events = await readXev(env, id);
+    const clickAt = events.findIndex((event) => event.type === "ButtonPress");
+    const keys = events
+      .slice(clickAt + 1)
+      .filter((event) => event.type === "KeyPress")
+      .map((event) => event.keysym);
+    expect(keys).toEqual(["minus", "n"]);
+  });
+
   it("key sends a key combo", async () => {
     // Given
     const env = makeEnv({ docker: true });

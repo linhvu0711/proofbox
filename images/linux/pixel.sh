@@ -82,7 +82,8 @@ case "$cmd" in
   type)
     # type LETTER_MS SETTLE_MS SHOT TEXT
     log type
-    xdotool type --delay "$1" "$4"
+    # -- keeps text that starts with a dash from reading as an xdotool flag.
+    xdotool type --delay "$1" -- "$4"
     settle "$2"
     if [ "$3" = "1" ]; then
       shot
