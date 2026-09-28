@@ -96,6 +96,21 @@ describe("Namespace macOS Provider", () => {
     expect(found.exitCode).toBe(1);
   });
 
+  it("the memory watcher runs after create", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "pgrep",
+      "-f",
+      "/usr/bin/log stream",
+    ]);
+    // Then
+    expect(found.exitCode).toBe(0);
+  });
+
   it("live and record on a Mac are refused until #15", async () => {
     // Given: the Mac from beforeAll
     // When

@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
+import { countMemoryKills } from "../src/namespace/mac-host.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { HostResult, Link } from "../src/namespace/ssh-link.ts";
@@ -131,6 +132,14 @@ const defaultAnswer = (line: string): Answer | undefined =>
     : line.startsWith("plutil -extract")
       ? replaydKept
       : undefined;
+
+// Three jetsam lines as the kernel logs them: one idle-daemon kill, then
+// two kills of real work.
+const JETSAM_LINES = [
+  "2026-09-28 16:10:17.591 Df kernel[0:1cd] [com.apple.xnu:memorystatus] memorystatus: killing_idle_process pid 386 [wallpaperexportd] jetsam_reason->osr_code: 9",
+  "2026-09-28 16:12:02.114 Df kernel[0:1cd] [com.apple.xnu:memorystatus] memorystatus: killing_top_process pid 901 [node] jetsam_reason->osr_code: 2",
+  "2026-09-28 16:12:09.020 Df kernel[0:1cd] [com.apple.xnu:memorystatus] memorystatus: killing_specific_process pid 915 [swift-build] (per-process-limit 14)",
+].join("\n");
 
 const runtimeDir = () => mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
 
@@ -459,4 +468,29 @@ describe("Namespace macOS Provider", () => {
       expect(restart).toBeLessThan(capture);
     }).pipe(withRuntime(runtimeDir())),
   );
+
+  it("countMemoryKills counts kernel kills and skips idle-daemon kills", () => {
+    // Given: JETSAM_LINES
+    // When
+    const count = countMemoryKills(JETSAM_LINES);
+    // Then
+    expect(count).toBe(2);
+  });
+
+  it.effect("memoryKills on a Mac counts the watcher's log", () => {
+    const runtime = runtimeDir();
+    writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+    return Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac((line) =>
+        line.startsWith("grep 'memorystatus: killing_'")
+          ? { stdout: `${JETSAM_LINES}\n` }
+          : undefined,
+      );
+      // When
+      const kills = yield* mac.provider.memoryKills("abc123def4567");
+      // Then
+      expect(kills).toBe(2);
+    }).pipe(withRuntime(runtime));
+  });
 });

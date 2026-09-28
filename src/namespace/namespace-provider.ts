@@ -33,7 +33,13 @@ import { type Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
-import { macExec, prepareMac, readMac, writeMacDeadline } from "./mac-host.ts";
+import {
+  macExec,
+  prepareMac,
+  readMac,
+  readMemoryKills,
+  writeMacDeadline,
+} from "./mac-host.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
   pullSnapshot,
@@ -636,10 +642,10 @@ export const makeNamespaceProvider = (deps: {
 
   const memoryKills = (name: string) =>
     Effect.gen(function* () {
-      const info = yield* get(name);
-      if (info.os === "macos") {
-        return 0;
+      if ((yield* osOf(name)) === "macos") {
+        return yield* withCliLink(name, readMemoryKills);
       }
+      yield* get(name);
       const read = yield* withCliLink(name, (link) =>
         deps
           .dockerFor(link)

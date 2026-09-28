@@ -30,6 +30,7 @@ export const MAC_STATE_DIR = "/var/lib/proofbox";
 export const MAC_WORK_DIR = "/Users/runner/work";
 const LABELS = `${MAC_STATE_DIR}/labels.json`;
 const DEADLINE = `${MAC_STATE_DIR}/deadline`;
+const MEMORY_KILLS = `${MAC_STATE_DIR}/memory-kills.log`;
 
 const fail = (reason: string) =>
   new ProviderError({ provider: "namespace", reason });
@@ -227,6 +228,34 @@ const grantPrivacy = (link: Link) =>
     );
   });
 
+// The kernel's jetsam kills, logged from create on; `log show` per exec
+// would cost about 2 s twice. Not `nohup`: without a terminal, macOS nohup
+// fails and never starts the command.
+const watchMemory = (link: Link) =>
+  step(
+    link,
+    "starting the memory watcher",
+    `sudo -n sh -c ${shellJoin([
+      `trap "" HUP; /usr/bin/log stream --style compact --predicate 'sender == "kernel" AND eventMessage BEGINSWITH "memorystatus: killing_"' >> ${MEMORY_KILLS} 2>/dev/null < /dev/null &`,
+    ])}`,
+  );
+
+// Kills of real work: macOS also kills idle daemons under pressure, and
+// those are not the command.
+export const countMemoryKills = (text: string): number =>
+  text
+    .split("\n")
+    .filter(
+      (line) =>
+        /memorystatus: killing_\w+ pid \d+/.test(line) &&
+        !line.includes("killing_idle_process"),
+    ).length;
+
+export const readMemoryKills = (link: Link) =>
+  link
+    .run(`grep 'memorystatus: killing_' ${MEMORY_KILLS} 2>/dev/null; true`)
+    .pipe(Effect.map((result) => countMemoryKills(result.stdout)));
+
 // The screen as it is now, saved next to the host's other files, so a
 // failed prepare shows what was in the way.
 const saveScreen = (link: Link, id: string) =>
@@ -305,7 +334,10 @@ export const prepareMac = (
       "checking the Namespace token is out of reach",
       dropToken(link, req.id),
     );
-    yield* progress.step("setting up screen access", grantPrivacy(link));
+    yield* progress.step(
+      "setting up screen access",
+      grantPrivacy(link).pipe(Effect.zipRight(watchMemory(link))),
+    );
     yield* progress.step(
       "taking a test screenshot and capture",
       checkScreen(link, req.id),
