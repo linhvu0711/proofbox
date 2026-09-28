@@ -11,6 +11,7 @@ import type {
   ProviderError,
   ProviderUnavailableError,
   SandboxGoneError,
+  TokenExposedError,
   ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
@@ -64,7 +65,10 @@ export interface Provider {
     readonly name?: string | undefined;
   }) => Effect.Effect<
     SandboxInfo,
-    ProviderError | ProviderUnavailableError | ToolBundleHashError,
+    | ProviderError
+    | ProviderUnavailableError
+    | ToolBundleHashError
+    | TokenExposedError,
     Progress
   >;
   readonly extend: (

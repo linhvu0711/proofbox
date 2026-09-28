@@ -17,8 +17,10 @@ import {
   ProviderError,
   type ProviderUnavailableError,
   SandboxGoneError,
+  TokenExposedError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
+import { Progress } from "../progress.ts";
 import { type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
@@ -238,6 +240,7 @@ export const makeNamespaceProvider = (deps: {
         }
       });
       return yield* Effect.gen(function* () {
+        const progress = yield* Progress;
         const id = yield* nsc.create({
           machineType: `linux/amd64:${formatSize(size)}`,
           durationSeconds: Math.min(
@@ -283,6 +286,37 @@ export const makeNamespaceProvider = (deps: {
           size,
           name: id.slice(0, 6),
         });
+        // The Base image must hide the host's workload token from user code:
+        // neither the token file nor the link-local token service may answer.
+        const docker = deps.dockerFor(link);
+        const container = containerOf(id);
+        yield* progress.step(
+          "checking the Namespace token is out of reach",
+          Effect.gen(function* () {
+            const file = yield* docker.execText(container, "app", [
+              "sh",
+              "-c",
+              "test ! -e /var/run/nsc/token.json",
+            ]);
+            if (file.exitCode !== 0) {
+              return yield* new TokenExposedError({
+                id: `ns:${id}`,
+                what: "the token file",
+              });
+            }
+            const service = yield* docker.execText(container, "app", [
+              "sh",
+              "-c",
+              "! curl -s -m 3 -o /dev/null http://169.254.169.42/",
+            ]);
+            if (service.exitCode !== 0) {
+              return yield* new TokenExposedError({
+                id: `ns:${id}`,
+                what: "the token service",
+              });
+            }
+          }),
+        );
         return new SandboxInfo({
           name: id,
           os: info.os,

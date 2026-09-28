@@ -108,6 +108,18 @@ export class SetupScriptMissingError extends Data.TaggedError(
   }
 }
 
+export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
+  readonly id: string;
+  readonly what: "the token file" | "the token service";
+}> {
+  get message() {
+    return `Sandbox ${this.id} can reach the Namespace workload token (${this.what}); deleted the host and refused the Sandbox`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{

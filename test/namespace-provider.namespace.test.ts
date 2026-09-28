@@ -123,6 +123,18 @@ describe("Namespace Provider", () => {
     expect(whoami.exitCode).toBe(0);
   });
 
+  it("create on a real host passes both token checks", async () => {
+    // Given: a real account
+    const env = makeEnv({ docker: true, namespace: true });
+    // When
+    const created = await create(env);
+    // Then
+    expect(created.exitCode).toBe(0);
+    expect(created.stderr).toContain(
+      "proofbox: checking the Namespace token is out of reach\n",
+    );
+  });
+
   it("a warm exec takes under 3 s", async () => {
     // Given: a created ns: Sandbox whose Keeper already holds the link
     const env = makeEnv({ docker: true, namespace: true });
