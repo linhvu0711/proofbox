@@ -20,6 +20,18 @@ export class ProviderUnavailableError extends Data.TaggedError(
   }
 }
 
+export class ToolBundleHashError extends Data.TaggedError(
+  "ToolBundleHashError",
+)<{
+  readonly file: string;
+  readonly sandboxId: string;
+  readonly tag: string;
+}> {
+  get message() {
+    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. Run docker image rm ${this.tag} and try again`;
+  }
+}
+
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   readonly id: string;
 }> {

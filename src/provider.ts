@@ -11,6 +11,7 @@ import type {
   ProviderError,
   ProviderUnavailableError,
   SandboxGoneError,
+  ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
 
@@ -52,7 +53,7 @@ export interface Provider {
     readonly maxLife: Duration.Duration;
   }) => Effect.Effect<
     SandboxInfo,
-    ProviderError | ProviderUnavailableError,
+    ProviderError | ProviderUnavailableError | ToolBundleHashError,
     Progress
   >;
   readonly extend: (

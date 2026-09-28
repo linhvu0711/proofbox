@@ -1,7 +1,25 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { CommandExecutor } from "@effect/platform";
+import { NodeContext } from "@effect/platform-node";
+import { it as effectIt } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { createSandbox } from "../src/commands/create.ts";
+import {
+  BASE_IMAGE_DIR,
+  baseImageTag,
+  baseImageVersion,
+} from "../src/docker/base-image.ts";
+import { makeDockerClient } from "../src/docker/docker-client.ts";
+import { makeDockerProvider } from "../src/docker/docker-provider.ts";
+import { ToolBundleHashError } from "../src/errors.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { Progress } from "../src/progress.ts";
+import { type Provider, Providers } from "../src/provider.ts";
+import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
@@ -36,8 +54,29 @@ const containerExists = async (name: string): Promise<boolean> =>
     out.split("\n").includes(name),
   );
 
+const buildImage = (tag: string, dockerfile: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const child = execFile(
+      "docker",
+      ["build", "-t", tag, "-"],
+      (error, _stdout, stderr) => {
+        if (error === null) {
+          resolve();
+        } else {
+          reject(new Error(stderr.trim()));
+        }
+      },
+    );
+    child.stdin?.end(dockerfile);
+  });
+
 describe("Docker Provider", () => {
   const containers: string[] = [];
+  const tamperedTag = "proofbox-test-tampered:1";
+
+  afterAll(async () => {
+    await docker(["image", "rm", "-f", tamperedTag]).catch(() => {});
+  });
 
   afterEach(async () => {
     for (const name of containers.splice(0)) {
@@ -151,6 +190,93 @@ describe("Docker Provider", () => {
     }>;
     expect(rows.find((entry) => entry.id === id)?.base).toBe(version);
   });
+
+  it("the Base image holds the Tool bundle ffmpeg with its fixed hash", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const sum = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sha256sum",
+      "/opt/proofbox/tools/ffmpeg",
+    ]);
+    const devices = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-devices",
+    ]);
+    // Then
+    const sha256 =
+      process.arch === "x64"
+        ? "9a380286db8a65bfadf83b67256e58b0e8fbe0a82781375ec7fd410ebee73f02"
+        : "583e6f13cdc325e4633d1d61f2d27bb8baeb234a4f75fca4e0b8f2b9aab09e60";
+    expect(sum.stdout).toBe(`${sha256}  /opt/proofbox/tools/ffmpeg\n`);
+    expect(devices.stdout).toContain(" x11grab ");
+  });
+
+  effectIt.live(
+    "a Tool bundle file with a wrong hash fails create and deletes the container",
+    () =>
+      Effect.gen(function* () {
+        // Given: the Base image with a tampered Tool bundle file
+        const executor = yield* CommandExecutor.CommandExecutor;
+        const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+        yield* Effect.promise(() =>
+          buildImage(
+            tamperedTag,
+            `FROM ${baseImageTag(version)}\nRUN echo tampered >> /opt/proofbox/tools/ffmpeg\n`,
+          ),
+        );
+        const providers = Layer.succeed(
+          Providers,
+          new Map<string, Provider>([
+            [
+              "docker",
+              makeDockerProvider({
+                client: makeDockerClient(executor),
+                imageTag: tamperedTag,
+              }),
+            ],
+          ]),
+        );
+        // When
+        const error = yield* Effect.flip(
+          createSandbox({ os: "linux", provider: "docker" }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                NodeContext.layer,
+                CliOutput.Test,
+                providers,
+                KeeperClient.Direct.pipe(Layer.provide(providers)),
+                Layer.succeed(
+                  Progress,
+                  new Progress({ step: (_label, effect) => effect }),
+                ),
+              ),
+            ),
+          ),
+        );
+        // Then
+        expect(error._tag).toBe("ToolBundleHashError");
+        if (!(error instanceof ToolBundleHashError)) {
+          throw new Error(`unexpected error ${error._tag}`);
+        }
+        expect(error.file).toBe("/opt/proofbox/tools/ffmpeg");
+        expect(error.sandboxId).toMatch(/^docker:[a-z0-9]{6}$/);
+        const container = containerOf(error.sandboxId);
+        containers.push(container);
+        expect(yield* Effect.promise(() => containerExists(container))).toBe(
+          false,
+        );
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
 
   it("delete removes the container", async () => {
     // Given

@@ -1,14 +1,21 @@
 import { Clock, Duration, Effect, Option, Schema } from "effect";
 import { nextDeadline } from "../deadline.ts";
-import { ProviderError, SandboxGoneError } from "../errors.ts";
+import {
+  ProviderError,
+  SandboxGoneError,
+  ToolBundleHashError,
+} from "../errors.ts";
 import { Progress } from "../progress.ts";
 import { Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
+import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
   baseImageVersion,
   ensureBaseImage,
+  toolBundleArgs,
+  toolBundleForArch,
 } from "./base-image.ts";
 import type { DockerClient } from "./docker-client.ts";
 
@@ -129,18 +136,22 @@ export const makeDockerProvider = (options: {
       }
     });
 
-  const createWork = (req: {
-    readonly os: Os;
-    readonly idle: Duration.Duration;
-    readonly maxLife: Duration.Duration;
-  }) =>
+  const createWork = (
+    req: {
+      readonly os: Os;
+      readonly idle: Duration.Duration;
+      readonly maxLife: Duration.Duration;
+    },
+    arch: string,
+  ) =>
     Effect.gen(function* () {
-      const version = yield* baseImageVersion(BASE_IMAGE_DIR, []);
+      const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+      const bundle = yield* toolBundleForArch(arch);
       const tag = options.imageTag ?? baseImageTag(version);
       yield* ensureBaseImage(client, {
         dir: BASE_IMAGE_DIR,
         tag,
-        buildArgs: { BASE_VERSION: version },
+        buildArgs: { BASE_VERSION: version, ...toolBundleArgs(bundle) },
       });
       const createdAt = yield* now;
       const maxLifeAt = new Date(
@@ -196,8 +207,27 @@ export const makeDockerProvider = (options: {
         return yield* fail("could not make a Sandbox name after 5 tries");
       }
       const container = containerOf(name);
+      const sandboxId = `docker:${name}`;
       return yield* Effect.gen(function* () {
         yield* waitForDesktop(container);
+        // The image could have been rebuilt or tampered with since the build;
+        // re-check every Tool bundle hash inside the container.
+        for (const file of bundle) {
+          const sum = yield* client.execText(container, "root", [
+            "sha256sum",
+            file.path,
+          ]);
+          if (
+            sum.exitCode !== 0 ||
+            sum.stdout.trim().split(/\s+/)[0] !== file.sha256
+          ) {
+            return yield* new ToolBundleHashError({
+              file: file.path,
+              sandboxId,
+              tag,
+            });
+          }
+        }
         const finished = yield* now;
         return yield* extend(
           name as string,
@@ -219,9 +249,12 @@ export const makeDockerProvider = (options: {
     Effect.gen(function* () {
       // Prove the daemon answers before anything is made — and before the
       // progress line prints, so a dead daemon reports only the error.
-      yield* client.serverArch;
+      const arch = yield* client.serverArch;
       const progress = yield* Progress;
-      return yield* progress.step("creating docker Sandbox", createWork(req));
+      return yield* progress.step(
+        "creating docker Sandbox",
+        createWork(req, arch),
+      );
     });
 
   const connect = (name: string) =>

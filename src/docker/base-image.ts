@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { ProviderError } from "../errors.ts";
+import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient, DockerError } from "./docker-client.ts";
 
 export const BASE_IMAGE_DIR = fileURLToPath(
@@ -47,6 +48,41 @@ export const baseImageVersion = (
 
 export const baseImageTag = (version: string) =>
   `proofbox-base-linux:${version}`;
+
+export interface ToolBundleFile {
+  readonly name: string;
+  readonly path: string;
+  readonly url: string;
+  readonly sha256: string;
+}
+
+export const toolBundleForArch = (
+  arch: string,
+): Effect.Effect<ReadonlyArray<ToolBundleFile>, ProviderError> =>
+  Effect.gen(function* () {
+    if (arch !== "amd64" && arch !== "arm64") {
+      return yield* new ProviderError({
+        provider: "docker",
+        reason: `no Tool bundle for ${arch}`,
+      });
+    }
+    return TOOL_BUNDLE.map((file) => ({
+      name: file.name,
+      path: file.path,
+      url: file.linux[arch].url,
+      sha256: file.linux[arch].sha256,
+    }));
+  });
+
+export const toolBundleArgs = (
+  files: ReadonlyArray<ToolBundleFile>,
+): Readonly<Record<string, string>> =>
+  Object.fromEntries(
+    files.flatMap((file) => [
+      [`${file.name.toUpperCase()}_URL`, file.url],
+      [`${file.name.toUpperCase()}_SHA256`, file.sha256],
+    ]),
+  );
 
 export const ensureBaseImage = (
   client: DockerClient,
