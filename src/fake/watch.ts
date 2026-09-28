@@ -24,6 +24,20 @@ const readDeadline = (root: string, name: string) =>
     return file.deadline;
   });
 
+const deleteSandbox = (root: string, name: string): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const deleted = yield* Effect.tryPromise({
+      try: () => rm(join(root, name), { recursive: true, force: true }),
+      catch: (cause) => fail(describe(cause)),
+    }).pipe(Effect.option);
+    if (deleted._tag === "None") {
+      // A partial rm can remove sandbox.json first, so retry the delete itself
+      // instead of reading the Deadline again.
+      yield* Effect.sleep("1 seconds");
+      return yield* deleteSandbox(root, name);
+    }
+  });
+
 export const watchSandbox = (root: string, name: string): Effect.Effect<void> =>
   Effect.gen(function* () {
     if (!existsSync(join(root, name))) {
@@ -41,9 +55,7 @@ export const watchSandbox = (root: string, name: string): Effect.Effect<void> =>
     }
     const remaining = deadline.value.getTime() - Date.now();
     if (remaining <= 0) {
-      yield* Effect.promise(() =>
-        rm(join(root, name), { recursive: true, force: true }),
-      );
+      yield* deleteSandbox(root, name);
       return;
     }
     yield* Effect.sleep(

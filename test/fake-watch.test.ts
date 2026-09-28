@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Option, Schema } from "effect";
@@ -80,4 +80,38 @@ describe("fake watcher", () => {
         expect(existsSync(dir)).toBe(false);
       }),
   );
+
+  it.live("the watcher tries a failed delete again after 1 s", () => {
+    // Given: a Sandbox past its Deadline, with a folder rm cannot empty
+    const env = makeEnv();
+    const dir = join(env.root, "abc123");
+    const locked = join(dir, "home", "locked");
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(
+      join(dir, "sandbox.json"),
+      wholeFile(new Date(Date.now() - 1000)),
+    );
+    writeFileSync(join(locked, "x"), "x");
+    chmodSync(locked, 0o500);
+    return Effect.gen(function* () {
+      // When: the delete fails for 1.5 s, then the folder can be emptied
+      const fiber = yield* Effect.fork(watchSandbox(env.root, "abc123"));
+      yield* Effect.sleep("1500 millis");
+      const early = yield* Fiber.poll(fiber);
+      const stillThere = existsSync(join(locked, "x"));
+      chmodSync(locked, 0o700);
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("3 seconds"));
+      // Then
+      expect(Option.isNone(early)).toBe(true);
+      expect(stillThere).toBe(true);
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(existsSync(dir)).toBe(false);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (existsSync(locked)) chmodSync(locked, 0o700);
+        }),
+      ),
+    );
+  });
 });
