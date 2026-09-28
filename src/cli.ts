@@ -1,6 +1,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Option } from "effect";
 import { createSandbox } from "./commands/create.ts";
+import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { listSandboxes } from "./commands/list.ts";
 
@@ -36,8 +37,14 @@ const list = Command.make(
   ({ json }) => listSandboxes({ json }),
 );
 
+const del = Command.make(
+  "delete",
+  { id: Args.text({ name: "id" }) },
+  ({ id }) => deleteSandbox(id),
+);
+
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, list]),
+  Command.withSubcommands([create, exec, list, del]),
 );
 
 export const cli = Command.run(command, {

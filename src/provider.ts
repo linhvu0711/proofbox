@@ -51,6 +51,9 @@ export interface Provider {
     name: string,
   ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
   readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
+  readonly delete: (
+    name: string,
+  ) => Effect.Effect<"deleted" | "gone", ProviderError>;
   readonly connect: (
     name: string,
   ) => Effect.Effect<

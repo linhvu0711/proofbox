@@ -173,6 +173,22 @@ export const makeFakeProvider = (options: {
     ).pipe(Effect.map((infos) => infos.filter((info) => info !== undefined)));
   });
 
+  const del = (name: string) =>
+    Effect.gen(function* () {
+      const alive = yield* readFileInfo(name).pipe(
+        Effect.map(() => true),
+        Effect.catchTag("SandboxGoneError", () => Effect.succeed(false)),
+      );
+      if (!alive) {
+        return "gone" as const;
+      }
+      yield* Effect.tryPromise({
+        try: () => rm(join(root, name), { recursive: true, force: true }),
+        catch: (cause) => fail(describe(cause)),
+      });
+      return "deleted" as const;
+    });
+
   const extend = (name: string, deadline: Date) =>
     Effect.gen(function* () {
       const info = yield* readFileInfo(name);
@@ -233,6 +249,7 @@ export const makeFakeProvider = (options: {
     create,
     get,
     list,
+    delete: del,
     extend,
     connect,
   };
