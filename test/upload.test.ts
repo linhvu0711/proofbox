@@ -1,4 +1,6 @@
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -156,6 +158,26 @@ describe("upload", () => {
     expect(String(readFileSync(join(env.root, name, "home", "a.txt")))).toBe(
       "a\n",
     );
+  });
+
+  it("a failed upload leaves no hash list", async () => {
+    // Given: the fixture uploaded once; a.txt changed; the Work folder made
+    // read-only so the tar step fails halfway
+    const { env, id, name, folder } = await uploadOnce();
+    writeFileSync(join(folder, "a.txt"), "a2\n");
+    const home = join(env.root, name, "home");
+    chmodSync(home, 0o500);
+    try {
+      // When
+      const result = await runCli(env, ["upload", id, folder]);
+      // Then
+      expect(result.exitCode).toBe(125);
+      expect(
+        existsSync(join(env.root, name, "state", "work-hashes.json")),
+      ).toBe(false);
+    } finally {
+      chmodSync(home, 0o700);
+    }
   });
 
   it("upload of a folder that is not a git repo exits 125 and says so", async () => {

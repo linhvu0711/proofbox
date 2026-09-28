@@ -98,6 +98,9 @@ export const sendWorkFolder = (
             Effect.catchAll(() => Effect.succeed(undefined)),
           );
           const diff = diffHashList(old, files);
+          if (diff.send.length !== 0 || diff.remove.length !== 0) {
+            yield* runInSandbox(keeper, rawId, ["rm", "-f", listPath]);
+          }
           if (diff.send.length !== 0) {
             yield* runInSandbox(
               keeper,
