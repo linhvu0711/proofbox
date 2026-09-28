@@ -401,9 +401,15 @@ describe("Namespace Provider", () => {
       const addresses = [...ip.matchAll(/inet (\d+\.\d+\.\d+\.\d+)\//g)].map(
         (match) => match[1] as string,
       );
+      const isPrivate = (address: string) =>
+        address.startsWith("10.") ||
+        /^172\.(1[6-9]|2[0-9]|3[01])\./.test(address) ||
+        address.startsWith("192.168.");
       expect(addresses.length).toBeGreaterThan(0);
+      // eth0 sits in 10.0.0.0/30; docker0 adds 172.16.0.0/12 — all private,
+      // nothing public (the point of the check).
       for (const address of addresses) {
-        expect(address.startsWith("10.")).toBe(true);
+        expect(isPrivate(address)).toBe(true);
       }
     } finally {
       child.kill("SIGINT");
