@@ -286,6 +286,13 @@ export const makeNamespaceProvider = (deps: {
           Duration.toSeconds(req.idle) + 60,
           Duration.toSeconds(req.maxLife),
         );
+        // Max life counts from the create call, so the Sandbox's
+        // maxLifeAt, the host-cap file the detached pushes read, and the
+        // provisioning keepalive all stop at the same instant — anchor it
+        // before the host is created, not after.
+        const maxLifeSeconds = Math.floor(
+          (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
+        );
         const id = yield* nsc
           .create({
             machineType: `linux/amd64:${formatSize(size)}`,
@@ -321,13 +328,12 @@ export const makeNamespaceProvider = (deps: {
             ),
           );
         hostId = id;
+        if (maxLifeSeconds <= Math.floor(Date.now() / 1000)) {
+          return yield* fail(
+            "making the host took the whole Max life; try a larger --max-life",
+          );
+        }
         const hostPaths = yield* paths(id);
-        // Max life counts from the create call, so the Sandbox's
-        // maxLifeAt, the host-cap file the detached pushes read, and the
-        // provisioning keepalive all stop at the same instant.
-        const maxLifeSeconds = Math.floor(
-          (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
-        );
         yield* Effect.tryPromise({
           try: async () => {
             await rename(keyBase, hostPaths.key);
