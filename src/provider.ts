@@ -32,9 +32,14 @@ export type ExecEvent =
   | { readonly _tag: "Stderr"; readonly bytes: Uint8Array }
   | { readonly _tag: "Exit"; readonly code: number };
 
+export interface ExecOptions {
+  readonly stdin?: Stream.Stream<Uint8Array, ProviderError>;
+}
+
 export interface Connection {
   readonly exec: (
     argv: ReadonlyArray<string>,
+    options?: ExecOptions,
   ) => Stream.Stream<ExecEvent, ProviderError>;
 }
 
@@ -57,6 +62,7 @@ export interface Provider {
   readonly delete: (
     name: string,
   ) => Effect.Effect<"deleted" | "gone", ProviderError>;
+  readonly stateDir: (name: string) => string;
   readonly connect: (
     name: string,
   ) => Effect.Effect<

@@ -161,7 +161,10 @@ export const makeFakeProvider = (options: {
       });
       yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
-        try: () => mkdir(join(dir, "home")),
+        try: async () => {
+          await mkdir(join(dir, "home"));
+          await mkdir(join(dir, "state"));
+        },
         catch: (cause) => fail(describe(cause)),
       });
       if (options.watch === "process") {
@@ -240,7 +243,7 @@ export const makeFakeProvider = (options: {
       const home = join(root, name, "home");
       yield* get(name);
       const connection: Connection = {
-        exec: (argv) =>
+        exec: (argv, options) =>
           Stream.unwrapScoped(
             Effect.gen(function* () {
               const process = yield* Command.start(
@@ -254,7 +257,13 @@ export const makeFakeProvider = (options: {
                 ),
                 Effect.mapError((error) => fail(error.message)),
               );
-              const events = Stream.merge(
+              const feed =
+                options?.stdin === undefined
+                  ? undefined
+                  : Stream.run(options.stdin, process.stdin).pipe(
+                      Effect.mapError((error) => fail(error.message)),
+                    );
+              const outputs = Stream.merge(
                 process.stdout.pipe(
                   Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
                 ),
@@ -262,6 +271,13 @@ export const makeFakeProvider = (options: {
                   Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
                 ),
               ).pipe(Stream.mapError((error) => fail(error.message)));
+              const events =
+                feed === undefined
+                  ? outputs
+                  : Stream.merge(
+                      outputs,
+                      Stream.fromEffect(feed).pipe(Stream.drain),
+                    );
               const exit = Stream.fromEffect(
                 process.exitCode.pipe(
                   Effect.mapError((error) => fail(error.message)),
@@ -282,6 +298,7 @@ export const makeFakeProvider = (options: {
     list,
     delete: del,
     extend,
+    stateDir: (name) => join(root, name, "state"),
     connect,
   };
 };
