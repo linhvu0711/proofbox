@@ -79,28 +79,114 @@ export const parseProbe = (text: string): ProbeResult => {
   };
 };
 
+export const labelText = (seconds: number): string => {
+  const n = Math.round(seconds);
+  if (n < 60) {
+    return `» ${n} s later`;
+  }
+  const minutes = Math.floor(n / 60);
+  const rest = n % 60;
+  return rest === 0
+    ? `» ${minutes} min later`
+    : `» ${minutes} min ${rest} s later`;
+};
+
 export const planEdit = (input: PlanInput): EditPlan => {
   const clips: Clip[] = [];
   const captions: Caption[] = [];
+  const rings: Ring[] = [];
   const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
   let out = 0;
   for (let step = 0; step < count; step++) {
-    const from = step === 0 ? 0 : (input.marks[step - 1] ?? 0);
-    const to =
-      step === count - 1 ? input.duration : (input.marks[step] ?? input.duration);
-    const start = out;
-    if (to > from) {
-      clips.push({ kind: "cut", from, to, step });
-      out += to - from;
+    const start = step === 0 ? 0 : (input.marks[step - 1] ?? 0);
+    const end =
+      step === count - 1
+        ? input.duration
+        : (input.marks[step] ?? input.duration);
+    const outStart = out;
+    const holds = step > 0 || input.marks.length === 0;
+
+    const stills = input.freezes
+      .map(
+        ([a, b]): readonly [number, number] => [
+          Math.max(a, start),
+          Math.min(b ?? input.duration, end),
+        ],
+      )
+      .filter(([a, b]) => b > a);
+    const changing: [number, number][] = [];
+    let position = start;
+    for (const [a, b] of stills) {
+      if (a > position) {
+        changing.push([position, a]);
+      }
+      position = Math.max(position, b);
     }
-    if (step > 0 || input.marks.length === 0) {
-      const still = Math.max(2, 3 - (out - start));
-      clips.push({ kind: "still", at: to, seconds: still, step });
-      out += still;
+    if (position < end) {
+      changing.push([position, end]);
+    }
+
+    const merged: [number, number][] = [];
+    for (const [a, b] of changing) {
+      const from = Math.max(a - 1, start);
+      const to = Math.min(b + 2, end);
+      const last = merged[merged.length - 1];
+      if (last !== undefined && from - last[1] < 3) {
+        last[1] = Math.max(last[1], to);
+      } else {
+        merged.push([from, to]);
+      }
+    }
+
+    let endLabel: string | undefined;
+    if (merged.length > 0) {
+      const tail = end - (merged[merged.length - 1]?.[1] ?? end);
+      if (tail >= 3) {
+        endLabel = labelText(tail);
+      } else {
+        const last = merged[merged.length - 1];
+        if (last !== undefined) {
+          last[1] = end;
+        }
+      }
+    }
+
+    let cursor = start;
+    for (const [a, b] of merged) {
+      const gap = a - cursor;
+      if (gap >= 3) {
+        clips.push({
+          kind: "still",
+          at: cursor,
+          seconds: 2,
+          label: labelText(gap),
+          step,
+        });
+        out += 2;
+      }
+      clips.push({ kind: "cut", from: a, to: b, step });
+      out += b - a;
+      cursor = b;
+    }
+    if (holds) {
+      if (merged.length === 0) {
+        clips.push({
+          kind: "still",
+          at: start,
+          seconds: 3,
+          label: end - start >= 3 ? labelText(end - start) : undefined,
+          step,
+        });
+        out += 3;
+      } else {
+        const seconds = Math.max(2, 3 - (out - outStart));
+        clips.push({ kind: "still", at: cursor, seconds, label: endLabel, step });
+        out += seconds;
+      }
       if (input.marks.length > 0) {
-        captions.push({ step, from: start, to: out });
+        captions.push({ step, from: outStart, to: out });
       }
     }
   }
-  return { clips, captions, rings: [], seconds: out };
+  return { clips, captions, rings, seconds: out };
 };

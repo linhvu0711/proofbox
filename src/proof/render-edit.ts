@@ -12,6 +12,8 @@ export const renderEdit = (
     readonly font: string;
   },
 ): string => {
+  const size = Math.round(options.width / 40);
+  const bar = 2 * size;
   const chains = plan.clips.map((clip, index) => {
     if (clip.kind === "cut") {
       return (
@@ -22,14 +24,19 @@ export const renderEdit = (
     }
     const at = Math.max(clip.at - 0.1, 0);
     const frames = Math.round(clip.seconds * 30) - 1;
+    const label =
+      clip.label === undefined
+        ? ""
+        : `,drawtext=fontfile=${options.font}:text='${clip.label}'` +
+          `:fontsize=${size}:fontcolor=white:box=1` +
+          `:boxcolor=black@0.6:boxborderw=${size / 2}` +
+          `:x=(w-text_w)/2:y=h-text_h-${bar}`;
     return (
       `movie=${options.dir}/raw.mkv:seek_point=${num(at)}` +
       `,trim=start=${num(at)},setpts=PTS-STARTPTS,trim=end_frame=1` +
-      `,loop=loop=${frames}:size=1:start=0,setpts=N/30/TB[c${index}]`
+      `,loop=loop=${frames}:size=1:start=0,setpts=N/30/TB${label}[c${index}]`
     );
   });
-  const size = Math.round(options.width / 40);
-  const bar = 2 * size;
   const captions = plan.captions.map(
     (caption) =>
       `drawtext=fontfile=${options.font}` +

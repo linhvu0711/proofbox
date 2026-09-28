@@ -41,4 +41,21 @@ describe("render-edit", () => {
     expect(script).toContain("pad=2560:1728:0:128:color=0x111111");
     expect(script).toContain("fontsize=64");
   });
+
+  it("a label is drawn on its still clip", () => {
+    // Given
+    const plan = planEdit({
+      duration: 40,
+      freezes: [[5, 30]],
+      marks: [0],
+      clicks: [],
+    });
+    const options = { width: 1440, height: 900, dir: DIR, font: FONT };
+    // When
+    const script = renderEdit(plan, options);
+    // Then
+    expect(script).toContain(
+      `movie=${DIR}/raw.mkv:seek_point=6.9,trim=start=6.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text='» 22 s later':fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
+    );
+  });
 });

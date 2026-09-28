@@ -181,4 +181,53 @@ describe("Recording and the Proof video", () => {
       Buffer.compare(readFileSync(shot1), readFileSync(shot2)),
     ).not.toBe(0);
   });
+
+  it(
+    "a 3-minute Recording with long pauses comes out under 30 s",
+    { timeout: 420_000 },
+    async () => {
+      // Given
+      const env = makeEnv({ docker: true });
+      const created = await create(env);
+      const id = created.stdout.trim();
+      const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+      await runCli(env, ["record", "start", id]);
+      const actions = [
+        ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
+        ["key", id, "Escape", "--pace", "fast"],
+        ["click", id, "720", "450", "--button", "right", "--pace", "fast"],
+      ];
+      for (const [index, action] of actions.entries()) {
+        await runCli(env, ["mark", id, `step ${index + 1}`]);
+        await runCli(env, action);
+        await wait(55_000);
+      }
+      // When
+      const result = await runCli(env, [
+        "record",
+        "stop",
+        id,
+        "--out",
+        join(dir, "proof.mp4"),
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const probe = await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "/opt/proofbox/tools/ffmpeg",
+        "-hide_banner",
+        "-i",
+        "/run/proofbox/recordings/1/proof.mp4",
+      ]);
+      const duration = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(probe.stderr);
+      const seconds =
+        Number(duration?.[1]) * 3600 +
+        Number(duration?.[2]) * 60 +
+        Number(duration?.[3]);
+      expect(seconds).toBeLessThan(30);
+      expect(seconds).toBeGreaterThanOrEqual(9);
+    },
+  );
 });
