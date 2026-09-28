@@ -97,6 +97,17 @@ export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
   }
 }
 
+export class SecretsSendFailedError extends Data.TaggedError(
+  "SecretsSendFailedError",
+)<{
+  readonly id: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Sending Secrets to ${this.id} failed: sh exited ${this.code}. This Sandbox was deleted; create again.`;
+  }
+}
+
 export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
   readonly value: string;
 }> {

@@ -1,8 +1,10 @@
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +26,14 @@ const setupScript = (content: string) => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-setup-"));
   const path = join(dir, "setup.sh");
   writeFileSync(path, content);
+  return path;
+};
+
+const envFile = (content: string, mode = 0o600) => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+  const path = join(dir, "app.env");
+  writeFileSync(path, content);
+  chmodSync(path, mode);
   return path;
 };
 
@@ -225,5 +235,116 @@ describe("create", () => {
       `Setup script ${missing} not found. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("a command run after create --env-file sees each Secret", async () => {
+    // Given: an env file with two Secrets
+    const env = makeEnv();
+    const path = envFile(
+      "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const ran = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf "%s|%s" "$API_TOKEN" "$DB_URL"',
+    ]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: sending 2 Secrets\n",
+    );
+    expect(ran.stdout).toBe("tok-5f2a9c|postgres://app:pw@db:5432/app");
+  });
+
+  it("the Setup script runs without the Secrets", async () => {
+    // Given: a Work folder, a Setup script that records its env, and an env file
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\nenv > setup-env.txt\n");
+    const path = envFile(
+      "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--work",
+      folder,
+      "--setup",
+      script,
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const name = id.replace("fake:", "");
+    const setupEnv = String(
+      readFileSync(join(env.root, name, "home", "setup-env.txt")),
+    );
+    const seen = await runCli(env, ["exec", id, "--", "printenv", "API_TOKEN"]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 4 files, removed 0 files\nproofbox: running Setup script\nproofbox: sending 2 Secrets\n",
+    );
+    expect(setupEnv).not.toContain("API_TOKEN");
+    expect(setupEnv).not.toContain("DB_URL");
+    expect(seen.stdout).toBe("tok-5f2a9c\n");
+  });
+
+  it("no Secret value reaches proofbox output or its files", async () => {
+    // Given: an env file with one Secret
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n");
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const name = id.replace("fake:", "");
+    const ran = await runCli(env, ["exec", id, "--", "true"]);
+    const leaked: Array<string> = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (
+          statSync(full).isFile() &&
+          readFileSync(full).includes("tok-5f2a9c")
+        ) {
+          leaked.push(full);
+        }
+      }
+    };
+    walk(env.root);
+    walk(env.runtime);
+    // Then
+    expect(
+      create.stdout + create.stderr + ran.stdout + ran.stderr,
+    ).not.toContain("tok-5f2a9c");
+    expect(leaked).toEqual([join(env.root, name, "secrets", "env")]);
   });
 });

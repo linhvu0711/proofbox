@@ -160,6 +160,7 @@ export const makeFakeProvider = (options: {
         try: async () => {
           await mkdir(join(dir, "home"));
           await mkdir(join(dir, "state"));
+          await mkdir(join(dir, "secrets"), { mode: 0o700 });
         },
         catch: (cause) => fail(describe(cause)),
       });
@@ -308,6 +309,7 @@ export const makeFakeProvider = (options: {
     delete: del,
     extend,
     stateDir: (name) => join(root, name, "state"),
+    secretsDir: (name) => join(root, name, "secrets"),
     connect,
     memoryKills: () => Effect.succeed(0),
   };

@@ -1,9 +1,11 @@
+import { posix } from "node:path";
 import { Effect, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
+import { withSecrets } from "../secrets.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
@@ -27,7 +29,10 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       info,
     )(
       Effect.gen(function* () {
-        const events = yield* keeper.exec(rawId, argv);
+        const events = yield* keeper.exec(
+          rawId,
+          withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
+        );
         yield* events.pipe(
           Stream.runForEach((event) => {
             switch (event._tag) {
