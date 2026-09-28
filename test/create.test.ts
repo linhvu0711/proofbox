@@ -347,4 +347,37 @@ describe("create", () => {
     ).not.toContain("tok-5f2a9c");
     expect(leaked).toEqual([join(env.root, name, "secrets", "env")]);
   });
+
+  it("create --env-file reads dotenv lines", async () => {
+    // Given: an env file using dotenv syntax
+    const env = makeEnv();
+    const path = envFile(
+      "# app secrets\nexport API_TOKEN=tok-5f2a9c\n\nDB_URL = \"postgres://app:pw@db:5432/app\"\nGREETING='hi there'\r\nHASH=abc#def\nQUOTE=it's\nAPI_TOKEN=tok-later\n",
+    );
+    // When
+    const create = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--env-file",
+      path,
+    ]);
+    const id = create.stdout.trim();
+    const ran = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf "%s|" "$API_TOKEN" "$DB_URL" "$GREETING" "$HASH" "$QUOTE"',
+    ]);
+    // Then
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr.endsWith("proofbox: sending 5 Secrets\n")).toBe(true);
+    expect(ran.stdout).toBe(
+      "tok-later|postgres://app:pw@db:5432/app|hi there|abc#def|it's|",
+    );
+  });
 });

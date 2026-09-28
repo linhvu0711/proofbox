@@ -19,15 +19,32 @@ export const parseEnvFile = (
   text: string,
 ): ReadonlyArray<Secret> => {
   const secrets: Array<Secret> = [];
-  for (const line of text.split("\n")) {
-    if (line === "") {
+  for (const raw of text.split("\n")) {
+    let line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line.trim() === "" || line.trimStart().startsWith("#")) {
       continue;
     }
+    if (line.startsWith("export ")) {
+      line = line.slice("export".length).trimStart();
+    }
     const at = line.indexOf("=");
-    secrets.push({
-      name: line.slice(0, at),
-      value: Redacted.make(line.slice(at + 1)),
-    });
+    const name = line.slice(0, at).trim();
+    let value = line.slice(at + 1).trim();
+    const quote = value.at(0);
+    if (
+      value.length >= 2 &&
+      (quote === '"' || quote === "'") &&
+      value.endsWith(quote)
+    ) {
+      value = value.slice(1, -1);
+    }
+    const secret: Secret = { name, value: Redacted.make(value) };
+    const existing = secrets.findIndex((known) => known.name === name);
+    if (existing === -1) {
+      secrets.push(secret);
+    } else {
+      secrets[existing] = secret;
+    }
   }
   return secrets;
 };
