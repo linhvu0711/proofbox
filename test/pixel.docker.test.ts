@@ -110,7 +110,14 @@ describe("Pixel actions", () => {
     const id = created.stdout.trim();
     await startXev(env, id);
     // When
-    const result = await runCli(env, ["click", id, "100", "100", "--pace", "fast"]);
+    const result = await runCli(env, [
+      "click",
+      id,
+      "100",
+      "100",
+      "--pace",
+      "fast",
+    ]);
     // Then
     expect(result.exitCode).toBe(0);
     const events = await readXev(env, id);
