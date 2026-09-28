@@ -17,13 +17,27 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   }
 }
 
+export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
+  readonly id: string;
+}> {
+  get message() {
+    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example fake:abc123`;
+  }
+}
+
 export class UnknownProviderError extends Data.TaggedError(
   "UnknownProviderError",
 )<{
   readonly provider: string;
   readonly known: ReadonlyArray<string>;
+  readonly id?: string;
 }> {
   get message() {
+    if (this.id !== undefined) {
+      return `Unknown Provider "${this.provider}" in Sandbox id "${this.id}": use the form <provider>:<name> with a Provider from: ${this.known.join(
+        ", ",
+      )}`;
+    }
     return `Unknown Provider "${this.provider}": use one of: ${this.known.join(
       ", ",
     )}`;

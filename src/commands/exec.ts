@@ -1,23 +1,21 @@
 import { Effect, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { UnknownProviderError } from "../errors.ts";
 import { Providers } from "../provider.ts";
+import { parseSandboxId } from "../sandbox-id.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const separator = rawId.indexOf(":");
-    const providerName = separator < 0 ? rawId : rawId.slice(0, separator);
-    const name = separator < 0 ? "" : rawId.slice(separator + 1);
-    const provider = providers.get(providerName);
+    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
+    const provider = providers.get(id.provider);
     if (provider === undefined) {
-      return yield* new UnknownProviderError({
-        provider: providerName,
-        known: [...providers.keys()],
-      });
+      return yield* Effect.die(
+        new Error(`Provider ${id.provider} passed parsing but is unknown`),
+      );
     }
+    yield* provider.get(id.name);
     const output = yield* CliOutput;
-    const connection = yield* provider.connect(name);
+    const connection = yield* provider.connect(id.name);
     yield* connection.exec(argv).pipe(
       Stream.runForEach((event) => {
         switch (event._tag) {
