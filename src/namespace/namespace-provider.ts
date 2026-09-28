@@ -99,12 +99,24 @@ export const makeNamespaceProvider = (deps: {
       const result = yield* link.run(
         `docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}' ${container} && docker exec -u root ${container} cat /run/proofbox/deadline`,
       );
+      const stderr = result.stderr.toLowerCase();
+      // The container can stop or be removed between inspect and the deadline
+      // read; either way the Sandbox is gone rather than malformed.
+      const missing =
+        stderr.includes("no such object") ||
+        stderr.includes("no such container") ||
+        stderr.includes("is not running");
+      if (result.exitCode !== 0 || missing) {
+        if (missing) {
+          return yield* gone(name);
+        }
+        return yield* fail(
+          `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
+        );
+      }
       const first = result.stdout.split("\n", 1)[0] ?? "";
       const separator = first.lastIndexOf("|");
       if (separator === -1) {
-        if (result.stderr.toLowerCase().includes("no such object")) {
-          return yield* gone(name);
-        }
         return yield* fail(
           `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
         );
@@ -429,69 +441,53 @@ export const makeNamespaceProvider = (deps: {
 
   const liveView = (name: string) =>
     Effect.gen(function* () {
-      const password = makeSandboxName(8);
       const link = yield* openLink(name, "cli");
       const docker = deps.dockerFor(link);
       const container = containerOf(name);
-      // A live call right after a memory kill can hit a host that is still
-      // reclaiming; give x11vnc a few tries before giving up. Sessions share
-      // the one x11vnc (each drops a marker; the last one out stops it) and
-      // the newest password is what the next viewer connection needs. The
-      // password goes through stdin so it never appears in a process argv.
-      const startX11vnc = Effect.gen(function* () {
-        const stored = yield* docker
-          .execStream(
-            container,
-            [
-              "sh",
-              "-c",
-              "umask 077; mkdir -p ~/.vnc; x11vnc -storepasswd ~/.vnc/passwd",
-            ],
-            {
-              stdin: Stream.make(
-                new TextEncoder().encode(`${password}\n${password}\ny\n`),
-              ),
-            },
-          )
-          .pipe(
-            Stream.runCollect,
-            Effect.map((events) => {
-              let exitCode = 1;
-              let stderr = "";
-              for (const event of Chunk.toReadonlyArray(events)) {
-                if (event._tag === "Exit") {
-                  exitCode = event.code;
-                } else if (event._tag === "Stderr") {
-                  stderr += Buffer.from(event.bytes).toString("utf8");
-                }
-              }
-              return { exitCode, stderr };
-            }),
-            Effect.mapError((error) => `docker exec failed: ${error.message}`),
-          );
-        if (stored.exitCode !== 0) {
-          return yield* Effect.fail(
-            `x11vnc could not store the password: ${stored.stderr.trim()}`,
-          );
-        }
-        const started = yield* docker
-          .execText(container, "app", [
+      // The marker doubles as this session's slot and as the candidate
+      // password; the flock'd script reuses an open session's password when
+      // one is set, otherwise stores the candidate it reads from stdin —
+      // never argv — and prints the settled password on stdout. One x11vnc
+      // serves every viewer, so the password is one per sandbox.
+      const session = makeSandboxName(8);
+      const startX11vnc = docker
+        .execStream(
+          container,
+          [
             "sh",
             "-c",
-            'mkdir -p /tmp/proofbox-live && touch "/tmp/proofbox-live/$1" && { pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; }',
-            "sh",
-            password,
-          ])
-          .pipe(
-            Effect.mapError((error) => `docker exec failed: ${error.message}`),
-          );
-        if (started.exitCode !== 0) {
-          return yield* Effect.fail(
-            `x11vnc did not start: ${started.stderr.trim()}`,
-          );
-        }
-      });
-      yield* Effect.retry(
+            'umask 077; mkdir -p ~/.vnc /tmp/proofbox-live; exec 9>/tmp/proofbox-live/.lock; flock -w 15 9 || exit 1; if [ -s /tmp/proofbox-live/.password ]; then pw=$(cat /tmp/proofbox-live/.password); else IFS= read -r pw || exit 1; printf "%s\\n%s\\ny\\n" "$pw" "$pw" | x11vnc -storepasswd ~/.vnc/passwd || exit 1; printf "%s\\n" "$pw" > /tmp/proofbox-live/.password; fi; touch "/tmp/proofbox-live/$0"; pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; printf "%s" "$pw"',
+            session,
+          ],
+          {
+            stdin: Stream.make(new TextEncoder().encode(`${session}\n`)),
+          },
+        )
+        .pipe(
+          Stream.runCollect,
+          Effect.map((events) => {
+            let exitCode = 1;
+            let stdout = "";
+            let stderr = "";
+            for (const event of Chunk.toReadonlyArray(events)) {
+              if (event._tag === "Exit") {
+                exitCode = event.code;
+              } else if (event._tag === "Stdout") {
+                stdout += Buffer.from(event.bytes).toString("utf8");
+              } else if (event._tag === "Stderr") {
+                stderr += Buffer.from(event.bytes).toString("utf8");
+              }
+            }
+            return { exitCode, stdout, stderr };
+          }),
+          Effect.mapError((error) => `docker exec failed: ${error.message}`),
+          Effect.filterOrFail(
+            (result) => result.exitCode === 0 && result.stdout !== "",
+            (result) => `x11vnc did not start: ${result.stderr.trim()}`,
+          ),
+          Effect.map((result) => result.stdout),
+        );
+      const password = yield* Effect.retry(
         startX11vnc,
         Schedule.spaced(Duration.seconds(1)).pipe(
           Schedule.upTo(Duration.seconds(10)),
@@ -502,9 +498,9 @@ export const makeNamespaceProvider = (deps: {
           .execText(container, "app", [
             "sh",
             "-c",
-            'rm -f "/tmp/proofbox-live/$1"; if [ -z "$(ls -A /tmp/proofbox-live 2>/dev/null)" ]; then pkill -x x11vnc; rm -f ~/.vnc/passwd; fi; true',
+            'rm -f "/tmp/proofbox-live/$1"; if [ -z "$(ls -A /tmp/proofbox-live 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f /tmp/proofbox-live/.password ~/.vnc/passwd; pkill -x x11vnc; fi; true',
             "sh",
-            password,
+            session,
           ])
           .pipe(Effect.ignore),
       );

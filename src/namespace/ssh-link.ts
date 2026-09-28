@@ -88,6 +88,10 @@ export const makeOpenLink = (
         })
       : new ProviderError({ provider: "namespace", reason: error.message });
 
+  // Every independent CLI link gets its own control socket; two opens racing
+  // on the same pid-named socket would unlink each other's live master.
+  let cliSeq = 0;
+
   const sshBase = (ctl: string, key: string): ReadonlyArray<string> => [
     "-S",
     ctl,
@@ -170,7 +174,7 @@ export const makeOpenLink = (
       const ctl =
         owner === "keeper"
           ? paths.control
-          : paths.control.replace(/\.ctl$/, `-${process.pid}.ctl`);
+          : paths.control.replace(/\.ctl$/, `-${process.pid}-${cliSeq++}.ctl`);
       const ssh = sshBase(ctl, paths.key);
       const run = runWith(ssh);
       if (yield* checkCtl(ctl)) {
