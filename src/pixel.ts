@@ -5,6 +5,7 @@ import {
   type BadSpanError,
   MissingCapabilityError,
   OutFileError,
+  OutsideScreenError,
   ProviderError,
 } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
@@ -95,7 +96,10 @@ export const writeOut = (path: string, bytes: Uint8Array) =>
 export const runPixel = (
   rawId: string,
   helperArgv: ReadonlyArray<string>,
-  options: { readonly screenshot?: string | undefined } = {},
+  options: {
+    readonly screenshot?: string | undefined;
+    readonly points?: ReadonlyArray<readonly [number, number]>;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
@@ -151,6 +155,29 @@ export const runPixel = (
         );
       }),
     );
+    if (collected.code === 3) {
+      const [width, height] = Buffer.concat(collected.stdout)
+        .toString("utf8")
+        .trim()
+        .split(" ")
+        .map(Number);
+      const points = options.points ?? [];
+      const [x, y] =
+        points.find(
+          ([px, py]) =>
+            width !== undefined &&
+            height !== undefined &&
+            (px < 0 || py < 0 || px >= width || py >= height),
+        ) ??
+        points[0] ??
+        [0, 0];
+      return yield* new OutsideScreenError({
+        x,
+        y,
+        width: width ?? 0,
+        height: height ?? 0,
+      });
+    }
     if (collected.code !== 0) {
       return yield* new ProviderError({
         provider: id.provider,

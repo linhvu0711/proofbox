@@ -67,6 +67,17 @@ export class OutFileError extends Data.TaggedError("OutFileError")<{
   }
 }
 
+export class OutsideScreenError extends Data.TaggedError("OutsideScreenError")<{
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}> {
+  get message() {
+    return `Point ${this.x},${this.y} is outside the screen (${this.width}x${this.height}); use x 0 to ${this.width - 1} and y 0 to ${this.height - 1}`;
+  }
+}
+
 export class BadSizeError extends Data.TaggedError("BadSizeError")<{
   readonly value: string;
 }> {

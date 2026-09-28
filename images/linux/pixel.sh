@@ -24,6 +24,14 @@ glide() {
   }')
 }
 
+# inside X Y: refuse a point that is outside the screen.
+inside() {
+  if [ "$1" -lt 0 ] || [ "$2" -lt 0 ] || [ "$1" -ge "$W" ] || [ "$2" -ge "$H" ]; then
+    printf '%s %s\n' "$W" "$H"
+    exit 3
+  fi
+}
+
 # settle MS: wait MS milliseconds for the screen to catch up.
 settle() {
   sleep "$(awk "BEGIN { print $1 / 1000 }")"
@@ -42,6 +50,7 @@ case "$cmd" in
     ;;
   click)
     # click X Y BUTTON GLIDE_MS SETTLE_MS SHOT
+    inside "$1" "$2"
     glide "$1" "$2" "$4"
     xdotool click "$3"
     settle "$5"

@@ -29,6 +29,6 @@ export const clickAt = (options: {
         String(pace.settleMs),
         shot,
       ],
-      { screenshot: options.screenshot },
+      { screenshot: options.screenshot, points: [[options.x, options.y]] },
     );
   }).pipe(Effect.scoped);

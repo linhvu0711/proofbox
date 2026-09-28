@@ -157,6 +157,25 @@ describe("Pixel actions", () => {
     expect(bytes.readUInt32BE(20)).toBe(900);
   });
 
+  it("a click outside the screen is refused with the screen size", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, ["click", id, "1440", "100"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Point 1440,100 is outside the screen (1440x900); use x 0 to 1439 and y 0 to 899\n",
+    );
+    const events = await readXev(env, id);
+    expect(
+      events.filter((event) => event.type === "ButtonPress"),
+    ).toHaveLength(0);
+  });
+
   it("click --screenshot writes the screen after the click", async () => {
     // Given
     const env = makeEnv({ docker: true });
