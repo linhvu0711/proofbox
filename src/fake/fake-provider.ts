@@ -198,12 +198,17 @@ export const makeFakeProvider = (options: {
               if (!existsSync(entry)) {
                 return false;
               }
-              await cp(join(entry, "home"), join(dir, "home"), {
-                recursive: true,
-              });
-              await cp(join(entry, "state"), join(dir, "state"), {
-                recursive: true,
-              });
+              try {
+                await cp(join(entry, "home"), join(dir, "home"), {
+                  recursive: true,
+                });
+                await cp(join(entry, "state"), join(dir, "state"), {
+                  recursive: true,
+                });
+              } catch (cause) {
+                await rm(dir, { recursive: true, force: true });
+                throw cause;
+              }
               return true;
             },
             catch: (cause) => fail(describe(cause)),
@@ -261,7 +266,7 @@ export const makeFakeProvider = (options: {
       yield* Effect.tryPromise({
         try: async () => {
           const dir = join(root, name);
-          const staging = join(snapshots.root, `.new-${fp}`);
+          const staging = join(snapshots.root, `.new-${fp}-${randomUUID()}`);
           const target = join(snapshots.root, fp);
           await rm(staging, { recursive: true, force: true });
           await mkdir(staging, { recursive: true });
@@ -271,8 +276,21 @@ export const makeFakeProvider = (options: {
           await cp(join(dir, "state"), join(staging, "state"), {
             recursive: true,
           });
-          await rm(target, { recursive: true, force: true });
-          await rename(staging, target);
+          // A save is a no-op once the Fingerprint is published — its
+          // content is keyed by the hash, so an existing dir is already
+          // the same Snapshot; a lost rename race drops our staging.
+          if (existsSync(target)) {
+            await rm(staging, { recursive: true, force: true });
+          } else {
+            try {
+              await rename(staging, target);
+            } catch (cause) {
+              if (!existsSync(target)) {
+                throw cause;
+              }
+              await rm(staging, { recursive: true, force: true });
+            }
+          }
         },
         catch: (cause) => fail(describe(cause)),
       });

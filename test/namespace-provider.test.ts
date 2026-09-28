@@ -7,6 +7,7 @@ import {
   ConfigProvider,
   Duration,
   Effect,
+  Fiber,
   Layer,
   Option,
   Ref,
@@ -16,6 +17,7 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
+import { ProviderUnavailableError } from "../src/errors.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { Link } from "../src/namespace/ssh-link.ts";
@@ -121,27 +123,57 @@ const makeProvider = (
   docker: DockerClient,
   run?: (
     commandLine: string,
-  ) => { exitCode: number; stdout: string; stderr: string } | undefined,
+  ) =>
+    | { exitCode: number; stdout: string; stderr: string }
+    | Effect.Effect<
+        { exitCode: number; stdout: string; stderr: string },
+        ProviderUnavailableError
+      >
+    | undefined,
 ) =>
   makeNamespaceProvider({
     nsc: fakeNsc(calls),
     openLink: () =>
       Effect.succeed<Link>({
         ssh: [],
-        run: (commandLine) =>
-          Effect.succeed(
-            commandLine.includes("metadata.json")
-              ? { exitCode: 0, stdout: "tenant_x\n", stderr: "" }
-              : (run?.(commandLine) ?? {
-                  exitCode: 0,
-                  stdout: "",
-                  stderr: "",
-                }),
-          ),
+        run: (commandLine) => {
+          const answer = commandLine.includes("metadata.json")
+            ? { exitCode: 0, stdout: "tenant_x\n", stderr: "" }
+            : (run?.(commandLine) ?? {
+                exitCode: 0,
+                stdout: "",
+                stderr: "",
+              });
+          return Effect.isEffect(answer) ? answer : Effect.succeed(answer);
+        },
       }),
     dockerFor: () => docker,
     spawnDetached: () => Effect.void,
   });
+
+// Advance the TestClock in hops until the fiber finishes, so sleeps
+// scheduled after each hop still fire.
+const joinAdjusted = <A, E>(fiber: Fiber.Fiber<A, E>) => {
+  const advance = (left: number): Effect.Effect<A, E> =>
+    Fiber.poll(fiber).pipe(
+      Effect.flatMap((exit) => {
+        if (Option.isSome(exit)) {
+          return exit.value;
+        }
+        if (left <= 0) {
+          return Fiber.interrupt(fiber).pipe(
+            Effect.andThen(
+              Effect.die("fiber did not finish in 600 s of clock"),
+            ),
+          );
+        }
+        return TestClock.adjust(Duration.seconds(1)).pipe(
+          Effect.andThen(advance(left - 1)),
+        );
+      }),
+    );
+  return Effect.suspend(() => advance(600));
+};
 
 const runtimeDir = Effect.withConfigProvider(
   ConfigProvider.fromMap(
@@ -399,6 +431,97 @@ describe("Namespace Provider", () => {
       expect(yield* Ref.get(warnings)).toEqual([
         "could not pull the Snapshot (Provider namespace failed: docker pull failed: dial tcp: i/o timeout); running the Setup script",
       ]);
+    }).pipe(runtimeDir),
+  );
+
+  it.effect(
+    "a lost pull link retries, then warns and runs the Setup script",
+    () =>
+      Effect.gen(function* () {
+        // Given: the link drops on every pull
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const warnings = yield* Ref.make<ReadonlyArray<string>>([]);
+        const ran: { image?: string | undefined } = {};
+        let pulls = 0;
+        const provider = makeProvider(
+          calls,
+          fakeDocker({ ran }),
+          (commandLine) => {
+            if (!commandLine.startsWith("docker pull ")) {
+              return { exitCode: 0, stdout: "", stderr: "" };
+            }
+            pulls += 1;
+            return Effect.fail(
+              new ProviderUnavailableError({
+                provider: "namespace",
+                reason: "lost the link to the Namespace host: exit 255",
+              }),
+            );
+          },
+        );
+        // When
+        const fiber = yield* provider
+          .create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          })
+          .pipe(Effect.provide(liveLayers(warnings)), Effect.fork);
+        const info = yield* joinAdjusted(fiber);
+        // Then
+        expect(pulls).toBeGreaterThan(1);
+        expect(ran.image).toMatch(
+          /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/,
+        );
+        expect(info.snapshot).toBeUndefined();
+        expect(yield* Ref.get(warnings)).toEqual([
+          "could not pull the Snapshot (lost the link to the Namespace host: exit 255); running the Setup script",
+        ]);
+      }).pipe(runtimeDir),
+  );
+
+  it.effect("a pulled link that comes back uses the Snapshot", () =>
+    Effect.gen(function* () {
+      // Given: the link drops once, then the pull succeeds
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: { image?: string | undefined } = {};
+      let pulls = 0;
+      const provider = makeProvider(
+        calls,
+        fakeDocker({ ran }),
+        (commandLine) => {
+          if (!commandLine.startsWith("docker pull ")) {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          pulls += 1;
+          if (pulls === 1) {
+            return Effect.fail(
+              new ProviderUnavailableError({
+                provider: "namespace",
+                reason: "lost the link to the Namespace host: exit 255",
+              }),
+            );
+          }
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      );
+      // When
+      const fiber = yield* provider
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+          snapshot: "22d0cf15eb8e",
+        })
+        .pipe(Effect.provide(liveLayers()), Effect.fork);
+      const info = yield* joinAdjusted(fiber);
+      // Then
+      expect(pulls).toBe(2);
+      expect(ran.image).toBe(
+        "nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
+      );
+      expect(info.snapshot).toBe("22d0cf15eb8e");
     }).pipe(runtimeDir),
   );
 

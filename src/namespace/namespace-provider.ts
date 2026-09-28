@@ -434,16 +434,23 @@ export const makeNamespaceProvider = (deps: {
         let runArgs: ReadonlyArray<string> = ["-p", "5900:5900"];
         if (req.snapshot !== undefined) {
           const tag = snapshotTag(registry, req.snapshot);
+          const pullMissed = (error: { readonly message: string }) =>
+            progress
+              .warn(
+                `could not pull the Snapshot (${error.message}); running the Setup script`,
+              )
+              .pipe(Effect.as("missing" as const));
           const pulled = yield* progress
             .step("pulling the Snapshot", pullSnapshot(link, tag))
             .pipe(
-              Effect.catchTag("ProviderError", (error) =>
-                progress
-                  .warn(
-                    `could not pull the Snapshot (${error.message}); running the Setup script`,
-                  )
-                  .pipe(Effect.as("missing" as const)),
-              ),
+              Effect.retry({
+                while: (error) => error._tag === "ProviderUnavailableError",
+                schedule: Schedule.spaced(Duration.seconds(1)).pipe(
+                  Schedule.upTo(Duration.seconds(30)),
+                ),
+              }),
+              Effect.catchTag("ProviderError", pullMissed),
+              Effect.catchTag("ProviderUnavailableError", pullMissed),
             );
           if (pulled === "pulled") {
             imageTag = tag;

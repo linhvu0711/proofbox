@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -116,6 +124,74 @@ describe("fake Provider", () => {
       expect(stdout).toBe("hi\n");
       expect(events.some((event) => event._tag === "Stderr")).toBe(false);
       expect(events[events.length - 1]).toEqual({ _tag: "Exit", code: 0 });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.effect("a failed Snapshot copy leaves no Sandbox folder behind", () =>
+    Effect.gen(function* () {
+      // Given: a Snapshot entry without a home dir, so the copy fails
+      const root = makeRoot();
+      const snapRoot = makeRoot();
+      const fake = makeFakeProvider({
+        root,
+        watch: "none",
+        snapshots: { root: snapRoot },
+      });
+      mkdirSync(join(snapRoot, "22d0cf15eb8e"), { recursive: true });
+      // When
+      const error = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+          snapshot: "22d0cf15eb8e",
+        })
+        .pipe(Effect.provideService(Progress, noProgress), Effect.flip);
+      // Then
+      expect(error._tag).toBe("ProviderError");
+      expect(existsSync(root) ? readdirSync(root) : []).toEqual([]);
+    }),
+  );
+
+  it.effect("two saves of one Fingerprint publish one whole Snapshot", () =>
+    Effect.gen(function* () {
+      // Given: two Sandboxes saving under the same Fingerprint at once
+      const root = makeRoot();
+      const snapRoot = makeRoot();
+      const fake = makeFakeProvider({
+        root,
+        watch: "none",
+        snapshots: { root: snapRoot },
+      });
+      const req = {
+        os: "linux" as const,
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      };
+      const a = yield* fake
+        .create(req)
+        .pipe(Effect.provideService(Progress, noProgress));
+      const b = yield* fake
+        .create(req)
+        .pipe(Effect.provideService(Progress, noProgress));
+      writeFileSync(join(root, a.name, "home", "mark.txt"), "a\n");
+      writeFileSync(join(root, b.name, "home", "mark.txt"), "b\n");
+      const snapshots = fake.snapshots;
+      if (snapshots === undefined) {
+        return yield* Effect.die("provider has no snapshots member");
+      }
+      // When
+      yield* Effect.all(
+        [snapshots.save(a.name, "fp111"), snapshots.save(b.name, "fp111")],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.provideService(Progress, noProgress));
+      // Then: one complete Sandbox copy landed, not a mix or a staging dir
+      expect(readdirSync(snapRoot)).toEqual(["fp111"]);
+      const mark = readFileSync(
+        join(snapRoot, "fp111", "home", "mark.txt"),
+        "utf8",
+      );
+      expect(["a\n", "b\n"]).toContainEqual(mark);
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 });
