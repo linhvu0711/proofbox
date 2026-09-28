@@ -1,0 +1,193 @@
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
+import { it } from "@effect/vitest";
+import {
+  Chunk,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Ref,
+  TestClock,
+  TestServices,
+} from "effect";
+import { afterEach, describe, expect } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { createSandbox } from "../src/commands/create.ts";
+import { execInSandbox } from "../src/commands/exec.ts";
+import {
+  idleDefault,
+  MAX_LIFE_DEFAULT,
+  nextDeadline,
+  parseSpan,
+} from "../src/deadline.ts";
+import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { type Provider, Providers } from "../src/provider.ts";
+import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+
+const tempRoots: string[] = [];
+const makeProviders = () => {
+  const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+  tempRoots.push(root);
+  return Layer.succeed(
+    Providers,
+    new Map<string, Provider>([
+      ["fake", makeFakeProvider({ root, watch: "none" })],
+    ]),
+  );
+};
+const layers = () =>
+  Layer.mergeAll(NodeContext.layer, CliOutput.Test, makeProviders());
+
+const sandboxName = Effect.gen(function* () {
+  const output = yield* CliOutput;
+  const out = yield* Ref.get(output.captured.out);
+  return Chunk.toReadonlyArray(out).join("").trim().replace("fake:", "");
+});
+
+const fake = Effect.map(
+  Providers,
+  (providers) => providers.get("fake") as Provider,
+);
+
+describe("Deadline", () => {
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+    cleanupEnvs();
+  });
+
+  it("nextDeadline adds the idle time", () => {
+    // Given: now, idle 15 minutes, max life at 13:00
+    const deadline = nextDeadline({
+      now: new Date("2026-09-28T10:00:00.000Z"),
+      idle: Duration.minutes(15),
+      maxLifeAt: new Date("2026-09-28T13:00:00.000Z"),
+    });
+    // Then
+    expect(deadline.toISOString()).toBe("2026-09-28T10:15:00.000Z");
+  });
+
+  it("nextDeadline never passes the Max life", () => {
+    // Given: now + idle lands after max life
+    const deadline = nextDeadline({
+      now: new Date("2026-09-28T12:50:00.000Z"),
+      idle: Duration.minutes(15),
+      maxLifeAt: new Date("2026-09-28T13:00:00.000Z"),
+    });
+    // Then
+    expect(deadline.toISOString()).toBe("2026-09-28T13:00:00.000Z");
+  });
+
+  it("idle defaults to 5 min on macOS and 15 min on Linux", () => {
+    // When
+    const macos = Duration.toMinutes(idleDefault("macos"));
+    const linux = Duration.toMinutes(idleDefault("linux"));
+    // Then
+    expect(macos).toBe(5);
+    expect(linux).toBe(15);
+  });
+
+  it("parseSpan reads s, m, and h", async () => {
+    // When / Then
+    expect(
+      Duration.toSeconds(await Effect.runPromise(parseSpan("idle", "90s"))),
+    ).toBe(90);
+    expect(
+      Duration.toSeconds(await Effect.runPromise(parseSpan("idle", "15m"))),
+    ).toBe(900);
+    expect(
+      Duration.toSeconds(await Effect.runPromise(parseSpan("max-life", "3h"))),
+    ).toBe(10800);
+  });
+
+  it.effect("create uses the Linux defaults", () =>
+    Effect.gen(function* () {
+      // Given: a fake provider rooted in a temp dir
+      // When
+      yield* createSandbox({ os: "linux", provider: "fake" });
+      const name = yield* sandboxName;
+      const info = yield* (yield* fake).get(name);
+      // Then
+      expect(info.deadline.toISOString()).toBe("1970-01-01T00:15:00.000Z");
+      expect(info.maxLifeAt.toISOString()).toBe("1970-01-01T03:00:00.000Z");
+    }).pipe(Effect.provide(layers())),
+  );
+
+  it.effect("exec pushes the Deadline by the idle time", () =>
+    Effect.gen(function* () {
+      // Given: a Sandbox at t=0
+      yield* createSandbox({ os: "linux", provider: "fake" });
+      const name = yield* sandboxName;
+      yield* TestClock.adjust("10 minutes");
+      // When
+      yield* execInSandbox(`fake:${name}`, ["true"]);
+      const info = yield* (yield* fake).get(name);
+      // Then
+      expect(info.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
+    }).pipe(Effect.provide(layers())),
+  );
+
+  it.effect("exec never pushes past --max-life", () =>
+    Effect.gen(function* () {
+      // Given: a Sandbox with a 20 minute max life
+      yield* createSandbox({
+        os: "linux",
+        provider: "fake",
+        idle: "15m",
+        maxLife: "20m",
+      });
+      const name = yield* sandboxName;
+      yield* TestClock.adjust("10 minutes");
+      // When
+      yield* execInSandbox(`fake:${name}`, ["true"]);
+      const info = yield* (yield* fake).get(name);
+      // Then
+      expect(info.deadline.toISOString()).toBe("1970-01-01T00:20:00.000Z");
+    }).pipe(Effect.provide(layers())),
+  );
+
+  it.effect("a long exec keeps pushing the Deadline", () =>
+    Effect.gen(function* () {
+      // Given: a Sandbox and a 3 second exec forked
+      yield* createSandbox({ os: "linux", provider: "fake" });
+      const name = yield* sandboxName;
+      const fiber = yield* Effect.fork(
+        execInSandbox(`fake:${name}`, ["sleep", "3"]),
+      );
+      yield* TestServices.provideLive(Effect.sleep("500 millis"));
+      yield* TestClock.adjust("12 minutes");
+      // When
+      const running = yield* (yield* fake).get(name);
+      yield* Fiber.join(fiber);
+      const done = yield* (yield* fake).get(name);
+      // Then
+      expect(running.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
+      expect(done.deadline.toISOString()).toBe("1970-01-01T00:27:00.000Z");
+    }).pipe(Effect.provide(layers())),
+  );
+
+  it("a bad --idle is refused", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--idle",
+      "abc",
+    ]);
+    // Then
+    expect(result.stderr).toBe(
+      'Bad --idle "abc": use a whole number with s, m, or h, for example 15m\n',
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+});

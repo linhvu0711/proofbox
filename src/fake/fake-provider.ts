@@ -4,7 +4,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Config, Effect, Layer, Schema, Stream } from "effect";
+import { Clock, Config, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { nextDeadline } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import {
   type Connection,
@@ -26,6 +27,9 @@ const makeName = () =>
 class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
+  idleSeconds: Schema.Number,
+  deadline: Schema.Date,
+  maxLifeAt: Schema.Date,
 }) {}
 
 const describe = (cause: unknown) =>
@@ -45,8 +49,59 @@ export const makeFakeProvider = (options: {
   const fail = (reason: string) =>
     new ProviderError({ provider: "fake", reason });
   const gone = (name: string) => new SandboxGoneError({ id: `fake:${name}` });
+  const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
-  const create = (req: { readonly os: Os }) =>
+  const readFileInfo = (name: string) =>
+    Effect.gen(function* () {
+      const dir = join(root, name);
+      const text = yield* Effect.tryPromise({
+        try: () => readFile(join(dir, "sandbox.json"), "utf8"),
+        catch: (cause) =>
+          !existsSync(dir) || hasCode(cause, "ENOENT")
+            ? gone(name)
+            : fail(describe(cause)),
+      });
+      const json = yield* Effect.try({
+        try: () => JSON.parse(text) as unknown,
+        catch: (cause) => fail(describe(cause)),
+      });
+      const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
+        Effect.mapError((error) => fail(error.message)),
+      );
+      const info = new SandboxInfo({
+        name,
+        os: file.os,
+        createdAt: file.createdAt,
+        idleSeconds: file.idleSeconds,
+        deadline: file.deadline,
+        maxLifeAt: file.maxLifeAt,
+      });
+      const current = yield* now;
+      if (info.deadline.getTime() <= current.getTime()) {
+        yield* Effect.tryPromise({
+          try: () => rm(dir, { recursive: true, force: true }),
+          catch: (cause) => fail(describe(cause)),
+        });
+        return yield* gone(name);
+      }
+      return info;
+    });
+
+  const writeFileInfo = (name: string, file: SandboxFile) =>
+    Effect.tryPromise({
+      try: () =>
+        writeFile(
+          join(root, name, "sandbox.json"),
+          `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+        ),
+      catch: (cause) => fail(describe(cause)),
+    });
+
+  const create = (req: {
+    readonly os: Os;
+    readonly idle: Duration.Duration;
+    readonly maxLife: Duration.Duration;
+  }) =>
     Effect.gen(function* () {
       let name: string | undefined;
       for (let i = 0; i < 5 && name === undefined; i++) {
@@ -70,47 +125,43 @@ export const makeFakeProvider = (options: {
         return yield* fail("could not make a Sandbox name after 5 tries");
       }
       const dir = join(root, name);
-      const info = new SandboxInfo({
-        name,
+      const createdAt = yield* now;
+      const maxLifeAt = new Date(
+        createdAt.getTime() + Duration.toMillis(req.maxLife),
+      );
+      const file = new SandboxFile({
         os: req.os,
-        createdAt: new Date(),
+        createdAt,
+        idleSeconds: Duration.toSeconds(req.idle),
+        deadline: nextDeadline({
+          now: createdAt,
+          idle: req.idle,
+          maxLifeAt,
+        }),
+        maxLifeAt,
       });
-      const file = new SandboxFile({ os: info.os, createdAt: info.createdAt });
+      yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
-        try: async () => {
-          await writeFile(
-            join(dir, "sandbox.json"),
-            `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
-          );
-          await mkdir(join(dir, "home"));
-        },
+        try: () => mkdir(join(dir, "home")),
         catch: (cause) => fail(describe(cause)),
       });
-      return info;
+      return new SandboxInfo({ name, ...file });
     });
 
-  const get = (name: string) =>
+  const get = (name: string) => readFileInfo(name);
+
+  const extend = (name: string, deadline: Date) =>
     Effect.gen(function* () {
-      const dir = join(root, name);
-      const text = yield* Effect.tryPromise({
-        try: () => readFile(join(dir, "sandbox.json"), "utf8"),
-        catch: (cause) =>
-          !existsSync(dir) || hasCode(cause, "ENOENT")
-            ? gone(name)
-            : fail(describe(cause)),
+      const info = yield* readFileInfo(name);
+      const file = new SandboxFile({
+        os: info.os,
+        createdAt: info.createdAt,
+        idleSeconds: info.idleSeconds,
+        deadline,
+        maxLifeAt: info.maxLifeAt,
       });
-      const json = yield* Effect.try({
-        try: () => JSON.parse(text) as unknown,
-        catch: (cause) => fail(describe(cause)),
-      });
-      const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
-        Effect.mapError((error) => fail(error.message)),
-      );
-      return new SandboxInfo({
-        name,
-        os: file.os,
-        createdAt: file.createdAt,
-      });
+      yield* writeFileInfo(name, file);
+      return yield* readFileInfo(name);
     });
 
   const connect = (name: string) =>
@@ -158,6 +209,7 @@ export const makeFakeProvider = (options: {
     capabilities: new Set(["os:linux"]),
     create,
     get,
+    extend,
     connect,
   };
 };

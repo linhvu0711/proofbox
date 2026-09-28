@@ -1,4 +1,5 @@
 import { Args, Command, Options } from "@effect/cli";
+import { Option } from "effect";
 import { createSandbox } from "./commands/create.ts";
 import { execInSandbox } from "./commands/exec.ts";
 
@@ -7,8 +8,16 @@ const create = Command.make(
   {
     os: Options.choice("os", ["linux", "macos"]),
     provider: Options.text("provider"),
+    idle: Options.text("idle").pipe(Options.optional),
+    maxLife: Options.text("max-life").pipe(Options.optional),
   },
-  ({ os, provider }) => createSandbox({ os, provider }),
+  ({ os, provider, idle, maxLife }) =>
+    createSandbox({
+      os,
+      provider,
+      idle: Option.getOrUndefined(idle),
+      maxLife: Option.getOrUndefined(maxLife),
+    }),
 );
 
 const exec = Command.make(

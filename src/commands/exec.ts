@@ -1,5 +1,6 @@
-import { Effect, Stream } from "effect";
+import { Clock, Duration, Effect, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
+import { nextDeadline } from "../deadline.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 
@@ -13,9 +14,25 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
         new Error(`Provider ${id.provider} passed parsing but is unknown`),
       );
     }
-    yield* provider.get(id.name);
     const output = yield* CliOutput;
+    const info = yield* provider.get(id.name);
+    const idle = Duration.seconds(info.idleSeconds);
+    const push = Effect.flatMap(Clock.currentTimeMillis, (millis) =>
+      provider.extend(
+        id.name,
+        nextDeadline({
+          now: new Date(millis),
+          idle,
+          maxLifeAt: info.maxLifeAt,
+        }),
+      ),
+    );
+    yield* push;
     const connection = yield* provider.connect(id.name);
+    const pushWhileRunning = Effect.repeat(
+      push,
+      Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+    );
     yield* connection.exec(argv).pipe(
       Stream.runForEach((event) => {
         switch (event._tag) {
@@ -27,5 +44,7 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
             return output.setExitCode(event.code);
         }
       }),
+      Effect.raceFirst(pushWhileRunning),
     );
+    yield* push;
   }).pipe(Effect.scoped);

@@ -17,6 +17,15 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   }
 }
 
+export class BadSpanError extends Data.TaggedError("BadSpanError")<{
+  readonly flag: string;
+  readonly value: string;
+}> {
+  get message() {
+    return `Bad --${this.flag} "${this.value}": use a whole number with s, m, or h, for example 15m`;
+  }
+}
+
 export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {

@@ -1,5 +1,12 @@
 import type { CommandExecutor } from "@effect/platform";
-import { Context, type Effect, Schema, type Scope, type Stream } from "effect";
+import {
+  Context,
+  type Duration,
+  type Effect,
+  Schema,
+  type Scope,
+  type Stream,
+} from "effect";
 import type { ProviderError, SandboxGoneError } from "./errors.ts";
 
 export const Os = Schema.Literal("linux", "macos");
@@ -12,6 +19,9 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   name: Schema.String,
   os: Os,
   createdAt: Schema.Date,
+  idleSeconds: Schema.Number,
+  deadline: Schema.Date,
+  maxLifeAt: Schema.Date,
 }) {}
 
 export type ExecEvent =
@@ -30,7 +40,13 @@ export interface Provider {
   readonly capabilities: ReadonlySet<Capability>;
   readonly create: (req: {
     readonly os: Os;
+    readonly idle: Duration.Duration;
+    readonly maxLife: Duration.Duration;
   }) => Effect.Effect<SandboxInfo, ProviderError>;
+  readonly extend: (
+    name: string,
+    deadline: Date,
+  ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
   readonly get: (
     name: string,
   ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
