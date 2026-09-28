@@ -7,8 +7,14 @@ import {
   type Scope,
   type Stream,
 } from "effect";
-import type { ProviderError, SandboxGoneError } from "./errors.ts";
+import type {
+  ProviderError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+  ToolBundleHashError,
+} from "./errors.ts";
 import type { Progress } from "./progress.ts";
+import { Size } from "./size.ts";
 
 export const Os = Schema.Literal("linux", "macos");
 export type Os = typeof Os.Type;
@@ -25,6 +31,8 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
+  base: Schema.optional(Schema.String),
+  size: Schema.optional(Size),
 }) {}
 
 export type ExecEvent =
@@ -40,35 +48,56 @@ export interface Connection {
   readonly exec: (
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
-  ) => Stream.Stream<ExecEvent, ProviderError>;
+  ) => Stream.Stream<ExecEvent, ProviderError | ProviderUnavailableError>;
 }
 
 export interface Provider {
   readonly name: string;
   readonly capabilities: ReadonlySet<Capability>;
+  readonly sizes: "any" | ReadonlyArray<Size>;
   readonly create: (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-  }) => Effect.Effect<SandboxInfo, ProviderError, Progress>;
+    readonly size?: Size | undefined;
+  }) => Effect.Effect<
+    SandboxInfo,
+    ProviderError | ProviderUnavailableError | ToolBundleHashError,
+    Progress
+  >;
   readonly extend: (
     name: string,
     deadline: Date,
-  ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
+  ) => Effect.Effect<
+    SandboxInfo,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
   readonly get: (
     name: string,
-  ) => Effect.Effect<SandboxInfo, SandboxGoneError | ProviderError>;
+  ) => Effect.Effect<
+    SandboxInfo,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
   readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
   readonly delete: (
     name: string,
-  ) => Effect.Effect<"deleted" | "gone", ProviderError>;
+  ) => Effect.Effect<
+    "deleted" | "gone",
+    ProviderError | ProviderUnavailableError
+  >;
   readonly stateDir: (name: string) => string;
   readonly connect: (
     name: string,
   ) => Effect.Effect<
     Connection,
-    SandboxGoneError | ProviderError,
+    SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope | CommandExecutor.CommandExecutor
+  >;
+  readonly memoryKills: (
+    name: string,
+  ) => Effect.Effect<
+    number,
+    SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
 }
 

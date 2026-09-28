@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
@@ -113,14 +113,42 @@ export const sendWorkFolder = (
           if (diff.send.length !== 0 || diff.remove.length !== 0) {
             yield* runInSandbox(keeper, rawId, ["rm", "-f", listPath]);
           }
+          // A symlinked ancestor carries a remove or an extract outside the
+          // Work folder; drop any the Sandbox holds before touching paths
+          // under them. A tracked link that gets dropped is resent anyway,
+          // since a kind change puts it in the send list.
+          const ancestors = new Set<string>();
+          for (const path of [...diff.send, ...diff.remove]) {
+            for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) {
+              ancestors.add(dir);
+            }
+          }
+          if (ancestors.size !== 0) {
+            yield* runInSandbox(
+              keeper,
+              rawId,
+              [
+                "xargs",
+                "-0",
+                "-I{}",
+                "sh",
+                "-c",
+                '[ -L "$1" ] && rm -f -- "$1" || :',
+                "sh",
+                "{}",
+              ],
+              Stream.make(new TextEncoder().encode([...ancestors].join("\0"))),
+            );
+          }
           // Removal runs before extraction: a path that changed kind (a
           // folder that became a file, or the reverse) blocks tar, and the
-          // old entry must be gone first.
+          // old entry must be gone first. -rf also clears folder members of
+          // removed paths that the Caller never listed.
           if (diff.remove.length !== 0) {
             yield* runInSandbox(
               keeper,
               rawId,
-              ["xargs", "-0", "rm", "-f", "--"],
+              ["xargs", "-0", "rm", "-rf", "--"],
               Stream.make(new TextEncoder().encode(diff.remove.join("\0"))),
             );
           }

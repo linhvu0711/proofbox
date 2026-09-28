@@ -3,7 +3,11 @@ import { Effect } from "effect";
 import { entryPath } from "./entry.ts";
 import { ProviderError } from "./errors.ts";
 
-export const spawnDetached = (rel: string, args: ReadonlyArray<string>) =>
+export const spawnDetached = (
+  provider: string,
+  rel: string,
+  args: ReadonlyArray<string>,
+) =>
   Effect.try({
     try: () => {
       spawn(
@@ -14,7 +18,7 @@ export const spawnDetached = (rel: string, args: ReadonlyArray<string>) =>
     },
     catch: (cause) =>
       new ProviderError({
-        provider: "fake",
+        provider,
         reason: cause instanceof Error ? cause.message : String(cause),
       }),
   });

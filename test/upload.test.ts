@@ -179,6 +179,87 @@ describe("upload", () => {
     ).toBe("i\n");
   });
 
+  it("a symlink left in the Sandbox does not take an upload outside the Work folder", async () => {
+    // Given: the fixture uploaded once; the Sandbox made Work folder path
+    // d a symlink to a folder outside the Work folder
+    const { env, id, name, folder } = await uploadOnce();
+    const linked = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "mkdir -p ../outside && ln -s ../outside d",
+    ]);
+    expect(linked.exitCode).toBe(0);
+    mkdirSync(join(folder, "d"));
+    writeFileSync(join(folder, "d", "x.txt"), "x\n");
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then: the link is dropped and a real folder takes the file
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 1 file, removed 0 files\n",
+    );
+    expect(
+      String(readFileSync(join(env.root, name, "home", "d", "x.txt"))),
+    ).toBe("x\n");
+    expect(readdirSync(join(env.root, name, "outside"))).toEqual([]);
+  });
+
+  it("a removed path does not reach outside the Work folder through a symlink", async () => {
+    // Given: the fixture plus d/x.txt uploaded; in the Sandbox d became a
+    // symlink to an outside folder holding a planted file; the Caller
+    // deleted d/x.txt
+    const { env, id, name, folder } = await uploadOnce();
+    mkdirSync(join(folder, "d"));
+    writeFileSync(join(folder, "d", "x.txt"), "x\n");
+    const second = await runCli(env, ["upload", id, folder]);
+    expect(second.exitCode).toBe(0);
+    const tampered = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "rm -rf d && mkdir -p ../outside && ln -s ../outside d && echo planted > ../outside/x.txt",
+    ]);
+    expect(tampered.exitCode).toBe(0);
+    rmSync(join(folder, "d"), { recursive: true });
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then: the link is dropped before the remove, so the planted file stays
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 0 files, removed 1 file\n",
+    );
+    expect(String(readFileSync(join(env.root, name, "outside", "x.txt")))).toBe(
+      "planted\n",
+    );
+    expect(existsSync(join(env.root, name, "home", "d"))).toBe(false);
+  });
+
+  it("a Work file name that is not UTF-8 refuses the upload", async () => {
+    // Given: the fixture uploaded once; an untracked file whose name holds
+    // a byte that is not valid UTF-8
+    const { env, id, name, folder } = await uploadOnce();
+    writeFileSync(
+      Buffer.concat([
+        Buffer.from(`${folder}/`),
+        Buffer.from([0x62, 0x61, 0x64, 0xff]),
+      ]),
+      "x\n",
+    );
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then: the upload refuses rather than silently skip the file
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toContain("not valid UTF-8");
+    expect(existsSync(join(env.root, name, "state", "work-hashes.json"))).toBe(
+      true,
+    );
+  });
+
   it("an upload with no change sends nothing", async () => {
     // Given: the fixture uploaded once
     const { env, id, folder } = await uploadOnce();

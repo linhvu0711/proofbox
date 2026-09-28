@@ -7,12 +7,14 @@ import {
   ProviderError,
   SetupNeedsWorkError,
   SetupScriptMissingError,
+  SizeNotOfferedError,
   UnknownProviderError,
 } from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
 import { runSetupScript } from "../setup-script.ts";
+import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
@@ -24,6 +26,7 @@ export const createSandbox = (options: {
   readonly work?: string | undefined;
   readonly setup?: string | undefined;
   readonly maxSize?: string | undefined;
+  readonly size?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
@@ -78,10 +81,25 @@ export const createSandbox = (options: {
       options.work === undefined
         ? undefined
         : yield* readWorkFolder(options.work, maxSize ?? MAX_SIZE_DEFAULT);
+    const size =
+      options.size === undefined ? undefined : yield* parseSize(options.size);
+    if (size !== undefined && provider.sizes !== "any") {
+      const offered = provider.sizes.some(
+        (listed) => listed.cpu === size.cpu && listed.ramGb === size.ramGb,
+      );
+      if (!offered) {
+        return yield* new SizeNotOfferedError({
+          provider: provider.name,
+          size: formatSize(size),
+          offered: provider.sizes.map(formatSize),
+        });
+      }
+    }
     const info = yield* provider.create({
       os: options.os,
       idle,
       maxLife,
+      size,
     });
     const output = yield* CliOutput;
     const id = `${provider.name}:${info.name}`;

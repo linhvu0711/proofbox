@@ -4,7 +4,11 @@ import { createConnection, type Socket } from "node:net";
 import { promisify } from "node:util";
 import { Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { ProviderError, type UploadFailedError } from "../errors.ts";
+import {
+  ProviderError,
+  type ProviderUnavailableError,
+  type UploadFailedError,
+} from "../errors.ts";
 import { type ExecEvent, type ExecOptions, Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
@@ -24,6 +28,11 @@ const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 export interface KeeperExecOptions {
   readonly stdin?: Stream.Stream<Uint8Array, ProviderError | UploadFailedError>;
 }
+
+export type KeeperExecError =
+  | ProviderError
+  | ProviderUnavailableError
+  | UploadFailedError;
 
 const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
   options?.stdin === undefined
@@ -67,7 +76,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       const start = Effect.fn("KeeperClient.start")(function* (rawId: string) {
         const id = yield* parseSandboxId(rawId, [...providers.keys()]);
         const paths = yield* keeperPaths(id);
-        yield* spawnDetached("keeper/keeper-main", [
+        yield* spawnDetached(id.provider, "keeper/keeper-main", [
           `${id.provider}:${id.name}`,
         ]);
         yield* connectSocket(paths.socket, id.provider).pipe(
@@ -210,8 +219,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             return yield* provider
               .connect(id.name)
               .pipe(
-                Effect.map((connection) =>
-                  connection.exec(argv, narrowStdin(options)),
+                Effect.map(
+                  (connection): Stream.Stream<ExecEvent, KeeperExecError> =>
+                    connection.exec(argv, narrowStdin(options)),
                 ),
               );
           }
@@ -255,7 +265,10 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               ),
             );
           }
-          return frames(socket.value, id.provider).pipe(
+          const events: Stream.Stream<ExecEvent, KeeperExecError> = frames(
+            socket.value,
+            id.provider,
+          ).pipe(
             Stream.catchAll((frameError) =>
               Stream.unwrap(
                 Ref.get(feederError).pipe(
@@ -268,6 +281,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               ),
             ),
           );
+          return events;
         });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {
@@ -328,8 +342,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             return yield* provider
               .connect(id.name)
               .pipe(
-                Effect.map((connection) =>
-                  connection.exec(argv, narrowStdin(options)),
+                Effect.map(
+                  (connection): Stream.Stream<ExecEvent, KeeperExecError> =>
+                    connection.exec(argv, narrowStdin(options)),
                 ),
               );
           }),

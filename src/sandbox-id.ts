@@ -1,5 +1,13 @@
+import { randomInt } from "node:crypto";
 import { Effect } from "effect";
 import { BadSandboxIdError, UnknownProviderError } from "./errors.ts";
+
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+export const makeSandboxName = () =>
+  Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join(
+    "",
+  );
 
 const ID_PATTERN = /^([a-z][a-z0-9-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 

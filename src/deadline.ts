@@ -2,6 +2,7 @@ import { Clock, Duration, Effect, Schedule } from "effect";
 import {
   BadSpanError,
   type ProviderError,
+  type ProviderUnavailableError,
   type SandboxGoneError,
 } from "./errors.ts";
 import type { Os, Provider, SandboxInfo } from "./provider.ts";
@@ -48,7 +49,11 @@ export const withDeadlinePush =
   (provider: Provider, name: string, info: SandboxInfo) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | ProviderError | SandboxGoneError, R> =>
+  ): Effect.Effect<
+    A,
+    E | ProviderError | ProviderUnavailableError | SandboxGoneError,
+    R
+  > =>
     Effect.gen(function* () {
       const idle = Duration.seconds(info.idleSeconds);
       const push = Effect.flatMap(Clock.currentTimeMillis, (millis) =>

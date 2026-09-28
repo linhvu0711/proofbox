@@ -1,10 +1,8 @@
-import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Clock, Config, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Clock, Duration, Effect, Schema, Stream } from "effect";
 import { nextDeadline } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import { Progress } from "../progress.ts";
@@ -14,18 +12,12 @@ import {
   IdleSeconds,
   Os,
   type Provider,
-  Providers,
   SandboxInfo,
 } from "../provider.ts";
+import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
+import { Size } from "../size.ts";
 import { spawnDetached } from "../spawn-detached.ts";
-
-const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
-
-const makeName = () =>
-  Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join(
-    "",
-  );
 
 export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
@@ -33,6 +25,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
+  size: Schema.optional(Size),
 }) {}
 
 export const describe = (cause: unknown) =>
@@ -81,6 +74,7 @@ export const makeFakeProvider = (options: {
         idleSeconds: file.idleSeconds,
         deadline: file.deadline,
         maxLifeAt: file.maxLifeAt,
+        size: file.size,
       });
       const current = yield* now;
       if (info.deadline.getTime() <= current.getTime()) {
@@ -107,6 +101,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size | undefined;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -124,7 +119,7 @@ export const makeFakeProvider = (options: {
       });
       let name: string | undefined;
       for (let i = 0; i < 5 && name === undefined; i++) {
-        const candidate = makeName();
+        const candidate = makeSandboxName();
         const made = yield* Effect.tryPromise({
           try: async () => {
             await mkdir(join(root, candidate));
@@ -158,6 +153,7 @@ export const makeFakeProvider = (options: {
           maxLifeAt,
         }),
         maxLifeAt,
+        size: req.size,
       });
       yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
@@ -168,7 +164,7 @@ export const makeFakeProvider = (options: {
         catch: (cause) => fail(describe(cause)),
       });
       if (options.watch === "process") {
-        yield* spawnDetached("fake/watch-main", [root, name]);
+        yield* spawnDetached("fake", "fake/watch-main", [root, name]);
       }
       return new SandboxInfo({ name, ...file });
     });
@@ -177,6 +173,7 @@ export const makeFakeProvider = (options: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    readonly size?: Size | undefined;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),
@@ -232,6 +229,7 @@ export const makeFakeProvider = (options: {
         idleSeconds: info.idleSeconds,
         deadline,
         maxLifeAt: info.maxLifeAt,
+        size: info.size,
       });
       yield* writeFileInfo(name, file);
       return yield* readFileInfo(name);
@@ -299,6 +297,11 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     capabilities: new Set(["os:linux"]),
+    sizes: [
+      { cpu: 4, ramGb: 8 },
+      { cpu: 8, ramGb: 16 },
+      { cpu: 16, ramGb: 32 },
+    ],
     create,
     get,
     list,
@@ -306,18 +309,6 @@ export const makeFakeProvider = (options: {
     extend,
     stateDir: (name) => join(root, name, "state"),
     connect,
+    memoryKills: () => Effect.succeed(0),
   };
 };
-
-export const ProvidersLive = Layer.effect(
-  Providers,
-  Effect.gen(function* () {
-    const root = yield* Config.string("PROOFBOX_FAKE_ROOT").pipe(
-      Config.withDefault(join(homedir(), ".local/share/proofbox/fake")),
-    );
-    const providers = new Map<string, Provider>([
-      ["fake", makeFakeProvider({ root, watch: "process" })],
-    ]);
-    return providers;
-  }),
-);

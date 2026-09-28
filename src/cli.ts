@@ -17,8 +17,9 @@ const create = Command.make(
     work: Options.text("work").pipe(Options.optional),
     setup: Options.text("setup").pipe(Options.optional),
     maxSize: Options.text("max-size").pipe(Options.optional),
+    size: Options.text("size").pipe(Options.optional),
   },
-  ({ os, provider, idle, maxLife, work, setup, maxSize }) =>
+  ({ os, provider, idle, maxLife, work, setup, maxSize, size }) =>
     createSandbox({
       os,
       provider,
@@ -27,6 +28,7 @@ const create = Command.make(
       work: Option.getOrUndefined(work),
       setup: Option.getOrUndefined(setup),
       maxSize: Option.getOrUndefined(maxSize),
+      size: Option.getOrUndefined(size),
     }),
 );
 

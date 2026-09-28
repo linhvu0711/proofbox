@@ -35,7 +35,7 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "nope:abc123", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Unknown Provider "nope" in Sandbox id "nope:abc123": use the form <provider>:<name> with a Provider from: fake\n',
+      'Unknown Provider "nope" in Sandbox id "nope:abc123": use the form <provider>:<name> with a Provider from: docker, fake\n',
     );
     expect(result.exitCode).toBe(125);
   });

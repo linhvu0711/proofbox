@@ -10,6 +10,32 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
   }
 }
 
+export class ProviderUnavailableError extends Data.TaggedError(
+  "ProviderUnavailableError",
+)<{
+  readonly provider: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return this.reason;
+  }
+}
+
+export class ToolBundleHashError extends Data.TaggedError(
+  "ToolBundleHashError",
+)<{
+  readonly file: string;
+  readonly sandboxId: string;
+  readonly tag: string;
+}> {
+  get message() {
+    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. Run docker image rm ${this.tag} and try again`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   readonly id: string;
 }> {
@@ -89,6 +115,26 @@ export class SetupScriptFailedError extends Data.TaggedError(
 }> {
   get message() {
     return `Setup script failed with exit code ${this.code}; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.`;
+  }
+}
+
+export class BadSizeError extends Data.TaggedError("BadSizeError")<{
+  readonly value: string;
+}> {
+  get message() {
+    return `Bad --size "${this.value}": use <cpu>x<ram> in whole numbers, for example 4x8`;
+  }
+}
+
+export class SizeNotOfferedError extends Data.TaggedError(
+  "SizeNotOfferedError",
+)<{
+  readonly provider: string;
+  readonly size: string;
+  readonly offered: ReadonlyArray<string>;
+}> {
+  get message() {
+    return `Provider ${this.provider} does not offer the size ${this.size}; use one of: ${this.offered.join(", ")}`;
   }
 }
 

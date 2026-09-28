@@ -103,14 +103,36 @@ export const listWorkFiles = (folder: string) =>
     if (code !== 0) {
       return yield* new NotGitFolderError({ folder });
     }
-    const text = Buffer.concat(
-      [...bytes].map((chunk) => Buffer.from(chunk)),
-    ).toString("utf8");
-    const paths = [
-      ...new Set(text.split("\0").filter((path) => path !== "")),
-    ].sort();
+    const raw = Buffer.concat([...bytes].map((chunk) => Buffer.from(chunk)));
+    const segments: Array<Buffer> = [];
+    let start = 0;
+    for (let i = 0; i <= raw.length; i += 1) {
+      if (i === raw.length || raw[i] === 0) {
+        if (i > start) {
+          segments.push(raw.subarray(start, i));
+        }
+        start = i + 1;
+      }
+    }
+    const paths = yield* Effect.forEach(
+      segments,
+      (segment) => {
+        const path = segment.toString("utf8");
+        // A name that does not round-trip UTF-8 would silently vanish from
+        // the upload; refuse it instead of sending a partial Work folder.
+        return Buffer.from(path, "utf8").equals(segment)
+          ? Effect.succeed(path)
+          : Effect.fail(
+              local(
+                `a Work file name is not valid UTF-8 (0x${segment.toString("hex")}); rename it or git-ignore it`,
+              ),
+            );
+      },
+      { concurrency: 8 },
+    );
+    const unique = [...new Set(paths)].sort();
     const files = yield* Effect.forEach(
-      paths,
+      unique,
       (path) => workFile(folder, path),
       { concurrency: 8 },
     );

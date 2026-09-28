@@ -36,7 +36,9 @@ describe("Capability", () => {
       "nope",
     ]);
     // Then
-    expect(result.stderr).toBe('Unknown Provider "nope": use one of: fake\n');
+    expect(result.stderr).toBe(
+      'Unknown Provider "nope": use one of: docker, fake\n',
+    );
     expect(result.exitCode).toBe(125);
   });
 });
