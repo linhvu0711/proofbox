@@ -127,6 +127,55 @@ describe("Snapshots", () => {
     });
   });
 
+  it("a failed Snapshot push warns and create still succeeds", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    const result = await runCli(env, createArgs(folder, script), {
+      set: {
+        PROOFBOX_FAKE_SNAPSHOTS: dir,
+        PROOFBOX_FAKE_SNAPSHOT_FAIL: "push",
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stdoutOk: /^fake:[a-z0-9]{6}\n$/.test(result.stdout),
+      stderr: result.stderr,
+      snapshots: readdirSync(dir),
+    }).toEqual({
+      exitCode: 0,
+      stdoutOk: true,
+      stderr:
+        "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: could not save the Snapshot (Provider fake failed: push refused); the next create runs the Setup script again\n",
+      snapshots: [],
+    });
+  });
+
+  it("a failed Snapshot pull warns and runs the Setup script", async () => {
+    // Given
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\necho ran >> runs.txt\n");
+    // When
+    const result = await runCli(env, createArgs(folder, script), {
+      set: {
+        PROOFBOX_FAKE_SNAPSHOTS: dir,
+        PROOFBOX_FAKE_SNAPSHOT_FAIL: "pull",
+      },
+    });
+    // Then
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+      exitCode: 0,
+      stderr:
+        "proofbox: creating fake Sandbox\nproofbox: could not pull the Snapshot (Provider fake failed: pull refused); running the Setup script\nproofbox: starting Keeper\nproofbox: uploading Work folder\nproofbox: sent 3 files, removed 0 files\nproofbox: running Setup script\nproofbox: saving the Snapshot\nproofbox: Snapshot saved, Fingerprint 22d0cf15eb8e\n",
+    });
+  });
+
   it("a failing Setup script saves no Snapshot", async () => {
     // Given
     const env = makeEnv();

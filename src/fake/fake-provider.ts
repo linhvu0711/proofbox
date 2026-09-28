@@ -179,8 +179,18 @@ export const makeFakeProvider = (options: {
       );
       // A missing Snapshot is not an error: the Sandbox starts empty and
       // the Setup script runs.
+      const pullFails =
+        req.snapshot !== undefined && options.snapshots?.fail === "pull";
+      if (pullFails) {
+        const progress = yield* Progress;
+        yield* progress.warn(
+          `could not pull the Snapshot (${fail("pull refused").message}); running the Setup script`,
+        );
+      }
       const saved =
-        req.snapshot === undefined || options.snapshots === undefined
+        req.snapshot === undefined ||
+        options.snapshots === undefined ||
+        pullFails
           ? undefined
           : join(options.snapshots.root, req.snapshot);
       const entry =
@@ -300,6 +310,9 @@ export const makeFakeProvider = (options: {
       const snapshots = options.snapshots;
       if (snapshots === undefined) {
         return yield* fail("this fake Provider keeps no Snapshots");
+      }
+      if (snapshots.fail === "push") {
+        return yield* fail("push refused");
       }
       yield* readFileInfo(name);
       const dir = join(root, name);

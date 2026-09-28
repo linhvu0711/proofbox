@@ -295,7 +295,10 @@ describe("Docker Provider", () => {
                 KeeperClient.Direct.pipe(Layer.provide(providers)),
                 Layer.succeed(
                   Progress,
-                  new Progress({ step: (_label, effect) => effect }),
+                  new Progress({
+                    step: (_label, effect) => effect,
+                    warn: () => Effect.void,
+                  }),
                 ),
               ),
             ),

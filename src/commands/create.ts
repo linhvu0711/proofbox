@@ -159,15 +159,27 @@ export const createSandbox = (options: {
       }
       // The Snapshot is saved before the Secrets go in, so it holds none.
       if (!reused && fp !== undefined && snapshots !== undefined) {
-        yield* progress.step(
-          "saving the Snapshot",
-          withDeadlinePush(
-            provider,
-            info.name,
-            info,
-          )(snapshots.save(info.name, fp)),
-        );
-        yield* output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`);
+        // A Snapshot only saves time later; a failed save must not fail
+        // the create.
+        yield* progress
+          .step(
+            "saving the Snapshot",
+            withDeadlinePush(
+              provider,
+              info.name,
+              info,
+            )(snapshots.save(info.name, fp)),
+          )
+          .pipe(
+            Effect.zipRight(
+              output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`),
+            ),
+            Effect.catchAll((error) =>
+              output.err(
+                `proofbox: could not save the Snapshot (${error.message}); the next create runs the Setup script again\n`,
+              ),
+            ),
+          );
       }
       if (secrets !== undefined) {
         yield* sendSecrets(id, secrets);
