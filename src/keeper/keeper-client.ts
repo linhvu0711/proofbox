@@ -2,14 +2,14 @@ import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { promisify } from "node:util";
-import { Effect, Layer, Schedule, Stream } from "effect";
+import { Effect, Layer, Ref, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { ProviderError } from "../errors.ts";
-import { type ExecEvent, Providers } from "../provider.ts";
+import { ProviderError, type UploadFailedError } from "../errors.ts";
+import { type ExecEvent, type ExecOptions, Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
-import { decodeReply, encodeRequest } from "./protocol.ts";
+import { decodeReply, encodeInput, encodeRequest } from "./protocol.ts";
 
 const codeOf = (cause: unknown) =>
   typeof cause === "object" && cause !== null && "code" in cause
@@ -17,6 +17,27 @@ const codeOf = (cause: unknown) =>
     : "";
 
 const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
+
+// The Caller side may send a stream whose failure is an upload error, not a
+// ProviderError (packFiles can fail with UploadFailedError); when that stream
+// feeds a real Connection.exec it is narrowed back to ProviderError.
+export interface KeeperExecOptions {
+  readonly stdin?: Stream.Stream<Uint8Array, ProviderError | UploadFailedError>;
+}
+
+const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
+  options?.stdin === undefined
+    ? undefined
+    : {
+        stdin: Stream.mapError(options.stdin, (error) =>
+          error instanceof ProviderError
+            ? error
+            : new ProviderError({
+                provider: "local",
+                reason: error instanceof Error ? error.message : String(error),
+              }),
+        ),
+      };
 
 export class KeeperClient extends Effect.Service<KeeperClient>()(
   "proofbox/KeeperClient",
@@ -140,7 +161,27 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           ),
         );
 
-      const exec = (rawId: string, argv: ReadonlyArray<string>) =>
+      const writeLine = (socket: Socket, provider: string, frame: unknown) =>
+        Effect.async<void, ProviderError>((resume) => {
+          socket.write(`${JSON.stringify(frame)}\n`, (error) =>
+            resume(
+              error
+                ? Effect.fail(
+                    new ProviderError({
+                      provider,
+                      reason: error.message,
+                    }),
+                  )
+                : Effect.void,
+            ),
+          );
+        });
+
+      const exec = (
+        rawId: string,
+        argv: ReadonlyArray<string>,
+        options?: KeeperExecOptions,
+      ) =>
         Effect.gen(function* () {
           const id = yield* parseSandboxId(rawId, [...providers.keys()]);
           const provider = providers.get(id.provider);
@@ -168,25 +209,65 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             );
             return yield* provider
               .connect(id.name)
-              .pipe(Effect.map((connection) => connection.exec(argv)));
-          }
-          yield* Effect.async<void, ProviderError>((resume) => {
-            socket.value.write(
-              `${JSON.stringify(encodeRequest({ exec: [...argv] }))}\n`,
-              (error) =>
-                resume(
-                  error
-                    ? Effect.fail(
-                        new ProviderError({
-                          provider: id.provider,
-                          reason: error.message,
-                        }),
-                      )
-                    : Effect.void,
+              .pipe(
+                Effect.map((connection) =>
+                  connection.exec(argv, narrowStdin(options)),
                 ),
+              );
+          }
+          yield* writeLine(
+            socket.value,
+            id.provider,
+            encodeRequest(
+              options?.stdin === undefined
+                ? { exec: [...argv] }
+                : { exec: [...argv], stdin: true },
+            ),
+          );
+          const feederError = yield* Ref.make<
+            ProviderError | UploadFailedError | undefined
+          >(undefined);
+          if (options?.stdin !== undefined) {
+            const stdin = options.stdin;
+            yield* Effect.forkScoped(
+              Stream.runForEach(stdin, (chunk) =>
+                writeLine(
+                  socket.value,
+                  id.provider,
+                  encodeInput({ in: Buffer.from(chunk).toString("base64") }),
+                ),
+              ).pipe(
+                Effect.zipRight(
+                  writeLine(
+                    socket.value,
+                    id.provider,
+                    encodeInput({ end: true }),
+                  ),
+                ),
+                Effect.catchAll((error) =>
+                  Effect.zipRight(
+                    Ref.set(feederError, error),
+                    Effect.sync(() => {
+                      socket.value.destroy();
+                    }),
+                  ),
+                ),
+              ),
             );
-          });
-          return frames(socket.value, id.provider);
+          }
+          return frames(socket.value, id.provider).pipe(
+            Stream.catchAll((frameError) =>
+              Stream.unwrap(
+                Ref.get(feederError).pipe(
+                  Effect.map((fed) =>
+                    fed === undefined
+                      ? Stream.fail(frameError)
+                      : Stream.fail(fed),
+                  ),
+                ),
+              ),
+            ),
+          );
         });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {
@@ -233,7 +314,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       return new KeeperClient({
         start: () => Effect.void,
         stop: () => Effect.void,
-        exec: (rawId: string, argv: ReadonlyArray<string>) =>
+        exec: (
+          rawId: string,
+          argv: ReadonlyArray<string>,
+          options?: KeeperExecOptions,
+        ) =>
           Effect.gen(function* () {
             const id = yield* parseSandboxId(rawId, [...providers.keys()]);
             const provider = providers.get(id.provider);
@@ -242,7 +327,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             }
             return yield* provider
               .connect(id.name)
-              .pipe(Effect.map((connection) => connection.exec(argv)));
+              .pipe(
+                Effect.map((connection) =>
+                  connection.exec(argv, narrowStdin(options)),
+                ),
+              );
           }),
       });
     }),

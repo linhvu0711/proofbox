@@ -261,6 +261,12 @@ export const makeFakeProvider = (options: {
                 options?.stdin === undefined
                   ? undefined
                   : Stream.run(options.stdin, process.stdin).pipe(
+                      // A command may exit before its stdin reports "finish"
+                      // (tar -x stops at the end-of-archive marker); when the
+                      // process is gone the feed is done by definition.
+                      Effect.raceFirst(
+                        process.exitCode.pipe(Effect.orElseSucceed(() => {})),
+                      ),
                       Effect.mapError((error) => fail(error.message)),
                     );
               const outputs = Stream.merge(

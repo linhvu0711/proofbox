@@ -1,6 +1,6 @@
-import { Clock, Duration, Effect, Schedule, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { nextDeadline } from "../deadline.ts";
+import { withDeadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
@@ -17,36 +17,24 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
     }
     const output = yield* CliOutput;
     const info = yield* provider.get(id.name);
-    const idle = Duration.seconds(info.idleSeconds);
-    const push = Effect.flatMap(Clock.currentTimeMillis, (millis) =>
-      provider.extend(
-        id.name,
-        nextDeadline({
-          now: new Date(millis),
-          idle,
-          maxLifeAt: info.maxLifeAt,
+    const keeper = yield* KeeperClient;
+    const events = yield* keeper.exec(rawId, argv);
+    yield* withDeadlinePush(
+      provider,
+      id.name,
+      info,
+    )(
+      events.pipe(
+        Stream.runForEach((event) => {
+          switch (event._tag) {
+            case "Stdout":
+              return output.out(event.bytes);
+            case "Stderr":
+              return output.err(event.bytes);
+            case "Exit":
+              return output.setExitCode(event.code);
+          }
         }),
       ),
     );
-    yield* push;
-    const keeper = yield* KeeperClient;
-    const events = yield* keeper.exec(rawId, argv);
-    const pushWhileRunning = Effect.repeat(
-      push,
-      Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-    );
-    yield* events.pipe(
-      Stream.runForEach((event) => {
-        switch (event._tag) {
-          case "Stdout":
-            return output.out(event.bytes);
-          case "Stderr":
-            return output.err(event.bytes);
-          case "Exit":
-            return output.setExitCode(event.code);
-        }
-      }),
-      Effect.raceFirst(pushWhileRunning),
-    );
-    yield* push;
   }).pipe(Effect.scoped);

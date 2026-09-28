@@ -4,6 +4,7 @@ import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { listSandboxes } from "./commands/list.ts";
+import { uploadWorkFolder } from "./commands/upload.ts";
 
 const create = Command.make(
   "create",
@@ -43,8 +44,17 @@ const del = Command.make(
   ({ id }) => deleteSandbox(id),
 );
 
+const upload = Command.make(
+  "upload",
+  {
+    id: Args.text({ name: "id" }),
+    folder: Args.text({ name: "folder" }),
+  },
+  ({ id, folder }) => uploadWorkFolder({ id, folder }),
+);
+
 const command = Command.make("proofbox").pipe(
-  Command.withSubcommands([create, exec, list, del]),
+  Command.withSubcommands([create, exec, list, del, upload]),
 );
 
 export const cli = Command.run(command, {

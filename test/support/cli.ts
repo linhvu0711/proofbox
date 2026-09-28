@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -32,6 +32,39 @@ export const cleanupEnvs = () => {
   for (const dir of made.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+};
+
+export const makeGitFolder = (options: {
+  readonly committed: Record<string, string>;
+  readonly untracked?: Record<string, string>;
+}): string => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-work-"));
+  made.push(dir);
+  const write = (files: Record<string, string>) => {
+    for (const [path, contents] of Object.entries(files)) {
+      const full = join(dir, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, contents);
+    }
+  };
+  write(options.committed);
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=proofbox",
+      "-c",
+      "user.email=test@proofbox.invalid",
+      "commit",
+      "-qm",
+      "init",
+    ],
+    { cwd: dir },
+  );
+  write(options.untracked ?? {});
+  return dir;
 };
 
 export interface CliResult {

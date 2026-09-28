@@ -26,6 +26,24 @@ export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   }
 }
 
+export class NotGitFolderError extends Data.TaggedError("NotGitFolderError")<{
+  readonly folder: string;
+}> {
+  get message() {
+    return `Upload needs a git folder: ${this.folder} is not a git folder. Run git init there, or pass a git folder.`;
+  }
+}
+
+export class UploadFailedError extends Data.TaggedError("UploadFailedError")<{
+  readonly id: string;
+  readonly command: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Upload to ${this.id} failed: ${this.command} exited ${this.code}. Run upload again; it sends every file.`;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{

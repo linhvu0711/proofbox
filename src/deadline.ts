@@ -1,6 +1,10 @@
-import { Duration, Effect } from "effect";
-import { BadSpanError } from "./errors.ts";
-import type { Os } from "./provider.ts";
+import { Clock, Duration, Effect, Schedule } from "effect";
+import {
+  BadSpanError,
+  type ProviderError,
+  type SandboxGoneError,
+} from "./errors.ts";
+import type { Os, Provider, SandboxInfo } from "./provider.ts";
 
 export const idleDefault = (os: Os): Duration.Duration =>
   os === "macos" ? Duration.minutes(5) : Duration.minutes(15);
@@ -39,3 +43,38 @@ export const nextDeadline = (options: {
   );
   return pushed < options.maxLifeAt ? pushed : options.maxLifeAt;
 };
+
+export const withDeadlinePush =
+  (provider: Provider, name: string, info: SandboxInfo) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ProviderError | SandboxGoneError, R> =>
+    Effect.gen(function* () {
+      const idle = Duration.seconds(info.idleSeconds);
+      const push = Effect.flatMap(Clock.currentTimeMillis, (millis) =>
+        provider.extend(
+          name,
+          nextDeadline({
+            now: new Date(millis),
+            idle,
+            maxLifeAt: info.maxLifeAt,
+          }),
+        ),
+      );
+      yield* push;
+      // The repeated push never completes on its own, so the winner is always
+      // the raced effect's value.
+      const result = yield* Effect.map(
+        effect.pipe(
+          Effect.raceFirst(
+            Effect.repeat(
+              push,
+              Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+            ),
+          ),
+        ),
+        (done) => done as A,
+      );
+      yield* push;
+      return result;
+    });

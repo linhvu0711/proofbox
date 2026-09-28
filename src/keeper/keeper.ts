@@ -6,13 +6,13 @@ import {
   type Socket,
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
-import { Effect, Runtime, Schedule, Stream } from "effect";
+import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
 import { ProviderError, UnknownProviderError } from "../errors.ts";
-import type { ExecEvent } from "../provider.ts";
+import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
-import { decodeRequest } from "./protocol.ts";
+import { decodeInput, decodeRequest } from "./protocol.ts";
 
 const socketAnswers = (path: string) =>
   Effect.async<boolean>((resume) => {
@@ -70,28 +70,26 @@ export const runKeeper = (rawId: string) =>
           yield* Effect.runtime<CommandExecutor.CommandExecutor>();
         const handleClient = (socket: Socket) => {
           let pending = "";
-          socket.on("data", (chunk) => {
-            pending += chunk.toString("utf8");
-            const newline = pending.indexOf("\n");
-            if (newline === -1) {
-              return;
-            }
-            const line = pending.slice(0, newline);
-            socket.pause();
-            void Runtime.runPromiseExit(runtime)(
-              Effect.gen(function* () {
-                const request = yield* Effect.try({
-                  try: () => decodeRequest(JSON.parse(line)),
-                  catch: () => new Error("bad request"),
-                });
-                yield* connection
-                  .exec(request.exec)
-                  .pipe(
-                    Stream.runForEach((event) =>
-                      writeFrame(socket, frameOf(event)),
-                    ),
-                  );
-              }).pipe(
+          // "request": waiting for the request line; "plain": no stdin, the
+          // exec runs inside the line handler; "stdin": a Mailbox feeds the
+          // exec's stdin from the lines that follow.
+          let mode: "request" | "plain" | "stdin" = "request";
+          let mailbox: Mailbox.Mailbox<Uint8Array, ProviderError> | undefined;
+          let inputEnded = false;
+          let closeSocket = false;
+
+          const runExec = (
+            argv: ReadonlyArray<string>,
+            options?: ExecOptions,
+          ) =>
+            connection
+              .exec(argv, options)
+              .pipe(
+                Stream.runForEach((event) =>
+                  writeFrame(socket, frameOf(event)),
+                ),
+              )
+              .pipe(
                 Effect.catchAll((error) =>
                   writeFrame(socket, {
                     fail:
@@ -104,8 +102,120 @@ export const runKeeper = (rawId: string) =>
                     socket.destroy();
                   }),
                 ),
+              );
+
+          const failInput = (reason: string) =>
+            mailbox === undefined || inputEnded
+              ? Effect.void
+              : Effect.asVoid(
+                  mailbox.fail(
+                    new ProviderError({ provider: id.provider, reason }),
+                  ),
+                );
+
+          const handleLine = (line: string) =>
+            Effect.gen(function* () {
+              if (mode === "request") {
+                const request = yield* Effect.try({
+                  try: () => decodeRequest(JSON.parse(line)),
+                  catch: () => new Error("bad request"),
+                });
+                if (request.stdin === true) {
+                  mode = "stdin";
+                  mailbox = yield* Mailbox.make<Uint8Array, ProviderError>(16);
+                  // forkDaemon: the exec must outlive this line-handler fiber
+                  // (a plain fork would be interrupted when the handler ends).
+                  yield* Effect.forkDaemon(
+                    runExec(request.exec, {
+                      stdin: Mailbox.toStream(mailbox),
+                    }),
+                  );
+                } else {
+                  mode = "plain";
+                  yield* runExec(request.exec);
+                }
+              } else if (
+                mode === "stdin" &&
+                mailbox !== undefined &&
+                !inputEnded
+              ) {
+                const frame = yield* Effect.try({
+                  try: () => decodeInput(JSON.parse(line)),
+                  catch: () =>
+                    new ProviderError({
+                      provider: id.provider,
+                      reason: "bad input frame",
+                    }),
+                });
+                if ("in" in frame) {
+                  yield* mailbox.offer(
+                    new Uint8Array(Buffer.from(frame.in, "base64")),
+                  );
+                } else {
+                  inputEnded = true;
+                  yield* mailbox.end;
+                }
+              }
+            });
+
+          socket.on("data", (chunk) => {
+            pending += chunk.toString("utf8");
+            socket.pause();
+            void Runtime.runPromiseExit(runtime)(
+              Effect.gen(function* () {
+                let newline = pending.indexOf("\n");
+                while (newline !== -1) {
+                  const line = pending.slice(0, newline);
+                  pending = pending.slice(newline + 1);
+                  newline = pending.indexOf("\n");
+                  yield* handleLine(line);
+                }
+              }).pipe(
+                Effect.catchAll((error) =>
+                  (mode === "stdin"
+                    ? failInput(
+                        error instanceof Error ? error.message : String(error),
+                      )
+                    : Effect.andThen(
+                        Effect.sync(() => {
+                          closeSocket = true;
+                        }),
+                        writeFrame(socket, {
+                          fail:
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                        }),
+                      )
+                  ).pipe(Effect.orElseSucceed(() => undefined)),
+                ),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (mode === "plain" || closeSocket) {
+                      socket.end();
+                      socket.destroy();
+                    } else {
+                      socket.resume();
+                    }
+                  }),
+                ),
               ),
             );
+          });
+
+          socket.once("close", () => {
+            if (mailbox !== undefined && !inputEnded) {
+              inputEnded = true;
+              void Runtime.runPromiseExit(runtime)(
+                mailbox.fail(
+                  new ProviderError({
+                    provider: id.provider,
+                    reason:
+                      "the client closed the connection before the input ended",
+                  }),
+                ),
+              );
+            }
           });
         };
         yield* Effect.acquireRelease(
