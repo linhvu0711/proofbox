@@ -7,13 +7,14 @@ import {
   type Scope,
   type Stream,
 } from "effect";
-import type {
-  ProviderError,
-  ProviderLimitError,
-  ProviderUnavailableError,
-  SandboxGoneError,
-  TokenExposedError,
-  ToolBundleHashError,
+import {
+  MissingCapabilityError,
+  type ProviderError,
+  type ProviderLimitError,
+  type ProviderUnavailableError,
+  type SandboxGoneError,
+  type TokenExposedError,
+  type ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
 import { Size } from "./size.ts";
@@ -23,14 +24,21 @@ export type Os = typeof Os.Type;
 
 export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const Capability = Schema.Literal(
-  "os:linux",
-  "os:macos",
-  "live-view",
+export const Feature = Schema.Literal(
   "desktop",
+  "recording",
+  "live-view",
+  "secrets",
   "snapshot",
 );
-export type Capability = typeof Capability.Type;
+export type Feature = typeof Feature.Type;
+
+// What a Provider gives on one OS: the sizes it makes and the features its
+// Sandboxes have there.
+export interface OsOffer {
+  readonly sizes: "any" | ReadonlyArray<Size>;
+  readonly features: ReadonlySet<Feature>;
+}
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   name: Schema.String,
@@ -64,8 +72,7 @@ export interface Connection {
 export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
-  readonly capabilities: ReadonlySet<Capability>;
-  readonly sizes: "any" | ReadonlyArray<Size>;
+  readonly offers: Readonly<Partial<Record<Os, OsOffer>>>;
   readonly create: (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
@@ -108,8 +115,8 @@ export interface Provider {
     SandboxGoneError | ProviderError | ProviderUnavailableError,
     Scope.Scope
   >;
-  // Only with the "snapshot" Capability. `save` stores the Sandbox's
-  // disk, never its Secrets, under a Fingerprint.
+  // Only where an OS offer has the "snapshot" feature. `save` stores the
+  // Sandbox's disk, never its Secrets, under a Fingerprint.
   readonly snapshots?: {
     readonly baseVersion: Effect.Effect<string, ProviderError>;
     readonly save: (
@@ -155,3 +162,18 @@ export class Providers extends Context.Tag("proofbox/Providers")<
   Providers,
   ReadonlyMap<string, Provider>
 >() {}
+
+// The OS is named only for a Provider with more than one OS, where the
+// feature may be there on the other one.
+export const lacksFeature = (
+  provider: Provider,
+  os: Os,
+  feature: Feature,
+  outcome: string,
+) =>
+  new MissingCapabilityError({
+    provider: provider.name,
+    capability: feature,
+    os: Object.keys(provider.offers).length > 1 ? os : undefined,
+    outcome,
+  });

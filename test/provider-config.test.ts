@@ -36,9 +36,11 @@ describe("Provider config", () => {
     const env = makeEnv();
     const home = makeHome();
     // When
-    const macos = await runCli(env, ["create", "--os", "macos"], {
-      set: { HOME: home },
-    });
+    const macos = await runCli(
+      env,
+      ["create", "--os", "macos", "--size", "2x4"],
+      { set: { HOME: home } },
+    );
     const linux = await runCli(
       env,
       ["create", "--os", "linux", "--size", "2x4"],
@@ -46,7 +48,7 @@ describe("Provider config", () => {
     );
     // Then
     expect(macos.stderr).toBe(
-      "Provider namespace lacks the Capability os:macos; nothing was created\n",
+      "Provider namespace does not offer the size 2x4; use one of: 4x7, 6x14\n",
     );
     expect(macos.exitCode).toBe(125);
     expect(linux.stderr).toBe(

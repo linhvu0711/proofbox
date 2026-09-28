@@ -35,12 +35,16 @@ import {
 } from "./snapshot-image.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
-const SIZES: ReadonlyArray<Size> = [
+const LINUX_SIZES: ReadonlyArray<Size> = [
   { cpu: 4, ramGb: 8 },
   { cpu: 8, ramGb: 16 },
   { cpu: 16, ramGb: 32 },
 ];
 const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
+const MACOS_SIZES: ReadonlyArray<Size> = [
+  { cpu: 4, ramGb: 7 },
+  { cpu: 6, ramGb: 14 },
+];
 
 // The host holds Docker itself plus the Sandbox container; keep 1 GB of the
 // Namespace size outside the container's limit so the host stays healthy.
@@ -665,8 +669,19 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
-    capabilities: new Set(["os:linux", "live-view", "desktop", "snapshot"]),
-    sizes: SIZES,
+    offers: {
+      linux: {
+        sizes: LINUX_SIZES,
+        features: new Set([
+          "desktop",
+          "recording",
+          "live-view",
+          "secrets",
+          "snapshot",
+        ]),
+      },
+      macos: { sizes: MACOS_SIZES, features: new Set(["desktop"]) },
+    },
     liveView,
     snapshots: {
       baseVersion: baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE),

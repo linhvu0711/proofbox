@@ -18,7 +18,7 @@ import {
 import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
-import { type Os, Providers } from "../provider.ts";
+import { lacksFeature, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
@@ -47,13 +47,21 @@ export const createSandbox = (options: {
         known: [...providers.keys()],
       });
     }
-    const capability = `os:${options.os}` as const;
-    if (!provider.capabilities.has(capability)) {
+    const offer = provider.offers[options.os];
+    if (offer === undefined) {
       return yield* new MissingCapabilityError({
         provider: provider.name,
-        capability,
+        capability: `os:${options.os}`,
         outcome: "nothing was created",
       });
+    }
+    if (options.envFile !== undefined && !offer.features.has("secrets")) {
+      return yield* lacksFeature(
+        provider,
+        options.os,
+        "secrets",
+        "nothing was created",
+      );
     }
     const idle =
       options.idle === undefined
@@ -99,19 +107,19 @@ export const createSandbox = (options: {
         : yield* readWorkFolder(options.work, workLimit);
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
-    if (size !== undefined && provider.sizes !== "any") {
-      const offered = provider.sizes.some(
+    if (size !== undefined && offer.sizes !== "any") {
+      const offered = offer.sizes.some(
         (listed) => listed.cpu === size.cpu && listed.ramGb === size.ramGb,
       );
       if (!offered) {
         return yield* new SizeNotOfferedError({
           provider: provider.name,
           size: formatSize(size),
-          offered: provider.sizes.map(formatSize),
+          offered: offer.sizes.map(formatSize),
         });
       }
     }
-    const snapshots = provider.capabilities.has("snapshot")
+    const snapshots = offer.features.has("snapshot")
       ? provider.snapshots
       : undefined;
     const fp =

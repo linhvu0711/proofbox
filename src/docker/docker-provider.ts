@@ -379,8 +379,12 @@ export const makeDockerProvider = (options: {
   return {
     name: "docker",
     idPrefix: "docker",
-    capabilities: new Set(["os:linux", "desktop"]),
-    sizes: "any",
+    offers: {
+      linux: {
+        sizes: "any",
+        features: new Set(["desktop", "recording", "secrets"]),
+      },
+    },
     create,
     get,
     list,

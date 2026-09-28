@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import type { Os } from "./provider.ts";
 import { formatMb } from "./upload/max-size.ts";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
@@ -289,10 +290,12 @@ export class MissingCapabilityError extends Data.TaggedError(
 )<{
   readonly provider: string;
   readonly capability: string;
+  readonly os?: Os | undefined;
   readonly outcome: string;
 }> {
   get message() {
-    return `Provider ${this.provider} lacks the Capability ${this.capability}; ${this.outcome}`;
+    const on = this.os === undefined ? "" : ` on ${this.os}`;
+    return `Provider ${this.provider} lacks the Capability ${this.capability}${on}; ${this.outcome}`;
   }
 }
 

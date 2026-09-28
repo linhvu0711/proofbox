@@ -7,16 +7,16 @@ import {
   RecordingRunningError,
   StopFlagsError,
 } from "../errors.ts";
-import { fetchHelper, runHelper } from "../helper.ts";
+import { fetchHelper, type HelperTable, runHelper } from "../helper.ts";
 import { ACTION_LOG_PATH, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
-import type { Os } from "../provider.ts";
 
-export const RECORD_HELPER: Partial<Record<Os, string>> = {
-  linux: "/opt/proofbox/record",
+export const RECORD_HELPER: HelperTable = {
+  feature: "recording",
+  paths: { linux: "/opt/proofbox/record" },
 };
 
 const CAPTION_FONT =
