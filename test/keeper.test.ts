@@ -162,6 +162,63 @@ describe("Keeper", () => {
     expect(again.exitCode).toBe(0);
   });
 
+  it("an exec that exits with a full input Mailbox still drains the client's writes", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const socketPath = join(env.runtime, `fake-${name}.sock`);
+    const socket = createConnection({ path: socketPath });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    // When: the command sleeps 0.2s; the Caller pushes more input than the
+    // Mailbox (16) and the process pipe can hold, so an offer is parked
+    // when the exec exits; then the end marker follows
+    socket.write(
+      `${JSON.stringify({ exec: ["sh", "-c", "sleep 0.2"], stdin: true })}\n`,
+    );
+    const chunk = Buffer.alloc(8192, 0x61).toString("base64");
+    for (let i = 0; i < 40; i++) {
+      socket.write(`${JSON.stringify({ in: chunk })}\n`);
+    }
+    socket.write(`${JSON.stringify({ end: true })}\n`);
+    // Then: the parked offer wakes, the end marker lands, the socket closes
+    const replies: Array<unknown> = [];
+    let closed = false;
+    let pending = "";
+    socket.on("data", (data) => {
+      pending += data.toString("utf8");
+      let newline = pending.indexOf("\n");
+      while (newline !== -1) {
+        replies.push(JSON.parse(pending.slice(0, newline)));
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf("\n");
+      }
+    });
+    socket.on("close", () => {
+      closed = true;
+    });
+    for (let i = 0; i < 40 && !closed; i++) {
+      await sleep(100);
+    }
+    // The one reply is the exit frame — or an EPIPE fail frame when the
+    // pipe fills before sleep exits. Either way the socket must close.
+    expect(closed).toBe(true);
+    expect(replies.length).toBe(1);
+    const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
+    expect(again.stdout).toBe("still\n");
+    expect(again.exitCode).toBe(0);
+  });
+
   it("a client that disconnects mid-exec does not break the Keeper", async () => {
     // Given
     const env = makeEnv();

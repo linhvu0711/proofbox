@@ -102,9 +102,13 @@ export const runKeeper = (rawId: string) =>
                     // A command may exit before its input ends (tar -x
                     // stops at the end-of-archive marker); drain the
                     // remaining input frames so the client can finish
-                    // writing before the socket closes.
+                    // writing before the socket closes. Ending the
+                    // Mailbox wakes an offer parked on a full one.
                     if (mode === "stdin" && !inputEnded) {
                       execDone = true;
+                      void Runtime.runPromiseExit(runtime)(
+                        mailbox === undefined ? Effect.void : mailbox.end,
+                      );
                     } else {
                       socket.end();
                       socket.destroy();

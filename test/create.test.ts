@@ -172,6 +172,33 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
+  it("a Setup script printing one endless line still reports a bounded tail", async () => {
+    // Given: a git folder and a Setup script that prints 3 MB with no
+    // newline, then fails
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript(
+      "#!/bin/sh\nhead -c 3000000 /dev/zero | tr '\\0' 'x'\nexit 3\n",
+    );
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--work",
+      folder,
+      "--setup",
+      script,
+    ]);
+    // Then: the last-lines output is capped rather than holding all 3 MB
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toContain("Setup script failed with exit code 3");
+    expect(result.stderr.length).toBeLessThan(100_000);
+    expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
   it("create with a missing Setup script makes nothing", async () => {
     // Given: a git folder and a Setup script path that does not exist
     const env = makeEnv();

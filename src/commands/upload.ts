@@ -1,13 +1,15 @@
-import { dirname, resolve } from "node:path";
-import { Effect, Schema, Stream } from "effect";
+import { mkdir, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { Duration, Effect, Schedule, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
 import {
-  type ProviderError,
+  ProviderError,
   UploadFailedError,
   WorkFolderTooBigError,
 } from "../errors.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
+import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
@@ -29,6 +31,71 @@ export const readWorkFolder = (folder: string, maxSize: number) =>
       return yield* new WorkFolderTooBigError({ bytes, limit: maxSize });
     }
     return files;
+  });
+
+const hasCode = (cause: unknown, code: string) =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "code" in cause &&
+  cause.code === code;
+
+// A saved list lives in the Sandbox; check paths before they reach rm
+// and tar so a tampered one cannot point the sync outside the Work
+// folder.
+const pathOutsideWork = (path: string) =>
+  path === "" ||
+  path.startsWith("/") ||
+  path.includes("\0") ||
+  path.split("/").includes("..");
+
+// Two uploads at once could interleave rm, tar, and the list write;
+// a lock dir in the runtime folder serializes them on the Caller.
+const withUploadLock = <A, E, R>(
+  provider: string,
+  name: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | ProviderError, R> =>
+  Effect.gen(function* () {
+    const paths = yield* keeperPaths({ provider, name });
+    const lockDir = join(paths.dir, `upload-${name}.lock`);
+    const reason = `another upload to ${name} is in flight; delete ${lockDir} if it is stale`;
+    const take = Effect.tryPromise({
+      try: async () => {
+        try {
+          await mkdir(lockDir);
+          return true;
+        } catch (cause) {
+          if (hasCode(cause, "EEXIST")) {
+            return false;
+          }
+          throw cause;
+        }
+      },
+      catch: (cause) =>
+        new ProviderError({
+          provider,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    }).pipe(
+      Effect.filterOrFail(
+        (held) => held,
+        () => new ProviderError({ provider, reason }),
+      ),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.retry(take, {
+        while: (error) =>
+          error instanceof ProviderError && error.reason === reason,
+        schedule: Schedule.spaced(Duration.millis(100)).pipe(
+          Schedule.upTo(Duration.minutes(1)),
+        ),
+      }),
+      () => effect,
+      () =>
+        Effect.promise(() =>
+          rm(lockDir, { recursive: true, force: true }).catch(() => {}),
+        ),
+    );
   });
 
 const runInSandbox = (
@@ -99,90 +166,107 @@ export const sendWorkFolder = (
         id.name,
         info,
       )(
-        Effect.gen(function* () {
-          const old = yield* runInSandbox(keeper, rawId, [
-            "cat",
-            listPath,
-          ]).pipe(
-            Effect.flatMap((raw) =>
-              Schema.decodeUnknown(Schema.parseJson(HashList))(raw),
-            ),
-            Effect.catchAll(() => Effect.succeed(undefined)),
-          );
-          const diff = diffHashList(old, files);
-          if (diff.send.length !== 0 || diff.remove.length !== 0) {
-            yield* runInSandbox(keeper, rawId, ["rm", "-f", listPath]);
-          }
-          // A symlinked ancestor carries a remove or an extract outside the
-          // Work folder; drop any the Sandbox holds before touching paths
-          // under them. A tracked link that gets dropped is resent anyway,
-          // since a kind change puts it in the send list.
-          const ancestors = new Set<string>();
-          for (const path of [...diff.send, ...diff.remove]) {
-            for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) {
-              ancestors.add(dir);
+        withUploadLock(
+          id.provider,
+          id.name,
+          Effect.gen(function* () {
+            const old = yield* runInSandbox(keeper, rawId, [
+              "cat",
+              listPath,
+            ]).pipe(
+              Effect.flatMap((raw) =>
+                Schema.decodeUnknown(Schema.parseJson(HashList))(raw),
+              ),
+              Effect.catchAll(() => Effect.succeed(undefined)),
+            );
+            const diff = diffHashList(old, files);
+            if (
+              [...diff.send, ...diff.remove].some((path) =>
+                pathOutsideWork(path),
+              )
+            ) {
+              return yield* new ProviderError({
+                provider: id.provider,
+                reason:
+                  "a Work file path is absolute or escapes the Work folder; delete the hash list in the state dir to reset",
+              });
             }
-          }
-          if (ancestors.size !== 0) {
-            yield* runInSandbox(
-              keeper,
-              rawId,
-              [
-                "xargs",
-                "-0",
-                "-I{}",
-                "sh",
-                "-c",
-                '[ -L "$1" ] && rm -f -- "$1" || :',
-                "sh",
-                "{}",
-              ],
-              Stream.make(new TextEncoder().encode([...ancestors].join("\0"))),
-            );
-          }
-          // Removal runs before extraction: a path that changed kind (a
-          // folder that became a file, or the reverse) blocks tar, and the
-          // old entry must be gone first. -rf also clears folder members of
-          // removed paths that the Caller never listed.
-          if (diff.remove.length !== 0) {
-            yield* runInSandbox(
-              keeper,
-              rawId,
-              ["xargs", "-0", "rm", "-rf", "--"],
-              Stream.make(new TextEncoder().encode(diff.remove.join("\0"))),
-            );
-          }
-          if (diff.send.length !== 0) {
-            yield* runInSandbox(
-              keeper,
-              rawId,
-              ["tar", "-x", "-f", "-"],
-              packFiles(folder, rawId, diff.send),
-            );
-          }
-          if (
-            diff.send.length !== 0 ||
-            diff.remove.length !== 0 ||
-            old === undefined
-          ) {
-            const list = new TextEncoder().encode(
-              JSON.stringify(Schema.encodeSync(HashList)(toHashList(files))),
-            );
-            yield* runInSandbox(
-              keeper,
-              rawId,
-              [
-                "sh",
-                "-c",
-                'cat > "$1.tmp" && mv "$1.tmp" "$1"',
-                "sh",
-                listPath,
-              ],
-              Stream.make(list),
-            );
-          }
-          return diff;
-        }),
+            if (diff.send.length !== 0 || diff.remove.length !== 0) {
+              yield* runInSandbox(keeper, rawId, ["rm", "-f", listPath]);
+            }
+            // A symlinked ancestor carries a remove or an extract outside the
+            // Work folder; drop any the Sandbox holds before touching paths
+            // under them. A tracked link that gets dropped is resent anyway,
+            // since a kind change puts it in the send list.
+            const ancestors = new Set<string>();
+            for (const path of [...diff.send, ...diff.remove]) {
+              for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) {
+                ancestors.add(dir);
+              }
+            }
+            if (ancestors.size !== 0) {
+              yield* runInSandbox(
+                keeper,
+                rawId,
+                [
+                  "xargs",
+                  "-0",
+                  "-I{}",
+                  "sh",
+                  "-c",
+                  '[ -L "$1" ] && rm -f -- "$1" || :',
+                  "sh",
+                  "{}",
+                ],
+                Stream.make(
+                  new TextEncoder().encode([...ancestors].join("\0")),
+                ),
+              );
+            }
+            // Removal runs before extraction: a path that changed kind (a
+            // folder that became a file, or the reverse) blocks tar, and the
+            // old entry must be gone first. -rf also clears folder members of
+            // removed paths that the Caller never listed.
+            if (diff.remove.length !== 0) {
+              yield* runInSandbox(
+                keeper,
+                rawId,
+                ["xargs", "-0", "rm", "-rf", "--"],
+                Stream.make(new TextEncoder().encode(diff.remove.join("\0"))),
+              );
+            }
+            if (diff.send.length !== 0) {
+              yield* runInSandbox(
+                keeper,
+                rawId,
+                ["tar", "-x", "-f", "-"],
+                packFiles(folder, rawId, diff.send),
+              );
+            }
+            if (
+              diff.send.length !== 0 ||
+              diff.remove.length !== 0 ||
+              old === undefined
+            ) {
+              const list = new TextEncoder().encode(
+                JSON.stringify(Schema.encodeSync(HashList)(toHashList(files))),
+              );
+              yield* runInSandbox(
+                keeper,
+                rawId,
+                [
+                  "sh",
+                  "-c",
+                  'cat > "$1.tmp" && mv "$1.tmp" "$1"',
+                  "sh",
+                  listPath,
+                ],
+                Stream.make(list),
+              );
+            }
+            return diff;
+          }),
+        ),
       ),
     );
     yield* output.err(

@@ -59,6 +59,11 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
           const decoder = new TextDecoder();
           const keep = (chunk: Uint8Array) => {
             pending += decoder.decode(chunk, { stream: true });
+            // A runaway line would grow the Caller without end; the tail
+            // is all "last 50 lines" needs anyway.
+            if (pending.length > 65_536) {
+              pending = pending.slice(-65_536);
+            }
             let newline = pending.indexOf("\n");
             while (newline !== -1) {
               lines.push(pending.slice(0, newline + 1));

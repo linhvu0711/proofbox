@@ -239,6 +239,48 @@ describe("upload", () => {
     expect(existsSync(join(env.root, name, "home", "d"))).toBe(false);
   });
 
+  it("a tampered hash list cannot point the sync outside the Work folder", async () => {
+    // Given: the fixture uploaded once; the saved hash list holds a path
+    // that reaches outside the Work folder, where a file is planted
+    const { env, id, name, folder } = await uploadOnce();
+    writeFileSync(join(env.root, name, "evil.txt"), "evil\n");
+    writeFileSync(
+      join(env.root, name, "state", "work-hashes.json"),
+      JSON.stringify({
+        version: 1,
+        files: { "../evil.txt": { sha256: "0", executable: false } },
+      }),
+    );
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then: the upload refuses rather than remove the outside path
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toContain("escapes the Work folder");
+    expect(String(readFileSync(join(env.root, name, "evil.txt")))).toBe(
+      "evil\n",
+    );
+  });
+
+  it("two uploads at once run one after the other", async () => {
+    // Given: the fixture uploaded once; a.txt changed so the first upload
+    // has a file to send
+    const { env, id, folder } = await uploadOnce();
+    writeFileSync(join(folder, "a.txt"), "a2\n");
+    // When
+    const [one, two] = await Promise.all([
+      runCli(env, ["upload", id, folder]),
+      runCli(env, ["upload", id, folder]),
+    ]);
+    // Then: both finish; whichever goes second waits out the lock and
+    // finds nothing left to send
+    expect(one.exitCode).toBe(0);
+    expect(two.exitCode).toBe(0);
+    expect([one.stderr, two.stderr].sort()).toEqual([
+      "proofbox: uploading Work folder\nproofbox: sent 0 files, removed 0 files\n",
+      "proofbox: uploading Work folder\nproofbox: sent 1 file, removed 0 files\n",
+    ]);
+  });
+
   it("a Work file name that is not UTF-8 refuses the upload", async () => {
     // Given: the fixture uploaded once; an untracked file whose name holds
     // a byte that is not valid UTF-8
