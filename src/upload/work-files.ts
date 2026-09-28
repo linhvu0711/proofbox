@@ -55,7 +55,8 @@ const workFile = (folder: string, path: string) =>
       catch: (cause) => cause,
     }).pipe(
       Effect.catchAll((cause) =>
-        hasCode(cause, "ENOENT")
+        // ENOTDIR too: a listed path's parent may have become a plain file
+        hasCode(cause, "ENOENT") || hasCode(cause, "ENOTDIR")
           ? Effect.succeed(undefined)
           : Effect.fail(local(cause)),
       ),

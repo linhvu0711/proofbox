@@ -113,20 +113,23 @@ export const sendWorkFolder = (
           if (diff.send.length !== 0 || diff.remove.length !== 0) {
             yield* runInSandbox(keeper, rawId, ["rm", "-f", listPath]);
           }
-          if (diff.send.length !== 0) {
-            yield* runInSandbox(
-              keeper,
-              rawId,
-              ["tar", "-x", "-f", "-"],
-              packFiles(folder, rawId, diff.send),
-            );
-          }
+          // Removal runs before extraction: a path that changed kind (a
+          // folder that became a file, or the reverse) blocks tar, and the
+          // old entry must be gone first.
           if (diff.remove.length !== 0) {
             yield* runInSandbox(
               keeper,
               rawId,
               ["xargs", "-0", "rm", "-f", "--"],
               Stream.make(new TextEncoder().encode(diff.remove.join("\0"))),
+            );
+          }
+          if (diff.send.length !== 0) {
+            yield* runInSandbox(
+              keeper,
+              rawId,
+              ["tar", "-x", "-f", "-"],
+              packFiles(folder, rawId, diff.send),
             );
           }
           if (

@@ -130,6 +130,55 @@ describe("upload", () => {
     ]);
   });
 
+  it("a path that changed from a folder to a file syncs", async () => {
+    // Given: a Sandbox holding the uploaded folder d/; the Caller replaced
+    // d/ with a file d
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.replace("fake:", "");
+    const folder = makeGitFolder({ committed: { "d/x.txt": "x\n" } });
+    const first = await runCli(env, ["upload", id, folder]);
+    expect(first.exitCode).toBe(0);
+    rmSync(join(folder, "d"), { recursive: true });
+    writeFileSync(join(folder, "d"), "file\n");
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 1 file, removed 1 file\n",
+    );
+    expect(String(readFileSync(join(env.root, name, "home", "d")))).toBe(
+      "file\n",
+    );
+    expect(homeFiles(join(env.root, name, "home"))).toEqual(["d"]);
+  });
+
+  it("a path that changed from a file to a folder syncs", async () => {
+    // Given: the fixture uploaded once; the Caller's a.txt became a folder
+    const { env, id, name, folder } = await uploadOnce();
+    rmSync(join(folder, "a.txt"));
+    mkdirSync(join(folder, "a.txt"));
+    writeFileSync(join(folder, "a.txt", "inner.txt"), "i\n");
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: sent 1 file, removed 1 file\n",
+    );
+    expect(
+      String(readFileSync(join(env.root, name, "home", "a.txt", "inner.txt"))),
+    ).toBe("i\n");
+  });
+
   it("an upload with no change sends nothing", async () => {
     // Given: the fixture uploaded once
     const { env, id, folder } = await uploadOnce();

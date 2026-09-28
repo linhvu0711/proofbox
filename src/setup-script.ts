@@ -56,8 +56,9 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
           }
           const lines: Array<string> = [];
           let pending = "";
+          const decoder = new TextDecoder();
           const keep = (chunk: Uint8Array) => {
-            pending += Buffer.from(chunk).toString("utf8");
+            pending += decoder.decode(chunk, { stream: true });
             let newline = pending.indexOf("\n");
             while (newline !== -1) {
               lines.push(pending.slice(0, newline + 1));
@@ -83,6 +84,7 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
               }
             }),
           );
+          pending += decoder.decode();
           if (pending !== "") {
             lines.push(`${pending}\n`);
             if (lines.length > KEEP_LINES) {

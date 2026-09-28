@@ -96,11 +96,23 @@ export const createSandbox = (options: {
           ),
         ),
       );
-    if (options.work !== undefined && files !== undefined) {
-      yield* sendWorkFolder(id, options.work, files);
-    }
-    if (script !== undefined) {
-      yield* runSetupScript(id, script);
-    }
+    // A failed upload or Setup script must not leave the made Sandbox
+    // behind; runSetupScript already deletes it for a non-zero script exit,
+    // and this covers every other way the steps fail.
+    yield* Effect.gen(function* () {
+      if (options.work !== undefined && files !== undefined) {
+        yield* sendWorkFolder(id, options.work, files);
+      }
+      if (script !== undefined) {
+        yield* runSetupScript(id, script);
+      }
+    }).pipe(
+      Effect.tapError(() =>
+        provider.delete(info.name).pipe(
+          Effect.zipRight(keeper.stop(id)),
+          Effect.catchAll(() => Effect.void),
+        ),
+      ),
+    );
     yield* output.out(`${id}\n`);
   }).pipe(Effect.scoped);
