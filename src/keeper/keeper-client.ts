@@ -8,8 +8,14 @@ import {
   ProviderError,
   type ProviderUnavailableError,
   type UploadFailedError,
+  type WorkFileGrewError,
 } from "../errors.ts";
-import { type ExecEvent, type ExecOptions, Providers } from "../provider.ts";
+import {
+  type ExecEvent,
+  type ExecOptions,
+  type Provider,
+  Providers,
+} from "../provider.ts";
 import { parseSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
@@ -23,16 +29,20 @@ const codeOf = (cause: unknown) =>
 const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 
 // The Caller side may send a stream whose failure is an upload error, not a
-// ProviderError (packFiles can fail with UploadFailedError); when that stream
-// feeds a real Connection.exec it is narrowed back to ProviderError.
+// ProviderError (packFiles can fail with UploadFailedError or
+// WorkFileGrewError); when that stream feeds a real Connection.exec it is
+// narrowed back to ProviderError.
+type StdinError = ProviderError | UploadFailedError | WorkFileGrewError;
+
 export interface KeeperExecOptions {
-  readonly stdin?: Stream.Stream<Uint8Array, ProviderError | UploadFailedError>;
+  readonly stdin?: Stream.Stream<Uint8Array, StdinError>;
 }
 
 export type KeeperExecError =
   | ProviderError
   | ProviderUnavailableError
-  | UploadFailedError;
+  | UploadFailedError
+  | WorkFileGrewError;
 
 const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
   options?.stdin === undefined
@@ -47,6 +57,45 @@ const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
               }),
         ),
       };
+
+// Without a Keeper the stdin stream feeds Connection.exec, which narrows its
+// failure to a ProviderError; keep the stdin error and report it in place of
+// the wrapped one, as the Keeper path does with feederError.
+const execDirect = (
+  provider: Provider,
+  name: string,
+  argv: ReadonlyArray<string>,
+  options?: KeeperExecOptions,
+) =>
+  Effect.gen(function* () {
+    const connection = yield* provider.connect(name);
+    const stdinError = yield* Ref.make<StdinError | undefined>(undefined);
+    const fed =
+      options?.stdin === undefined
+        ? options
+        : {
+            stdin: options.stdin.pipe(
+              Stream.tapError((error) => Ref.set(stdinError, error)),
+            ),
+          };
+    const events: Stream.Stream<ExecEvent, KeeperExecError> = connection
+      .exec(argv, narrowStdin(fed))
+      .pipe(
+        Stream.catchAll((execError) =>
+          Stream.unwrap(
+            Ref.get(stdinError).pipe(
+              Effect.map(
+                (error): Stream.Stream<never, KeeperExecError> =>
+                  error === undefined
+                    ? Stream.fail(execError)
+                    : Stream.fail(error),
+              ),
+            ),
+          ),
+        ),
+      );
+    return events;
+  });
 
 export class KeeperClient extends Effect.Service<KeeperClient>()(
   "proofbox/KeeperClient",
@@ -216,14 +265,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             yield* output.err(
               "proofbox: Keeper did not start; running without it\n",
             );
-            return yield* provider
-              .connect(id.name)
-              .pipe(
-                Effect.map(
-                  (connection): Stream.Stream<ExecEvent, KeeperExecError> =>
-                    connection.exec(argv, narrowStdin(options)),
-                ),
-              );
+            return yield* execDirect(provider, id.name, argv, options);
           }
           yield* writeLine(
             socket.value,
@@ -234,9 +276,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                 : { exec: [...argv], stdin: true },
             ),
           );
-          const feederError = yield* Ref.make<
-            ProviderError | UploadFailedError | undefined
-          >(undefined);
+          const feederError = yield* Ref.make<StdinError | undefined>(
+            undefined,
+          );
           if (options?.stdin !== undefined) {
             const stdin = options.stdin;
             yield* Effect.forkScoped(
@@ -339,14 +381,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             if (provider === undefined) {
               return yield* Effect.die(new Error("unknown Provider"));
             }
-            return yield* provider
-              .connect(id.name)
-              .pipe(
-                Effect.map(
-                  (connection): Stream.Stream<ExecEvent, KeeperExecError> =>
-                    connection.exec(argv, narrowStdin(options)),
-                ),
-              );
+            return yield* execDirect(provider, id.name, argv, options);
           }),
       });
     }),
