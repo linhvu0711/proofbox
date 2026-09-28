@@ -42,6 +42,19 @@ export const TOOL_BUNDLE: ReadonlyArray<ToolFile> = [
       },
     },
   }),
+  ToolFile.make({
+    name: "input",
+    path: "/opt/proofbox/tools/input",
+    macos: {
+      arm64: {
+        // proofbox's own input helper; images/macos/build-input.sh builds it
+        // and prints this hash.
+        file: "input/proofbox-input",
+        sha256:
+          "2a3e4804a755277b1fcfc5f8c22f7c86928ea7072721eed7a10ff9878c1d8913",
+      },
+    },
+  }),
 ];
 
 // The Linux half alone, in the key order the Base image version has always

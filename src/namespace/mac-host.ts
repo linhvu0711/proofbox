@@ -139,6 +139,7 @@ const installTools = (link: Link, id: string) =>
         yield* sendFile(link, join(MACOS_DIR, tool.source.file), tool.path);
       }
     }
+    yield* sendFile(link, join(MACOS_DIR, "pixel.sh"), "/opt/proofbox/pixel");
     const sums = yield* step(
       link,
       "checking the Tool bundle",

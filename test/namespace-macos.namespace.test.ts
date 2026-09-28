@@ -1,6 +1,10 @@
 import { execFile } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { openEventsPage, readEvents } from "./support/events.ts";
 
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
@@ -106,6 +110,136 @@ describe("Namespace macOS Provider", () => {
       "Provider namespace lacks the Capability recording on macos; no Recording was started\n",
     );
     expect(record.exitCode).toBe(125);
+  });
+
+  it("screenshot --out writes a 2560x1600 PNG", async () => {
+    // Given: the Mac from beforeAll
+    const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
+    // When
+    const result = await runCli(env, ["screenshot", id, "--out", out]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const bytes = readFileSync(out);
+    expect(bytes.readUInt32BE(16)).toBe(2560);
+    expect(bytes.readUInt32BE(20)).toBe(1600);
+  });
+
+  it("a point outside 1280x800 is refused", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const result = await runCli(env, ["click", id, "1280", "10"]);
+    // Then
+    expect(result.stderr).toBe(
+      "Point 1280,10 is outside the screen (1280x800); use x 0 to 1279 and y 0 to 799\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  describe("on the events page", () => {
+    beforeAll(async () => {
+      await openEventsPage(env, id);
+    });
+
+    it("click glides at human pace and lands on the point", async () => {
+      // Given: the events page open
+      const started = Date.now();
+      // When
+      const result = await runCli(env, ["click", id, "640", "400"]);
+      // Then
+      const elapsed = Date.now() - started;
+      expect(result.exitCode).toBe(0);
+      expect(elapsed).toBeGreaterThanOrEqual(1100);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({
+        type: "mousedown",
+        x: 640,
+        y: 400,
+        button: 0,
+      });
+      expect(events).toContainEqual({
+        type: "mouseup",
+        x: 640,
+        y: 400,
+        button: 0,
+      });
+    });
+
+    it("type enters the text", async () => {
+      // Given: the input focused
+      await runCli(env, ["click", id, "640", "400", "--pace", "fast"]);
+      // When
+      const result = await runCli(env, ["type", id, "hello mac"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const inputs = (await readEvents(env, id)).filter(
+        (event) => event.type === "input",
+      );
+      expect(inputs.at(-1)).toEqual({ type: "input", value: "hello mac" });
+    });
+
+    it("key sends a combo and a named key", async () => {
+      // Given: the input focused
+      // When
+      const combo = await runCli(env, ["key", id, "ctrl+a"]);
+      const named = await runCli(env, ["key", id, "Return"]);
+      // Then
+      expect(combo.exitCode).toBe(0);
+      expect(named.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({
+        type: "keydown",
+        key: "a",
+        ctrl: true,
+        meta: false,
+      });
+      expect(events).toContainEqual({
+        type: "keydown",
+        key: "Enter",
+        ctrl: false,
+        meta: false,
+      });
+    });
+
+    it("scroll sends wheel steps down and up", async () => {
+      // Given: the events page open
+      // When
+      const down = await runCli(env, ["scroll", id, "640", "400", "down", "3"]);
+      const up = await runCli(env, ["scroll", id, "640", "400", "up", "3"]);
+      // Then
+      expect(down.exitCode).toBe(0);
+      expect(up.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({ type: "wheel", dir: "down" });
+      expect(events).toContainEqual({ type: "wheel", dir: "up" });
+    });
+
+    it("drag presses at the start and releases at the end", async () => {
+      // Given: the events page open
+      // When
+      const result = await runCli(env, [
+        "drag",
+        id,
+        "200",
+        "200",
+        "600",
+        "400",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({
+        type: "mousedown",
+        x: 200,
+        y: 200,
+        button: 0,
+      });
+      expect(events).toContainEqual({
+        type: "mouseup",
+        x: 600,
+        y: 400,
+        button: 0,
+      });
+    });
   });
 });
 

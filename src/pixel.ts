@@ -11,7 +11,7 @@ import { type HelperTable, runHelper } from "./helper.ts";
 
 export const PIXEL_HELPER: HelperTable = {
   feature: "desktop",
-  paths: { linux: "/opt/proofbox/pixel" },
+  paths: { linux: "/opt/proofbox/pixel", macos: "/opt/proofbox/pixel" },
 };
 
 export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";
