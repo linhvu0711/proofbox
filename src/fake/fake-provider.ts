@@ -11,6 +11,7 @@ import { Progress } from "../progress.ts";
 import {
   type Connection,
   type ExecEvent,
+  IdleSeconds,
   Os,
   type Provider,
   Providers,
@@ -29,7 +30,7 @@ const makeName = () =>
 export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
-  idleSeconds: Schema.Number,
+  idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
 }) {}

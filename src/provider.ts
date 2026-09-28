@@ -13,6 +13,8 @@ import type { Progress } from "./progress.ts";
 export const Os = Schema.Literal("linux", "macos");
 export type Os = typeof Os.Type;
 
+export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
+
 export const Capability = Schema.Literal("os:linux", "os:macos");
 export type Capability = typeof Capability.Type;
 
@@ -20,7 +22,7 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   name: Schema.String,
   os: Os,
   createdAt: Schema.Date,
-  idleSeconds: Schema.Number,
+  idleSeconds: IdleSeconds,
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
 }) {}
