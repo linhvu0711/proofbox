@@ -103,7 +103,20 @@ export const stopRecording = (options: {
         return yield* helperFailed(probed);
       }
       const probe = parseProbe(probed.stdout.toString("utf8"));
-      if (nothingChanged(probe)) {
+      let check = probe;
+      if (probe.freezes.length === 0 && probe.duration < 3) {
+        const again = yield* runHelper(
+          options.id,
+          RECORD_HELPER,
+          ["probe", info.dir, String(Math.max(probe.duration / 4, 0.1))],
+          { outcome: "no Proof video was made" },
+        );
+        if (again.code !== 0) {
+          return yield* helperFailed(again);
+        }
+        check = parseProbe(again.stdout.toString("utf8"));
+      }
+      if (nothingChanged(check)) {
         return yield* new NothingChangedError({
           id: options.id,
           raw: `${info.dir}/raw.mkv`,
@@ -130,10 +143,11 @@ export const stopRecording = (options: {
         if (entry.t < info.start || entry.t > info.stop) {
           continue;
         }
+        const t = Math.min(entry.t - info.start, probe.duration);
         if (entry.kind === "mark") {
-          marks.push(entry.t - info.start);
+          marks.push(t);
         } else if (entry.kind === "click") {
-          clicks.push({ t: entry.t - info.start, x: entry.x, y: entry.y });
+          clicks.push({ t, x: entry.x, y: entry.y });
         }
       }
       const plan = planEdit({

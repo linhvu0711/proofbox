@@ -35,20 +35,27 @@ case "$cmd" in
     fi
     n=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)
     DIR=$ROOT/$((n + 1))
-    mkdir -p "$DIR"
-    date +%s.%3N > "$DIR/start"
+    mkdir "$DIR" 2>/dev/null || exit 4
     setsid "$FFMPEG" -f x11grab -framerate 30 -video_size "${W}x${H}" -draw_mouse 1 -i "$DISPLAY" -c:v libx264 -preset ultrafast -crf 18 -g 30 -pix_fmt yuv420p "$DIR/raw.mkv" < /dev/null > "$DIR/ffmpeg.log" 2>&1 &
     echo $! > "$DIR/pid"
-    ln -s "$DIR" "$CUR"
+    if ! ln -s "$DIR" "$CUR" 2>/dev/null; then
+      kill -TERM "$(cat "$DIR/pid")" 2>/dev/null || true
+      exit 4
+    fi
     i=0
     while [ $i -lt 100 ]; do
-      if grep -q 'frame=' "$DIR/ffmpeg.log" 2>/dev/null; then
+      elapsed=$(sed -n 's/.*time=\([0-9:.]*\).*/\1/p' "$DIR/ffmpeg.log" 2>/dev/null | head -1)
+      if [ -n "$elapsed" ]; then
+        secs=$(printf '%s' "$elapsed" | awk -F: '{printf "%.3f", $1*3600+$2*60+$3}')
+        date +%s.%3N | awk -v s="$secs" '{printf "%.3f", $1 - s}' > "$DIR/start"
         exit 0
       fi
       sleep 0.1
       i=$((i + 1))
     done
     cat "$DIR/ffmpeg.log" >&2
+    kill -TERM "$(cat "$DIR/pid")" 2>/dev/null || true
+    rm -f "$CUR"
     exit 1
     ;;
   stop)
@@ -87,8 +94,9 @@ case "$cmd" in
     log mark "$n"
     ;;
   probe)
-    # probe DIR: print the Duration line and each freezedetect mark of raw.mkv.
-    "$FFMPEG" -hide_banner -nostats -i "$1/raw.mkv" -vf freezedetect=n=0.001:d=3 -an -f null - 2>&1 | grep -E 'Duration:|lavfi.freezedetect'
+    # probe DIR [D]: print the Duration line and each freezedetect mark of
+    # raw.mkv; D is the still-part threshold in seconds (3 when not given).
+    "$FFMPEG" -hide_banner -nostats -i "$1/raw.mkv" -vf "freezedetect=n=0.001:d=${2:-3}" -an -f null - 2>&1 | grep -E 'Duration:|lavfi.freezedetect'
     ;;
   build)
     # build DIR CRF: the filter script comes on stdin; write proof.mp4 and

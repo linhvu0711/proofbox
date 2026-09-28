@@ -168,8 +168,25 @@ describe("edit-plan", () => {
     // Then
     expect(plan.rings).toEqual([
       { x: 700, y: 400, from: 1.5, to: 2.3 },
-      { x: 10, y: 20, from: 3.5, to: 4 },
+      { x: 10, y: 20, from: 3.5, to: 4.3 },
     ]);
+  });
+
+  it("a click at the end of a cut keeps its ring into the hold", () => {
+    // Given
+    const input = {
+      duration: 8,
+      freezes: [] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [] as ReadonlyArray<number>,
+      clicks: [{ t: 7.9, x: 720, y: 450 }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    expect(
+      plan.rings.map((r) => ({ ...r, from: round2(r.from), to: round2(r.to) })),
+    ).toEqual([{ x: 720, y: 450, from: 7.9, to: 8.7 }]);
   });
 
   it("parseProbe reads the duration and each still part", () => {

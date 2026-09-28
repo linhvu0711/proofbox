@@ -393,6 +393,31 @@ describe("Recording and the Proof video", () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it("a Recording under 3 s where nothing changed is still refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "still.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "proofbox: building the Proof video\n" +
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+    );
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it("record stop prints progress on stderr while it builds", async () => {
     // Given
     const env = makeEnv({ docker: true });

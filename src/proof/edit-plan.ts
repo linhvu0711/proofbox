@@ -110,7 +110,13 @@ export const planEdit = (input: PlanInput): EditPlan => {
   const captions: Caption[] = [];
   const rings: Ring[] = [];
   const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
-  const cutSpans: { from: number; to: number; out: number }[] = [];
+  const cutSpans: {
+    from: number;
+    to: number;
+    out: number;
+    after: number;
+    step: number;
+  }[] = [];
   let out = 0;
   for (let step = 0; step < count; step++) {
     const start = step === 0 ? 0 : (input.marks[step - 1] ?? 0);
@@ -178,9 +184,13 @@ export const planEdit = (input: PlanInput): EditPlan => {
           step,
         });
         out += 2;
+        const last = cutSpans[cutSpans.length - 1];
+        if (last !== undefined && last.step === step) {
+          last.after = out;
+        }
       }
       clips.push({ kind: "cut", from: a, to: b, step });
-      cutSpans.push({ from: a, to: b, out });
+      cutSpans.push({ from: a, to: b, out, after: out + (b - a), step });
       out += b - a;
       cursor = b;
     }
@@ -204,6 +214,10 @@ export const planEdit = (input: PlanInput): EditPlan => {
           step,
         });
         out += seconds;
+        const last = cutSpans[cutSpans.length - 1];
+        if (last !== undefined && last.step === step) {
+          last.after = out;
+        }
       }
       if (input.marks.length > 0) {
         captions.push({ step, from: outStart, to: out });
@@ -222,7 +236,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
       x: click.x,
       y: click.y,
       from,
-      to: Math.min(from + 0.8, span.out + span.to - span.from),
+      to: Math.min(from + 0.8, span.after),
     });
   }
   return { clips, captions, rings, seconds: out };
