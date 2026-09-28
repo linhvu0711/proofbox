@@ -9,8 +9,10 @@ import {
 } from "effect";
 import type {
   ProviderError,
+  ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
+  TokenExposedError,
   ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
@@ -21,7 +23,12 @@ export type Os = typeof Os.Type;
 
 export const IdleSeconds = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const Capability = Schema.Literal("os:linux", "os:macos", "desktop");
+export const Capability = Schema.Literal(
+  "os:linux",
+  "os:macos",
+  "live-view",
+  "desktop",
+);
 export type Capability = typeof Capability.Type;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
@@ -53,24 +60,48 @@ export interface Connection {
 
 export interface Provider {
   readonly name: string;
+  readonly idPrefix: string;
   readonly capabilities: ReadonlySet<Capability>;
   readonly sizes: "any" | ReadonlyArray<Size>;
   readonly create: (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
+    // Providers whose Max life clock starts before the Sandbox exists (the
+    // host is created first) pass the absolute Max life here; the default
+    // is the Sandbox's own create time plus `maxLife`.
+    readonly maxLifeAt?: Date | undefined;
     readonly size?: Size | undefined;
+    readonly name?: string | undefined;
   }) => Effect.Effect<
     SandboxInfo,
-    ProviderError | ProviderUnavailableError | ToolBundleHashError,
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | ToolBundleHashError
+    | TokenExposedError,
     Progress
   >;
   readonly extend: (
     name: string,
     deadline: Date,
   ) => Effect.Effect<
-    SandboxInfo,
+    void,
     SandboxGoneError | ProviderError | ProviderUnavailableError
+  >;
+  // Scoped: the Live view stays up until the scope closes. `gone` resolves
+  // with a Provider error if the view's link dies while it is open.
+  readonly liveView?: (name: string) => Effect.Effect<
+    {
+      readonly address: string;
+      readonly password: string;
+      readonly gone: Effect.Effect<
+        never,
+        SandboxGoneError | ProviderError | ProviderUnavailableError
+      >;
+    },
+    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    Scope.Scope
   >;
   readonly get: (
     name: string,

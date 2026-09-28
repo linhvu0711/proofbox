@@ -10,10 +10,13 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
     const output = yield* CliOutput;
     const found = yield* Effect.forEach(
       [...providers.entries()],
-      ([providerName, provider]) =>
+      ([, provider]) =>
         provider.list.pipe(
           Effect.map((infos) =>
-            infos.map((info) => ({ id: `${providerName}:${info.name}`, info })),
+            infos.map((info) => ({
+              id: `${provider.idPrefix}:${info.name}`,
+              info,
+            })),
           ),
         ),
     );

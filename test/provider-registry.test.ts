@@ -59,7 +59,7 @@ describe("Provider registry", () => {
     expect(listed.stdout).toContain(created.stdout.trim());
   });
 
-  it("without PROOFBOX_FAKE_ROOT the Unknown Provider list names only docker", async () => {
+  it("without PROOFBOX_FAKE_ROOT the Unknown Provider list names docker and namespace", async () => {
     // Given
     const env = makeEnv();
     // When
@@ -69,7 +69,9 @@ describe("Provider registry", () => {
       { unset: ["PROOFBOX_FAKE_ROOT"] },
     );
     // Then
-    expect(result.stderr).toBe('Unknown Provider "nope": use one of: docker\n');
+    expect(result.stderr).toBe(
+      'Unknown Provider "nope": use one of: docker, namespace\n',
+    );
     expect(result.exitCode).toBe(125);
   });
 

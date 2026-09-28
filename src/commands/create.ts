@@ -13,6 +13,7 @@ import {
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
+import { providerForOs } from "../provider-config.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
@@ -21,7 +22,7 @@ import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
 export const createSandbox = (options: {
   readonly os: Os;
-  readonly provider: string;
+  readonly provider?: string | undefined;
   readonly idle?: string | undefined;
   readonly maxLife?: string | undefined;
   readonly work?: string | undefined;
@@ -32,10 +33,11 @@ export const createSandbox = (options: {
 }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const provider = providers.get(options.provider);
+    const providerName = options.provider ?? (yield* providerForOs(options.os));
+    const provider = providers.get(providerName);
     if (provider === undefined) {
       return yield* new UnknownProviderError({
-        provider: options.provider,
+        provider: providerName,
         known: [...providers.keys()],
       });
     }
@@ -110,7 +112,7 @@ export const createSandbox = (options: {
       size,
     });
     const output = yield* CliOutput;
-    const id = `${provider.name}:${info.name}`;
+    const id = `${provider.idPrefix}:${info.name}`;
     const keeper = yield* KeeperClient;
     const progress = yield* Progress;
     yield* progress

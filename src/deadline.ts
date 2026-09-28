@@ -90,6 +90,26 @@ export const nextDeadline = (options: {
   return pushed < options.maxLifeAt ? pushed : options.maxLifeAt;
 };
 
+// One push of the Sandbox Deadline: idle from `now`, capped at max life.
+export const deadlinePush = (
+  provider: Provider,
+  name: string,
+  info: SandboxInfo,
+): Effect.Effect<
+  void,
+  SandboxGoneError | ProviderError | ProviderUnavailableError
+> =>
+  Effect.flatMap(Clock.currentTimeMillis, (millis) =>
+    provider.extend(
+      name,
+      nextDeadline({
+        now: new Date(millis),
+        idle: Duration.seconds(info.idleSeconds),
+        maxLifeAt: info.maxLifeAt,
+      }),
+    ),
+  );
+
 export const withDeadlinePush =
   (provider: Provider, name: string, info: SandboxInfo) =>
   <A, E, R>(
@@ -101,16 +121,7 @@ export const withDeadlinePush =
   > =>
     Effect.gen(function* () {
       const idle = Duration.seconds(info.idleSeconds);
-      const push = Effect.flatMap(Clock.currentTimeMillis, (millis) =>
-        provider.extend(
-          name,
-          nextDeadline({
-            now: new Date(millis),
-            idle,
-            maxLifeAt: info.maxLifeAt,
-          }),
-        ),
-      );
+      const push = deadlinePush(provider, name, info);
       yield* push;
       // The repeated push never completes on its own, so the winner is always
       // the raced effect's value.

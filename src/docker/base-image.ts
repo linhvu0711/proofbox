@@ -92,11 +92,18 @@ export const ensureBaseImage = (
     readonly tag: string;
     readonly buildArgs: Readonly<Record<string, string>>;
   },
+  options?: { readonly registry?: boolean | undefined },
 ): Effect.Effect<void, DockerError, Progress> =>
   Effect.gen(function* () {
     if (yield* client.imageExists(image.tag)) {
       return;
     }
+    if (options?.registry === true && (yield* client.pull(image.tag))) {
+      return;
+    }
     const progress = yield* Progress;
     yield* progress.step("building the Base image", client.build(image));
+    if (options?.registry === true) {
+      yield* client.push(image.tag);
+    }
   });

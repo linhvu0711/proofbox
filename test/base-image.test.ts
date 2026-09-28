@@ -15,6 +15,8 @@ const stubClient = (
 ): DockerClient => ({
   serverArch: Effect.die("unused"),
   imageExists: () => Effect.succeed(imageExists),
+  pull: () => Effect.succeed(false),
+  push: () => Effect.void,
   build: () => build,
   run: () => Effect.die("unused"),
   execText: () => Effect.die("unused"),

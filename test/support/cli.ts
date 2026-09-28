@@ -13,13 +13,14 @@ export interface CliEnv {
     readonly PROOFBOX_FAKE_ROOT: string;
     readonly PROOFBOX_RUNTIME_DIR: string;
     readonly DOCKER_HOST?: string;
+    readonly PROOFBOX_NSC?: string;
   };
 }
 
 const made: string[] = [];
 
 export const makeEnv = (
-  options: { readonly docker?: boolean } = {},
+  options: { readonly docker?: boolean; readonly namespace?: boolean } = {},
 ): CliEnv => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
   const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
@@ -34,6 +35,10 @@ export const makeEnv = (
       ...(options.docker === true
         ? {}
         : { DOCKER_HOST: "unix:///nonexistent/proofbox-test.sock" }),
+      // Plain tests must not touch the real nsc binary either.
+      ...(options.namespace === true
+        ? {}
+        : { PROOFBOX_NSC: "/nonexistent/proofbox-test-nsc" }),
     },
   };
 };
@@ -109,10 +114,10 @@ export const runCli = (
       // `--` ends Node's own flag scan; without it Node treats a
       // `--env-file` meant for the CLI as its own (nodejs/node#54232).
       ["--disable-warning=ExperimentalWarning", "--", "src/main.ts", ...args],
-      {
-        cwd: repoRoot,
-        env: childEnv,
-      },
+      // The Namespace Provider's create builds the Base image on a fresh
+      // host, which can run for minutes, and on failure may still need a
+      // few seconds to delete the host before the process exits.
+      { cwd: repoRoot, env: childEnv, timeout: 480_000 },
       (error, stdout, stderr) => {
         resolve({
           stdout,

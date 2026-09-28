@@ -8,7 +8,7 @@ import {
   type KeeperExecOptions,
 } from "./keeper/keeper-client.ts";
 import { type Os, Providers } from "./provider.ts";
-import { parseSandboxId } from "./sandbox-id.ts";
+import { resolveSandboxId } from "./sandbox-id.ts";
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -20,13 +20,7 @@ const resolveHelper = (
 ) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const { provider, name } = yield* resolveSandboxId(rawId, providers);
     if (!provider.capabilities.has("desktop")) {
       return yield* new MissingCapabilityError({
         provider: provider.name,
@@ -34,7 +28,7 @@ const resolveHelper = (
         outcome,
       });
     }
-    const info = yield* provider.get(id.name);
+    const info = yield* provider.get(name);
     const helper = helpers[info.os];
     if (helper === undefined) {
       return yield* new MissingCapabilityError({
@@ -43,7 +37,7 @@ const resolveHelper = (
         outcome,
       });
     }
-    return { id, provider, info, helper };
+    return { name, provider, info, helper };
   });
 
 export const runHelper = (
@@ -56,7 +50,7 @@ export const runHelper = (
   },
 ) =>
   Effect.gen(function* () {
-    const { id, provider, info, helper } = yield* resolveHelper(
+    const { name, provider, info, helper } = yield* resolveHelper(
       rawId,
       helpers,
       options.outcome,
@@ -64,7 +58,7 @@ export const runHelper = (
     const keeper = yield* KeeperClient;
     const collected = yield* withDeadlinePush(
       provider,
-      id.name,
+      name,
       info,
     )(
       Effect.gen(function* () {
@@ -97,7 +91,7 @@ export const runHelper = (
       }),
     );
     return {
-      provider: id.provider,
+      provider: provider.name,
       code: collected.code,
       stdout: Buffer.concat(collected.stdout),
       stderr: Buffer.concat(collected.stderr).toString("utf8").trim(),
@@ -112,7 +106,7 @@ export const fetchHelper = (
   options: { readonly outcome: string },
 ) =>
   Effect.gen(function* () {
-    const { id, provider, info, helper } = yield* resolveHelper(
+    const { name, provider, info, helper } = yield* resolveHelper(
       rawId,
       helpers,
       options.outcome,
@@ -120,7 +114,7 @@ export const fetchHelper = (
     const keeper = yield* KeeperClient;
     const collected = yield* withDeadlinePush(
       provider,
-      id.name,
+      name,
       info,
     )(
       Effect.gen(function* () {
@@ -195,7 +189,7 @@ export const fetchHelper = (
                 });
               }
               return {
-                provider: id.provider,
+                provider: provider.name,
                 code,
                 stderr: Buffer.concat(stderr).toString("utf8").trim(),
               };

@@ -210,6 +210,18 @@ export class SetupScriptMissingError extends Data.TaggedError(
   }
 }
 
+export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
+  readonly id: string;
+  readonly what: "the token file" | "the token service";
+}> {
+  get message() {
+    return `Sandbox ${this.id} can reach the Namespace workload token (${this.what}); deleted the host and refused the Sandbox`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class EnvFileUnreadableError extends Data.TaggedError(
   "EnvFileUnreadableError",
 )<{
@@ -260,6 +272,18 @@ export class SizeNotOfferedError extends Data.TaggedError(
   }
 }
 
+export class ProviderLimitError extends Data.TaggedError("ProviderLimitError")<{
+  readonly provider: string;
+  readonly limit: string;
+}> {
+  get message() {
+    return `Namespace refused the Sandbox: ${this.limit}; nothing was created. Delete a Sandbox or use a smaller --size`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class MissingCapabilityError extends Data.TaggedError(
   "MissingCapabilityError",
 )<{
@@ -269,6 +293,15 @@ export class MissingCapabilityError extends Data.TaggedError(
 }> {
   get message() {
     return `Provider ${this.provider} lacks the Capability ${this.capability}; ${this.outcome}`;
+  }
+}
+
+export class BadConfigError extends Data.TaggedError("BadConfigError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Bad config ${this.path}: ${this.reason}; use JSON like {"linux": "docker", "macos": "namespace"}`;
   }
 }
 
@@ -284,7 +317,7 @@ export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
   get message() {
-    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example fake:abc123`;
+    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example ns:abc123`;
   }
 }
 

@@ -16,7 +16,7 @@ import {
   type Provider,
   Providers,
 } from "../provider.ts";
-import { parseSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeReply, encodeInput, encodeRequest } from "./protocol.ts";
@@ -123,12 +123,15 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         });
 
       const start = Effect.fn("KeeperClient.start")(function* (rawId: string) {
-        const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-        const paths = yield* keeperPaths(id);
-        yield* spawnDetached(id.provider, "keeper/keeper-main", [
-          `${id.provider}:${id.name}`,
+        const id = yield* resolveSandboxId(rawId, providers);
+        const paths = yield* keeperPaths({
+          provider: id.prefix,
+          name: id.name,
+        });
+        yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
+          `${id.prefix}:${id.name}`,
         ]);
-        yield* connectSocket(paths.socket, id.provider).pipe(
+        yield* connectSocket(paths.socket, id.provider.name).pipe(
           Effect.retry({
             while: (error) => RETRY_CODES.has(error.reason),
             schedule: Schedule.spaced("50 millis").pipe(
@@ -241,22 +244,23 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         options?: KeeperExecOptions,
       ) =>
         Effect.gen(function* () {
-          const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-          const provider = providers.get(id.provider);
-          if (provider === undefined) {
-            return yield* Effect.die(
-              new Error(
-                `Provider ${id.provider} passed parsing but is unknown`,
-              ),
-            );
-          }
-          const paths = yield* keeperPaths(id);
-          const socket = yield* connectSocket(paths.socket, id.provider).pipe(
+          const id = yield* resolveSandboxId(rawId, providers);
+          const provider = id.provider;
+          const paths = yield* keeperPaths({
+            provider: id.prefix,
+            name: id.name,
+          });
+          const socket = yield* connectSocket(
+            paths.socket,
+            id.provider.name,
+          ).pipe(
             Effect.catchIf(
               (error) => RETRY_CODES.has(error.reason),
               () =>
                 start(rawId).pipe(
-                  Effect.zipRight(connectSocket(paths.socket, id.provider)),
+                  Effect.zipRight(
+                    connectSocket(paths.socket, id.provider.name),
+                  ),
                 ),
             ),
             Effect.option,
@@ -269,7 +273,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           }
           yield* writeLine(
             socket.value,
-            id.provider,
+            id.provider.name,
             encodeRequest(
               options?.stdin === undefined
                 ? { exec: [...argv] }
@@ -285,14 +289,14 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               Stream.runForEach(stdin, (chunk) =>
                 writeLine(
                   socket.value,
-                  id.provider,
+                  id.provider.name,
                   encodeInput({ in: Buffer.from(chunk).toString("base64") }),
                 ),
               ).pipe(
                 Effect.zipRight(
                   writeLine(
                     socket.value,
-                    id.provider,
+                    id.provider.name,
                     encodeInput({ end: true }),
                   ),
                 ),
@@ -309,7 +313,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           }
           const events: Stream.Stream<ExecEvent, KeeperExecError> = frames(
             socket.value,
-            id.provider,
+            id.provider.name,
           ).pipe(
             Stream.catchAll((frameError) =>
               Stream.unwrap(
@@ -327,8 +331,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {
-        const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-        const paths = yield* keeperPaths(id);
+        const id = yield* resolveSandboxId(rawId, providers);
+        const paths = yield* keeperPaths({
+          provider: id.prefix,
+          name: id.name,
+        });
         const pidText = yield* Effect.promise(() =>
           readFile(paths.pid, "utf8").catch(() => ""),
         );
@@ -376,12 +383,8 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           options?: KeeperExecOptions,
         ) =>
           Effect.gen(function* () {
-            const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-            const provider = providers.get(id.provider);
-            if (provider === undefined) {
-              return yield* Effect.die(new Error("unknown Provider"));
-            }
-            return yield* execDirect(provider, id.name, argv, options);
+            const id = yield* resolveSandboxId(rawId, providers);
+            return yield* execDirect(id.provider, id.name, argv, options);
           }),
       });
     }),

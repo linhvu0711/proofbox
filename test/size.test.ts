@@ -72,6 +72,30 @@ describe("--size", () => {
     expect(readdirSync(env.runtime)).toEqual([]);
   });
 
+  it("a size Namespace does not offer is refused with its list", async () => {
+    // Given: makeEnv points PROOFBOX_NSC at no file, so the refusal must
+    // happen before any nsc call
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "namespace",
+      "--size",
+      "2x4",
+    ]);
+    // Then
+    expect(result.stderr).toBe(
+      "Provider namespace does not offer the size 2x4; use one of: 4x8, 8x16, 16x32\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(
+      readdirSync(env.runtime).filter((name) => name.startsWith("ns-")),
+    ).toEqual([]);
+  });
+
   it("create --size passes the size to the Provider", async () => {
     // Given
     const env = makeEnv();
@@ -113,6 +137,19 @@ describe("--size", () => {
     );
     expect(outOfMemoryMessage(undefined, "any")).toBe(
       "Sandbox ran out of memory (no size limit). The host has no free memory left.",
+    );
+  });
+
+  it("outOfMemoryMessage at 16x32 says it is the largest size", () => {
+    // Given: the Namespace sizes
+    const offered = [
+      { cpu: 4, ramGb: 8 },
+      { cpu: 8, ramGb: 16 },
+      { cpu: 16, ramGb: 32 },
+    ];
+    // Then
+    expect(outOfMemoryMessage({ cpu: 16, ramGb: 32 }, offered)).toBe(
+      "Sandbox ran out of memory (16x32). 16x32 is the largest size.",
     );
   });
 });

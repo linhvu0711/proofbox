@@ -1,54 +1,57 @@
 import { posix } from "node:path";
-import { Effect, Stream } from "effect";
+import { Duration, Effect, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { withDeadlinePush } from "../deadline.ts";
+import { deadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Providers } from "../provider.ts";
-import { parseSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { withSecrets } from "../secrets.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const output = yield* CliOutput;
-    const info = yield* provider.get(id.name);
-    const killsBefore = yield* provider.memoryKills(id.name);
-    const keeper = yield* KeeperClient;
-    let exitCode: number | undefined;
-    yield* withDeadlinePush(
-      provider,
-      id.name,
-      info,
-    )(
-      Effect.gen(function* () {
-        const events = yield* keeper.exec(
-          rawId,
-          withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
-        );
-        yield* events.pipe(
-          Stream.runForEach((event) => {
-            switch (event._tag) {
-              case "Stdout":
-                return output.out(event.bytes);
-              case "Stderr":
-                return output.err(event.bytes);
-              case "Exit":
-                exitCode = event.code;
-                return output.setExitCode(event.code);
-            }
-          }),
-        );
-      }),
+    const [info, killsBefore] = yield* Effect.all(
+      [provider.get(id.name), provider.memoryKills(id.name)],
+      { concurrency: 2 },
     );
-    const killsAfter = yield* provider.memoryKills(id.name);
+    const idle = Duration.seconds(info.idleSeconds);
+    const push = deadlinePush(provider, id.name, info);
+    // A cold Keeper link bring-up can outlast a short host Deadline.
+    yield* push;
+    const keeper = yield* KeeperClient;
+    const events = yield* keeper.exec(
+      rawId,
+      withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
+    );
+    let exitCode: number | undefined;
+    // The repeated push never completes on its own, so the stream's value wins.
+    yield* events.pipe(
+      Stream.runForEach((event) => {
+        switch (event._tag) {
+          case "Stdout":
+            return output.out(event.bytes);
+          case "Stderr":
+            return output.err(event.bytes);
+          case "Exit":
+            exitCode = event.code;
+            return output.setExitCode(event.code);
+        }
+      }),
+      Effect.raceFirst(
+        Effect.repeat(
+          push,
+          Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+        ),
+      ),
+    );
+    const [killsAfter] = yield* Effect.all(
+      [provider.memoryKills(id.name), push],
+      { concurrency: 2 },
+    );
     // The kill count is container-wide; a new kill plus a clean or 137 exit
     // means the command hid an OOM child (e.g. an early pipeline stage).
     if (killsAfter > killsBefore && (exitCode === 0 || exitCode === 137)) {

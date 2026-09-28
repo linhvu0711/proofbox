@@ -7,6 +7,7 @@ import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
+import { openLive } from "./commands/live.ts";
 import { setMark } from "./commands/mark.ts";
 import { startRecording, stopRecording } from "./commands/record.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
@@ -19,7 +20,7 @@ const create = Command.make(
   "create",
   {
     os: Options.choice("os", ["linux", "macos"]),
-    provider: Options.text("provider"),
+    provider: Options.text("provider").pipe(Options.optional),
     idle: Options.text("idle").pipe(Options.optional),
     maxLife: Options.text("max-life").pipe(Options.optional),
     work: Options.text("work").pipe(Options.optional),
@@ -31,7 +32,7 @@ const create = Command.make(
   ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
     createSandbox({
       os,
-      provider,
+      provider: Option.getOrUndefined(provider),
       idle: Option.getOrUndefined(idle),
       maxLife: Option.getOrUndefined(maxLife),
       work: Option.getOrUndefined(work),
@@ -45,7 +46,9 @@ const create = Command.make(
 const exec = Command.make(
   "exec",
   {
-    id: Args.text({ name: "id" }),
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
     command: Args.text({ name: "command" }).pipe(Args.atLeast(1)),
   },
   ({ id, command }) => execInSandbox(id, command),
@@ -217,7 +220,11 @@ const list = Command.make(
 
 const del = Command.make(
   "delete",
-  { id: Args.text({ name: "id" }) },
+  {
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
+  },
   ({ id }) => deleteSandbox(id),
 );
 
@@ -280,6 +287,16 @@ const upload = Command.make(
     }),
 );
 
+const live = Command.make(
+  "live",
+  {
+    id: Args.text({ name: "id" }).pipe(
+      Args.withDescription("a Sandbox id, for example ns:abc123"),
+    ),
+  },
+  ({ id }) => openLive(id),
+);
+
 const command = Command.make("proofbox").pipe(
   Command.withSubcommands([
     create,
@@ -293,6 +310,7 @@ const command = Command.make("proofbox").pipe(
     list,
     del,
     upload,
+    live,
     record,
     mark,
   ]),

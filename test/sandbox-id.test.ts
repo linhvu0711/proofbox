@@ -11,7 +11,7 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "abc123", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Bad Sandbox id "abc123": use the form <provider>:<name>, for example fake:abc123\n',
+      'Bad Sandbox id "abc123": use the form <provider>:<name>, for example ns:abc123\n',
     );
     expect(result.exitCode).toBe(125);
   });
@@ -23,7 +23,7 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "fake:", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Bad Sandbox id "fake:": use the form <provider>:<name>, for example fake:abc123\n',
+      'Bad Sandbox id "fake:": use the form <provider>:<name>, for example ns:abc123\n',
     );
     expect(result.exitCode).toBe(125);
   });
@@ -35,9 +35,19 @@ describe("Sandbox id", () => {
     const result = await runCli(env, ["exec", "nope:abc123", "--", "true"]);
     // Then
     expect(result.stderr).toBe(
-      'Unknown Provider "nope" in Sandbox id "nope:abc123": use the form <provider>:<name> with a Provider from: docker, fake\n',
+      'Unknown Provider "nope" in Sandbox id "nope:abc123": use the form <provider>:<name> with a Provider from: docker, ns, fake\n',
     );
     expect(result.exitCode).toBe(125);
+  });
+
+  it("help shows an ns Sandbox id", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["delete", "--help"]);
+    // Then
+    expect(result.stdout).toContain("a Sandbox id, for example ns:abc123");
+    expect(result.stdout).not.toContain("fake:");
   });
 
   it("exec on a name the Provider does not hold says it is gone", async () => {

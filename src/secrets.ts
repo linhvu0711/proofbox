@@ -12,7 +12,7 @@ import {
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { writeSandboxFile } from "./sandbox-file.ts";
-import { parseSandboxId } from "./sandbox-id.ts";
+import { resolveSandboxId } from "./sandbox-id.ts";
 import { shellJoin } from "./shell.ts";
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -116,13 +116,8 @@ export const readEnvFile = (path: string) =>
 export const sendSecrets = (rawId: string, secrets: ReadonlyArray<Secret>) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const info = yield* provider.get(id.name);
     const progress = yield* Progress;
     const body = secrets

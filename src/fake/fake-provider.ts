@@ -255,7 +255,6 @@ export const makeFakeProvider = (options: {
         size: info.size,
       });
       yield* writeFileInfo(name, file);
-      return yield* readFileInfo(name);
     });
 
   const connect = (name: string) =>
@@ -319,6 +318,7 @@ export const makeFakeProvider = (options: {
 
   return {
     name: "fake",
+    idPrefix: "fake",
     capabilities: new Set(["os:linux"]),
     sizes: [
       { cpu: 4, ramGb: 8 },

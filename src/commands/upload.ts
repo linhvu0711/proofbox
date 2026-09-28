@@ -13,7 +13,7 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
-import { parseSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import {
   diffHashList,
   HashList,
@@ -152,13 +152,8 @@ export const sendWorkFolder = (
 ) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const id = yield* parseSandboxId(rawId, [...providers.keys()]);
-    const provider = providers.get(id.provider);
-    if (provider === undefined) {
-      return yield* Effect.die(
-        new Error(`Provider ${id.provider} passed parsing but is unknown`),
-      );
-    }
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const progress = yield* Progress;
     const output = yield* CliOutput;
     const keeper = yield* KeeperClient;
@@ -172,7 +167,7 @@ export const sendWorkFolder = (
         info,
       )(
         withUploadLock(
-          id.provider,
+          id.prefix,
           id.name,
           Effect.gen(function* () {
             const old = yield* runInSandbox(keeper, rawId, [
@@ -191,7 +186,7 @@ export const sendWorkFolder = (
               )
             ) {
               return yield* new ProviderError({
-                provider: id.provider,
+                provider: id.provider.name,
                 reason:
                   "a Work file path is absolute or escapes the Work folder; delete the hash list in the state dir to reset",
               });
