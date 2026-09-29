@@ -513,7 +513,7 @@ describe("Namespace macOS Provider", () => {
     return Effect.gen(function* () {
       // Given
       const mac = yield* makeMac((line) =>
-        line.startsWith("grep 'memorystatus: killing_'")
+        line.includes("grep 'memorystatus: killing_'")
           ? { stdout: `${JETSAM_LINES}\n` }
           : undefined,
       );
@@ -523,4 +523,24 @@ describe("Namespace macOS Provider", () => {
       expect(kills).toBe(2);
     }).pipe(withRuntime(runtime));
   });
+
+  it.effect(
+    "memoryKills on a Mac starts the watcher again when it stopped",
+    () => {
+      const runtime = runtimeDir();
+      writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+      return Effect.gen(function* () {
+        // Given: the watcher's pid is not running
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.memoryKills("abc123def4567");
+        // Then
+        const [line] = yield* Ref.get(mac.commands);
+        expect(line).toMatch(
+          /^ps -p "\$\(cat \/var\/run\/proofbox-memory-watch\.pid 2>\/dev\/null\)" >\/dev\/null 2>&1 \|\| sudo -n sh -c .*\/usr\/bin\/log stream/,
+        );
+        expect(line).toContain("grep 'memorystatus: killing_'");
+      }).pipe(withRuntime(runtime));
+    },
+  );
 });

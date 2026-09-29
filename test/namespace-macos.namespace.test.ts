@@ -103,12 +103,12 @@ describe("Namespace macOS Provider", () => {
       "exec",
       id,
       "--",
-      "pgrep",
-      "-f",
-      "/usr/bin/log stream",
+      "sh",
+      "-c",
+      'ps -p "$(cat /var/run/proofbox-memory-watch.pid)" -o command=',
     ]);
     // Then
-    expect(found.exitCode).toBe(0);
+    expect(found.stdout).toMatch(/^\/usr\/bin\/log stream /);
   });
 
   it("live and record on a Mac are refused until #15", async () => {

@@ -245,15 +245,14 @@ const grantPrivacy = (link: Link) =>
 
 // The kernel's jetsam kills, logged from create on; `log show` per exec
 // would cost about 2 s twice. Not `nohup`: without a terminal, macOS nohup
-// fails and never starts the command.
+// fails and never starts the command. Its pid goes where only root writes.
+const MEMORY_WATCH_PID = "/var/run/proofbox-memory-watch.pid";
+const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
+  `trap "" HUP; /usr/bin/log stream --style compact --predicate 'sender == "kernel" AND eventMessage BEGINSWITH "memorystatus: killing_"' >> ${MEMORY_KILLS} 2>/dev/null < /dev/null & echo $! > ${MEMORY_WATCH_PID}`,
+])}`;
+
 const watchMemory = (link: Link) =>
-  step(
-    link,
-    "starting the memory watcher",
-    `sudo -n sh -c ${shellJoin([
-      `trap "" HUP; /usr/bin/log stream --style compact --predicate 'sender == "kernel" AND eventMessage BEGINSWITH "memorystatus: killing_"' >> ${MEMORY_KILLS} 2>/dev/null < /dev/null &`,
-    ])}`,
-  );
+  step(link, "starting the memory watcher", startMemoryWatcher);
 
 // Kills of real work: macOS also kills idle daemons under pressure, and
 // those are not the command.
@@ -266,9 +265,13 @@ export const countMemoryKills = (text: string): number =>
         !line.includes("killing_idle_process"),
     ).length;
 
+// Starts the watcher again if it stopped, so the command about to run is
+// watched; exec reads the count before and after each command.
 export const readMemoryKills = (link: Link) =>
   link
-    .run(`grep 'memorystatus: killing_' ${MEMORY_KILLS} 2>/dev/null; true`)
+    .run(
+      `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; grep 'memorystatus: killing_' ${MEMORY_KILLS} 2>/dev/null; true`,
+    )
     .pipe(Effect.map((result) => countMemoryKills(result.stdout)));
 
 // The screen as it is now, saved next to the host's other files, so a
