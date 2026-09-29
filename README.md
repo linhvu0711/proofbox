@@ -61,7 +61,7 @@ proofbox click "$id" 640 360
 proofbox mark "$id" "step 2: save the post"
 proofbox type "$id" "Hello"
 proofbox key "$id" ctrl+s
-proofbox record stop "$id" --out proof.mp4   # prints proof.mp4, proof-1.png, proof-2.png
+proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1.png, proof-2.png there
 proofbox delete "$id"
 ```
 
