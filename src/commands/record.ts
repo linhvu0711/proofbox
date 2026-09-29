@@ -104,6 +104,10 @@ export const stopRecording = (options: {
         `${info.dir}/blocked.png`,
         `${base}-blocked.png`,
         { outcome: "no Proof video was made" },
+      ).pipe(
+        // The blocked capture is what the caller must hear about; a
+        // screen that cannot be fetched only loses its screenshot.
+        Effect.catchAll(() => Effect.succeed({ code: 1 })),
       );
       if (saved.code === 0) {
         screenshot = `${base}-blocked.png`;

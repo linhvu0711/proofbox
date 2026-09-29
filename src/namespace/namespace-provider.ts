@@ -670,12 +670,14 @@ export const makeNamespaceProvider = (deps: {
         // is reused when set — one password per Mac — and each viewer
         // drops a session marker the finalizer counts. The printed line
         // is the settled password. macOS has no flock, so the lock is a
-        // mkdir'ed dir that a waiter steals once its pid is gone.
+        // mkdir'ed dir that a waiter steals once its pid is gone, or once
+        // it has sat over two seconds with no pid at all — a holder that
+        // died before writing it.
         const candidate = makeSandboxName(8);
         const events = yield* link
           .stream(
             `sudo -n sh -c ${shellJoin([
-              'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ] && ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
+              'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
             ])} ${candidate}`,
             {
               stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
@@ -704,7 +706,7 @@ export const makeNamespaceProvider = (deps: {
           link
             .run(
               `sudo -n sh -c ${shellJoin([
-                'L=/var/db/proofbox-live; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; true',
+                'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
                 "sh",
                 candidate,
               ])}`,
