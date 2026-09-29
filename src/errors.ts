@@ -155,7 +155,7 @@ export class ProofTooBigError extends Data.TaggedError("ProofTooBigError")<{
   readonly raw: string;
 }> {
   get message() {
-    return `Proof video is ${formatMb(this.bytes)} MB at the lowest quality, over the ${formatMb(this.limit)} MB Size limit, so nothing was downloaded. The raw Recording stays at ${this.raw}; record a shorter walk, or raise --max-size.`;
+    return `Proof video is ${formatMb(this.bytes)} MB at the lowest quality, over the ${formatMb(this.limit)} MB Size limit, so nothing was downloaded. The raw Recording stays at ${this.raw}; make a shorter Recording, or raise --max-size.`;
   }
 }
 

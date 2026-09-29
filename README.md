@@ -1,6 +1,117 @@
 # proofbox
 
-A CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. Words are in `CONTEXT.md`; decisions are in `docs/adr/`.
+proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots.
+
+It only checks work. Writing code stays wherever the agent already works (ADR 0001). The Caller drives the Sandbox from outside, so no agent and no model key ever runs inside it (ADR 0002). Any harness, script, or person can use it.
+
+Words are in `CONTEXT.md`. Decisions are in `docs/adr/`.
+
+## What it does
+
+- Creates a Linux or macOS Sandbox, and the Provider deletes it at its Deadline, even when the Caller crashes (ADR 0003).
+- Uploads your Work folder (tracked and new files, minus git-ignored ones). The Sandbox never clones your repo and never gets a GitHub token (ADR 0005).
+- Runs a Setup script, then sends Secrets from your env file after setup, so setup and Snapshots never hold them.
+- Drives the screen at human pace: screenshot, click, type, key, scroll, drag.
+- Records the desktop and builds a Proof video in the Sandbox: Still parts cut, click rings, step captions, under the Size limit (10 MB by default). It also saves a Proof screenshot at each Step mark (ADR 0006).
+- Leaves nothing in your repo. Its own config lives in `~/.config/proofbox/` (ADR 0007).
+
+## Providers
+
+| OS | Provider | Notes |
+| --- | --- | --- |
+| Linux | `namespace` (default) | Base image in a container on a Namespace host. Snapshots are kept for 14 days after last use. |
+| macOS | `namespace` (default) | A real Mac. The Setup script runs on every Mac. |
+| Linux | `docker` | Local Docker, no cost. The proofbox CI tests use it. |
+
+Windows is not supported.
+
+To pick a Provider per OS, write `~/.config/proofbox/config`:
+
+```json
+{ "linux": "docker", "macos": "namespace" }
+```
+
+No file means `namespace` for both. `create --provider <name>` overrides it for one Sandbox.
+
+## Install
+
+Needs Node 24 or later and pnpm. The `namespace` Provider needs the Namespace CLI (`nsc`), logged in with `nsc login`. The `docker` Provider needs Docker.
+
+```sh
+git clone https://github.com/linhvu0711/proofbox.git
+cd proofbox
+pnpm install
+pnpm build
+pnpm link --global
+```
+
+## Example
+
+Run this from your app's folder. The Setup script installs the app's dependencies, and the env file holds its Secrets. Keep both outside the repo (ADR 0007).
+
+```sh
+cd ~/code/my-app
+id=$(proofbox create --os linux --work . --setup ~/proof/my-app/setup-linux.sh --env-file ~/proof/my-app/app.env)
+
+proofbox exec "$id" -- npm run build
+proofbox exec "$id" -- sh -c 'nohup npm start >/tmp/app.log 2>&1 &'
+proofbox record start "$id"
+proofbox mark "$id" "step 1: open the app"
+proofbox click "$id" 640 360
+proofbox mark "$id" "step 2: save the post"
+proofbox type "$id" "Hello"
+proofbox key "$id" ctrl+s
+proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1.png, proof-2.png there
+proofbox delete "$id"
+```
+
+A Sandbox id has its Provider as a prefix, for example `ns:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
+| `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
+| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. |
+| `screenshot <id> --out <file>` | Saves a PNG of the screen. |
+| `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
+| `type <id> <text>` | Types text. |
+| `key <id> <keys>` | Presses keys, for example `ctrl+s` or `Return`. |
+| `scroll <id> <x> <y> <up\|down\|left\|right> [steps]` | Scrolls. |
+| `drag <id> <x1> <y1> <x2> <y2>` | Drags. |
+| `mark <id> <label>` | Sets a Step mark during a Recording. |
+| `record start <id>` | Starts a Recording. |
+| `record stop <id> --out <file>` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. `--max-size 10MB` sets the Size limit. |
+| `record stop <id> --discard` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). |
+| `live <id>` | Prints the address and password of a Live view, so a person can watch and control the screen. |
+| `list [--json]` | Lists your Sandboxes. |
+| `delete <id>` | Deletes a Sandbox. |
+
+Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action.
+
+A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
+
+## Safety
+
+- A Sandbox is deleted by the Provider at its Deadline: 5 minutes idle on macOS, 15 on Linux, and never later than the Max life of 3 hours.
+- User code can never read the Namespace workload token (ADR 0009). `create` checks this and refuses the Sandbox when the check fails.
+- proofbox does not cap how many Sandboxes run at once. The Provider's limit does, and proofbox reports it in plain words (ADR 0008).
+
+## Not in scope
+
+Windows, mobile, the accessibility tree, and an MCP server.
+
+## Develop
+
+```sh
+pnpm test             # fake Provider, no cloud
+pnpm test:docker      # needs Docker
+pnpm test:namespace   # needs nsc login; uses real Namespace minutes
+pnpm lint && pnpm typecheck
+```
+
+Read `CODING_STANDARDS.md` before you change code.
 
 <!-- embed-source:start -->
 ## Embedded library source

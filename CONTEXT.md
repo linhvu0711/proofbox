@@ -111,19 +111,3 @@ _Avoid_: capture, snap
 **Size limit**:
 The largest Proof video proofbox may produce, 10 MB by default to fit the GitHub free-plan attachment limit.
 _Avoid_: quota, cap
-
-### Workflow
-
-These terms belong to the skills that use proofbox (`/implement`, `/ship`, `/land-pr`), not to the tool.
-
-**Walk**:
-One `UI walks` entry of a plan, done in a Sandbox through proofbox: its Setup, Steps, See, and Must not. Every walk is recorded; the first one that passes becomes the proof.
-_Avoid_: test run, e2e, check
-
-**Walker**:
-The helper agent that does a Walk. It gets the walk and the Sandbox id, sets the Step marks, and returns pass or fail per step with the Proof video and screenshot paths. It runs on Opus 5.5.
-_Avoid_: computer-use agent, tester, driver
-
-**Project config**:
-The folder `~/.config/ship/projects/<owner>-<repo>/` on the Mac that holds one project's Sandbox OS, Sandbox size (empty means the Provider's default), Setup script, and env file (mode 600). `/implement` drafts it on a project's first run and asks the user once.
-_Avoid_: profile, environment, settings
