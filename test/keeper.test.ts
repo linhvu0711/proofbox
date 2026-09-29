@@ -19,7 +19,10 @@ const keeperPid = (env: { runtime: string }, name: string) =>
     10,
   );
 
-const noProgress = new Progress({ step: (_label, effect) => effect });
+const noProgress = new Progress({
+  step: (_label, effect) => effect,
+  warn: () => Effect.void,
+});
 
 const alive = (pid: number) => {
   try {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  cp,
   mkdir,
   readdir,
   readFile,
@@ -34,6 +35,7 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   size: Schema.optional(Size),
+  snapshot: Schema.optional(Schema.String),
 }) {}
 
 export const describe = (cause: unknown) =>
@@ -48,6 +50,14 @@ const hasCode = (cause: unknown, code: string) =>
 export const makeFakeProvider = (options: {
   readonly root: string;
   readonly watch: "process" | "none";
+  // Snapshots live in their own folder, one entry per Fingerprint; `fail`
+  // makes a save ("push") or a start from one ("pull") fail.
+  readonly snapshots?:
+    | {
+        readonly root: string;
+        readonly fail?: "push" | "pull" | undefined;
+      }
+    | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -83,6 +93,7 @@ export const makeFakeProvider = (options: {
         deadline: file.deadline,
         maxLifeAt: file.maxLifeAt,
         size: file.size,
+        snapshot: file.snapshot,
       });
       const current = yield* now;
       if (info.deadline.getTime() <= current.getTime()) {
@@ -124,6 +135,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
       const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
@@ -165,6 +177,24 @@ export const makeFakeProvider = (options: {
       const maxLifeAt = new Date(
         createdAt.getTime() + Duration.toMillis(req.maxLife),
       );
+      // A missing Snapshot is not an error: the Sandbox starts empty and
+      // the Setup script runs.
+      const pullFails =
+        req.snapshot !== undefined && options.snapshots?.fail === "pull";
+      if (pullFails) {
+        const progress = yield* Progress;
+        yield* progress.warn(
+          `could not pull the Snapshot (${fail("pull refused").message}); running the Setup script`,
+        );
+      }
+      const saved =
+        req.snapshot === undefined ||
+        options.snapshots === undefined ||
+        pullFails
+          ? undefined
+          : join(options.snapshots.root, req.snapshot);
+      const entry =
+        saved !== undefined && existsSync(saved) ? saved : undefined;
       const file = new SandboxFile({
         os: req.os,
         createdAt,
@@ -176,6 +206,7 @@ export const makeFakeProvider = (options: {
         }),
         maxLifeAt,
         size: req.size,
+        snapshot: entry === undefined ? undefined : req.snapshot,
       });
       yield* writeFileInfo(name, file);
       yield* Effect.tryPromise({
@@ -186,6 +217,19 @@ export const makeFakeProvider = (options: {
         },
         catch: (cause) => fail(describe(cause)),
       });
+      if (entry !== undefined) {
+        yield* Effect.tryPromise({
+          try: async () => {
+            await cp(join(entry, "home"), join(dir, "home"), {
+              recursive: true,
+            });
+            await cp(join(entry, "state"), join(dir, "state"), {
+              recursive: true,
+            });
+          },
+          catch: (cause) => fail(describe(cause)),
+        });
+      }
       if (options.watch === "process") {
         yield* spawnDetached("fake", "fake/watch-main", [root, name]);
       }
@@ -197,6 +241,7 @@ export const makeFakeProvider = (options: {
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.flatMap(Progress, (progress) =>
       progress.step("creating fake Sandbox", createWork(req)),
@@ -253,8 +298,45 @@ export const makeFakeProvider = (options: {
         deadline,
         maxLifeAt: info.maxLifeAt,
         size: info.size,
+        snapshot: info.snapshot,
       });
       yield* writeFileInfo(name, file);
+    });
+
+  // Copy into a temp entry and rename it over the old one, so a create
+  // that starts from the Snapshot never sees a half-written one.
+  const saveSnapshot = (name: string, fingerprint: string) =>
+    Effect.gen(function* () {
+      const snapshots = options.snapshots;
+      if (snapshots === undefined) {
+        return yield* fail("this fake Provider keeps no Snapshots");
+      }
+      if (snapshots.fail === "push") {
+        return yield* fail("push refused");
+      }
+      yield* readFileInfo(name);
+      const dir = join(root, name);
+      const entry = join(snapshots.root, fingerprint);
+      const temp = join(snapshots.root, `.new-${fingerprint}`);
+      yield* Effect.tryPromise({
+        try: async () => {
+          await rm(temp, { recursive: true, force: true });
+          await mkdir(temp, { recursive: true });
+          await cp(join(dir, "home"), join(temp, "home"), { recursive: true });
+          await cp(join(dir, "state"), join(temp, "state"), {
+            recursive: true,
+          });
+          await rm(entry, { recursive: true, force: true });
+          await rename(temp, entry);
+        },
+        catch: (cause) => fail(describe(cause)),
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.tryPromise(() =>
+            rm(temp, { recursive: true, force: true }),
+          ).pipe(Effect.ignore),
+        ),
+      );
     });
 
   const connect = (name: string) =>
@@ -319,13 +401,23 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
-    capabilities: new Set(["os:linux"]),
+    capabilities: new Set(
+      options.snapshots === undefined ? ["os:linux"] : ["os:linux", "snapshot"],
+    ),
     sizes: [
       { cpu: 4, ramGb: 8 },
       { cpu: 8, ramGb: 16 },
       { cpu: 16, ramGb: 32 },
     ],
     create,
+    ...(options.snapshots === undefined
+      ? {}
+      : {
+          snapshots: {
+            baseVersion: Effect.succeed("fake"),
+            save: saveSnapshot,
+          },
+        }),
     get,
     list,
     delete: del,

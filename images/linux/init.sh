@@ -8,6 +8,10 @@ chmod 0644 /run/proofbox/deadline
 install -o app -g app -m 0644 /dev/null /run/proofbox/action-log.jsonl
 install -d -o app -g app -m 0755 /run/proofbox/recordings
 
+# A Sandbox started from a Snapshot carries the X lock of the Sandbox the
+# Snapshot was saved from; no X server runs yet, so the lock is stale.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 env HOME=/home/app runuser -u app -- sh -c 'while :; do Xvfb :99 -screen 0 1440x900x24 -nolisten tcp; sleep 1; done' &
 env HOME=/home/app runuser -u app -- sh -c 'while :; do until xdpyinfo -display :99 >/dev/null 2>&1; do sleep 0.2; done; fluxbox; sleep 1; done' &
 

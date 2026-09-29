@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { idleDefault, MAX_LIFE_DEFAULT, parseSpan } from "../deadline.ts";
+import {
+  idleDefault,
+  MAX_LIFE_DEFAULT,
+  parseSpan,
+  withDeadlinePush,
+} from "../deadline.ts";
 import {
   MissingCapabilityError,
   ProviderError,
@@ -10,6 +15,7 @@ import {
   SizeNotOfferedError,
   UnknownProviderError,
 } from "../errors.ts";
+import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { type Os, Providers } from "../provider.ts";
@@ -105,12 +111,27 @@ export const createSandbox = (options: {
         });
       }
     }
+    const snapshots = provider.capabilities.has("snapshot")
+      ? provider.snapshots
+      : undefined;
+    const fp =
+      script === undefined || files === undefined || snapshots === undefined
+        ? undefined
+        : fingerprint({
+            baseVersion: yield* snapshots.baseVersion,
+            script,
+            files,
+          });
     const info = yield* provider.create({
       os: options.os,
       idle,
       maxLife,
       size,
+      snapshot: fp,
     });
+    // A Sandbox that started from the Snapshot already has the Setup
+    // script's work in it.
+    const reused = fp !== undefined && info.snapshot === fp;
     const output = yield* CliOutput;
     const id = `${provider.idPrefix}:${info.name}`;
     const keeper = yield* KeeperClient;
@@ -131,10 +152,35 @@ export const createSandbox = (options: {
       if (options.work !== undefined && files !== undefined) {
         yield* sendWorkFolder(id, options.work, files, workLimit);
       }
-      if (script !== undefined) {
+      if (reused) {
+        yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);
+      } else if (script !== undefined) {
         yield* runSetupScript(id, script);
       }
-      // #13 saves the Snapshot here; the Secrets go in only after it.
+      // The Snapshot is saved before the Secrets go in, so it holds none.
+      if (!reused && fp !== undefined && snapshots !== undefined) {
+        // A Snapshot only saves time later; a failed save must not fail
+        // the create.
+        yield* progress
+          .step(
+            "saving the Snapshot",
+            withDeadlinePush(
+              provider,
+              info.name,
+              info,
+            )(snapshots.save(info.name, fp)),
+          )
+          .pipe(
+            Effect.zipRight(
+              output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`),
+            ),
+            Effect.catchAll((error) =>
+              output.err(
+                `proofbox: could not save the Snapshot (${error.message}); the next create runs the Setup script again\n`,
+              ),
+            ),
+          );
+      }
       if (secrets !== undefined) {
         yield* sendSecrets(id, secrets);
       }

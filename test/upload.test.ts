@@ -59,7 +59,13 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
     NodeContext.layer,
     CliOutput.Test,
     providers,
-    Layer.succeed(Progress, new Progress({ step: (_label, effect) => effect })),
+    Layer.succeed(
+      Progress,
+      new Progress({
+        step: (_label, effect) => effect,
+        warn: () => Effect.void,
+      }),
+    ),
   );
   return (
     keeper === "socket" ? KeeperClient.Default : KeeperClient.Direct

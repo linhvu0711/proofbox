@@ -27,6 +27,12 @@ import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NscClient } from "./nsc-client.ts";
+import {
+  pullSnapshot,
+  pushSnapshot,
+  snapshotRef,
+  snapshotTag,
+} from "./snapshot-image.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
 const SIZES: ReadonlyArray<Size> = [
@@ -39,6 +45,10 @@ const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
 // The host holds Docker itself plus the Sandbox container; keep 1 GB of the
 // Namespace size outside the container's limit so the host stays healthy.
 const MEMORY_RESERVE_GB = 1;
+
+// Each save and each reuse keeps a Snapshot at least two weeks; one that
+// is not used for that long expires from the registry.
+const SNAPSHOT_KEEP_HOURS = 336;
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -92,6 +102,56 @@ export const makeNamespaceProvider = (deps: {
         return yield* use(link);
       }),
     );
+
+  const readTenant = (link: Link) =>
+    Effect.gen(function* () {
+      const tenant = yield* link.run(
+        `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
+      );
+      const registry = tenant.stdout.trim();
+      if (tenant.exitCode !== 0 || registry === "") {
+        return yield* fail("could not read the Namespace tenant on the host");
+      }
+      return registry;
+    });
+
+  // A Snapshot without an expiry is kept forever; failing to set one only
+  // costs registry space, so it warns and goes on.
+  const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
+    snapshotRef(link, tag).pipe(
+      Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, SNAPSHOT_KEEP_HOURS)),
+      Effect.catchAll((error) =>
+        progress.warn(`could not set the Snapshot expiry (${error.message})`),
+      ),
+    );
+
+  // The Snapshot's image tag, pulled onto the host; undefined when the
+  // Sandbox must start from the Base image instead.
+  const pullStart = (
+    link: Link,
+    tenant: string,
+    fingerprint: string,
+    progress: Progress,
+  ) =>
+    Effect.gen(function* () {
+      const tag = snapshotTag(tenant, fingerprint);
+      const pulled = yield* progress
+        .step("pulling the Snapshot", pullSnapshot(link, tag))
+        .pipe(
+          Effect.catchAll((error) =>
+            progress
+              .warn(
+                `could not pull the Snapshot (${error.message}); running the Setup script`,
+              )
+              .pipe(Effect.as("failed" as const)),
+          ),
+        );
+      if (pulled !== "pulled") {
+        return undefined;
+      }
+      yield* keepSnapshot(link, tag, progress);
+      return tag;
+    });
 
   const getWith = (link: Link, name: string) =>
     Effect.gen(function* () {
@@ -263,6 +323,7 @@ export const makeNamespaceProvider = (deps: {
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
     readonly name?: string | undefined;
+    readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
       yield* nsc.checkLogin.pipe(
@@ -402,23 +463,28 @@ export const makeNamespaceProvider = (deps: {
           ),
         );
         const link = yield* deps.openLink(id, hostPaths, "cli");
-        const tenant = yield* link.run(
-          `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
-        );
-        const registry = tenant.stdout.trim();
-        if (tenant.exitCode !== 0 || registry === "") {
-          return yield* fail("could not read the Namespace tenant on the host");
-        }
+        const registry = yield* readTenant(link);
         const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
+        const snapshotImage =
+          req.snapshot === undefined
+            ? undefined
+            : yield* pullStart(link, registry, req.snapshot, progress);
         const inner = makeDockerProvider({
           client: deps.dockerFor(link),
-          imageTag: `nscr.io/${registry}/${baseImageTag(version)}`,
+          imageTag:
+            snapshotImage ?? `nscr.io/${registry}/${baseImageTag(version)}`,
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
           // Publish the VNC port for the Live view; the host has only a
           // private address, and nsc forwards onto that address, so the
           // publish must cover it — loopback binds are unreachable.
-          runArgs: ["-p", "5900:5900"],
+          runArgs: [
+            "-p",
+            "5900:5900",
+            ...(snapshotImage === undefined
+              ? []
+              : ["--label", `proofbox.snapshot=${req.snapshot}`]),
+          ],
           brand: brandFor(id),
         });
         const info = yield* inner.create({
@@ -466,6 +532,7 @@ export const makeNamespaceProvider = (deps: {
           deadline: info.deadline,
           maxLifeAt: info.maxLifeAt,
           base: info.base,
+          snapshot: info.snapshot,
           size: info.size,
         });
       }).pipe(
@@ -581,12 +648,30 @@ export const makeNamespaceProvider = (deps: {
       };
     });
 
+  // The Snapshot holds the container's disk; the Secrets live in a tmpfs,
+  // which docker commit leaves out.
+  const saveSnapshot = (name: string, fingerprint: string) =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* withCliLink(name, (link) =>
+        Effect.gen(function* () {
+          const tag = snapshotTag(yield* readTenant(link), fingerprint);
+          yield* pushSnapshot(link, containerOf(name), tag);
+          yield* keepSnapshot(link, tag, progress);
+        }),
+      );
+    });
+
   return {
     name: "namespace",
     idPrefix: "ns",
-    capabilities: new Set(["os:linux", "live-view", "desktop"]),
+    capabilities: new Set(["os:linux", "live-view", "desktop", "snapshot"]),
     sizes: SIZES,
     liveView,
+    snapshots: {
+      baseVersion: baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE),
+      save: saveSnapshot,
+    },
     create,
     get,
     list,
