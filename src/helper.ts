@@ -100,6 +100,7 @@ export const runHelper = (
     );
     return {
       provider: provider.name,
+      os: info.os,
       code: collected.code,
       stdout: Buffer.concat(collected.stdout),
       stderr: Buffer.concat(collected.stderr).toString("utf8").trim(),

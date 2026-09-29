@@ -65,7 +65,7 @@ const makeMacFolders = (link: Link) =>
   step(
     link,
     "making the proofbox folders",
-    `sudo -n mkdir -p ${MAC_STATE_DIR} /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
+    `sudo -n mkdir -p ${MAC_STATE_DIR} ${MAC_STATE_DIR}/recordings /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n touch ${MAC_STATE_DIR}/action-log.jsonl && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
   );
 
 // The labels and the first Deadline, as the Docker Provider writes them for
@@ -152,6 +152,7 @@ const installTools = (link: Link, id: string) =>
       }
     }
     yield* sendFile(link, join(MACOS_DIR, "pixel.sh"), "/opt/proofbox/pixel");
+    yield* sendFile(link, join(MACOS_DIR, "record.sh"), "/opt/proofbox/record");
     const sums = yield* step(
       link,
       "checking the Tool bundle",

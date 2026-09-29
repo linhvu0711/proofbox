@@ -763,7 +763,10 @@ export const makeNamespaceProvider = (deps: {
           "snapshot",
         ]),
       },
-      macos: { sizes: MACOS_SIZES, features: new Set(["desktop"]) },
+      macos: {
+        sizes: MACOS_SIZES,
+        features: new Set(["desktop", "recording"]),
+      },
     },
     liveView,
     snapshots: {

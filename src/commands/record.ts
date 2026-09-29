@@ -8,19 +8,24 @@ import {
   StopFlagsError,
 } from "../errors.ts";
 import { fetchHelper, type HelperTable, runHelper } from "../helper.ts";
-import { ACTION_LOG_PATH, ActionLogLine } from "../pixel.ts";
+import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
+import type { Os } from "../provider.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",
-  paths: { linux: "/opt/proofbox/record" },
+  paths: { linux: "/opt/proofbox/record", macos: "/opt/proofbox/record" },
 };
 
-const CAPTION_FONT =
-  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf";
+const CAPTION_FONTS: Readonly<Record<Os, string>> = {
+  linux: "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+  macos: "/System/Library/Fonts/Supplemental/Arial.ttf",
+};
+
+const PROOF_WIDTH = 1440;
 
 const StoppedRecording = Schema.Struct({
   dir: Schema.String,
@@ -125,7 +130,7 @@ export const stopRecording = (options: {
       const actionLog = yield* runHelper(
         options.id,
         RECORD_HELPER,
-        ["fetch", ACTION_LOG_PATH],
+        ["fetch", ACTION_LOG_PATHS[stopped.os]],
         { outcome: "no Proof video was made" },
       );
       if (actionLog.code !== 0) {
@@ -156,12 +161,24 @@ export const stopRecording = (options: {
         marks,
         clicks,
       });
-      const script = renderEdit(plan, {
-        width: info.width,
-        height: info.height,
-        dir: info.dir,
-        font: CAPTION_FONT,
-      });
+      const script = renderEdit(
+        plan,
+        info.width === PROOF_WIDTH
+          ? {
+              width: info.width,
+              height: info.height,
+              dir: info.dir,
+              font: CAPTION_FONTS[stopped.os],
+            }
+          : {
+              width: PROOF_WIDTH,
+              height:
+                Math.round((info.height * PROOF_WIDTH) / info.width / 2) * 2,
+              dir: info.dir,
+              font: CAPTION_FONTS[stopped.os],
+              screen: { width: info.width, height: info.height },
+            },
+      );
       const encode = (crf: number) =>
         Effect.gen(function* () {
           const built = yield* runHelper(

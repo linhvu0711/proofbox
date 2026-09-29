@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
@@ -111,20 +112,15 @@ describe("Namespace macOS Provider", () => {
     expect(found.stdout).toMatch(/^\/usr\/bin\/log stream /);
   });
 
-  it("live and record on a Mac are refused until #15", async () => {
+  it("live on a Mac is refused until #15", async () => {
     // Given: the Mac from beforeAll
     // When
     const live = await runCli(env, ["live", id]);
-    const record = await runCli(env, ["record", "start", id]);
     // Then
     expect(live.stderr).toBe(
       "Provider namespace lacks the Capability live-view on macos; no Live view was opened\n",
     );
     expect(live.exitCode).toBe(125);
-    expect(record.stderr).toBe(
-      "Provider namespace lacks the Capability recording on macos; no Recording was started\n",
-    );
-    expect(record.exitCode).toBe(125);
   });
 
   it("screenshot --out writes a 2560x1600 PNG", async () => {
@@ -276,6 +272,246 @@ describe("Namespace macOS Provider", () => {
         button: 0,
       });
     });
+  });
+});
+
+describe("Namespace macOS Recording", () => {
+  let env: CliEnv;
+  let created: Awaited<ReturnType<typeof createMac>>;
+  let id: string;
+
+  beforeAll(async () => {
+    env = makeEnv({ namespace: true });
+    created = await createMac(env);
+    id = created.id;
+  });
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroy(id.slice("ns:".length));
+    }
+    cleanupEnvs();
+  });
+
+  const ffmpeg = (argv: string[]): Promise<Buffer> =>
+    new Promise((resolve, reject) => {
+      execFile("ffmpeg", argv, { encoding: "buffer" }, (error, stdout) =>
+        error === null ? resolve(stdout) : reject(error),
+      );
+    });
+
+  const grayRow = async (file: string, y: number): Promise<Buffer> =>
+    ffmpeg([
+      "-v",
+      "error",
+      "-i",
+      file,
+      "-vf",
+      `crop=1440:1:0:${y},format=gray`,
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-",
+    ]);
+
+  it("record stop on a Mac downloads an H.264 MP4 with the index first", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await setTimeout(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(2000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.stdout.split("\n")[0]).toBe(out);
+    const bytes = readFileSync(out);
+    expect(bytes.subarray(4, 8).toString("utf8")).toBe("ftyp");
+    const moov = bytes.indexOf("moov");
+    expect(moov).toBeGreaterThan(-1);
+    expect(moov).toBeLessThan(bytes.indexOf("mdat"));
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/var/lib/proofbox/recordings/1/proof.mp4",
+    ]);
+    expect(probe.stderr).toContain("h264 (High)");
+    expect(probe.stderr).toContain("yuv420p");
+  });
+
+  it("a Mac Proof video is 1440x972 with a caption bar", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await setTimeout(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(2000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const frame = await ffmpeg([
+      "-v",
+      "error",
+      "-ss",
+      "1",
+      "-i",
+      out,
+      "-frames:v",
+      "1",
+      "-f",
+      "image2pipe",
+      "-vcodec",
+      "png",
+      "-",
+    ]);
+    expect(frame.readUInt32BE(16)).toBe(1440);
+    expect(frame.readUInt32BE(20)).toBe(972);
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/var/lib/proofbox/recordings/2/proof.mp4",
+    ]);
+    expect(probe.stderr).toContain("1440x972");
+    expect(probe.stderr).toContain("yuv420p");
+    // The caption bar is the top 72 pixels: a row in it is dark, a row in
+    // the picture is not.
+    const bar = await grayRow(out, 36);
+    const picture = await grayRow(out, 500);
+    expect(Math.max(...bar)).toBeLessThan(64);
+    expect(Math.max(...picture)).toBeGreaterThanOrEqual(64);
+  });
+
+  it("each mark on a Mac saves a 2560x1600 Proof screenshot", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(1000);
+    await runCli(env, ["mark", id, "step 1: look"]);
+    await setTimeout(1000);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await runCli(env, ["mark", id, "step 2: look"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(1000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const first = `${dir}/proof-1.png`;
+    const second = `${dir}/proof-2.png`;
+    expect(stopped.stdout).toBe(`${out}\n${first}\n${second}\n`);
+    for (const file of [first, second]) {
+      const bytes = readFileSync(file);
+      expect(bytes.readUInt32BE(16)).toBe(2560);
+      expect(bytes.readUInt32BE(20)).toBe(1600);
+    }
+    expect(readFileSync(first).equals(readFileSync(second))).toBe(false);
+  });
+
+  it("a click on a Mac goes into the Action log in points", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const clicked = await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--pace",
+      "fast",
+    ]);
+    expect(clicked.exitCode).toBe(0);
+    const tail = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "tail",
+      "-n",
+      "1",
+      "/var/lib/proofbox/action-log.jsonl",
+    ]);
+    // Then
+    const entry = JSON.parse(tail.stdout.trim()) as {
+      kind: string;
+      x: number;
+      y: number;
+    };
+    expect(entry.kind).toBe("click");
+    expect(entry.x).toBe(640);
+    expect(entry.y).toBe(400);
+  });
+
+  it("a 60 s Recording on a Mac runs at real speed with no drops", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(60_000);
+    const stopped = await runCli(env, ["record", "stop", id, "--discard"]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const last = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "tr '\\r' '\\n' < /var/lib/proofbox/recordings/4/ffmpeg.log | grep 'speed=' | tail -n 1",
+    ]);
+    expect(last.stdout).toContain("drop=0");
+    const speed = /speed=\s*([\d.]+)x/.exec(last.stdout)?.[1];
+    expect(speed).toBeDefined();
+    expect(Number(speed)).toBeGreaterThanOrEqual(0.98);
+    expect(Number(speed)).toBeLessThanOrEqual(1.02);
   });
 });
 

@@ -8,13 +8,17 @@ import {
   ProviderError,
 } from "./errors.ts";
 import { type HelperTable, runHelper } from "./helper.ts";
+import type { Os } from "./provider.ts";
 
 export const PIXEL_HELPER: HelperTable = {
   feature: "desktop",
   paths: { linux: "/opt/proofbox/pixel", macos: "/opt/proofbox/pixel" },
 };
 
-export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";
+export const ACTION_LOG_PATHS: Readonly<Record<Os, string>> = {
+  linux: "/run/proofbox/action-log.jsonl",
+  macos: "/var/lib/proofbox/action-log.jsonl",
+};
 
 export const ActionLogLine = Schema.Struct({
   t: Schema.Number,
