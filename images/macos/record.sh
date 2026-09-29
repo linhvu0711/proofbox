@@ -85,18 +85,46 @@ case "$cmd" in
     if [ "$steps" -ge 1 ]; then
       shot "$DIR/shot-$steps.png"
     fi
-    kill -TERM "$(cat "$DIR/pid")"
+    pid=$(cat "$DIR/pid")
+    # A macOS capture can stop, stall, or be blocked by a privacy alert;
+    # name which before the walk ends silently with a half video.
+    blocked=""
+    if ! kill -0 "$pid" 2>/dev/null; then
+      blocked="the capture stopped"
+    else
+      last=$(tr '\r' '\n' < "$DIR/ffmpeg.log" 2>/dev/null | sed -n 's/.*time=\([0-9:.]*\).*/\1/p' | tail -1)
+      secs=$(printf '%s' "$last" | awk -F: '{printf "%.3f", $1*3600+$2*60+$3}')
+      lag=$(now | awk -v s="$(cat "$DIR/start")" -v e="$secs" '{printf "%.3f", $1 - s - e}')
+      if [ "$(awk -v l="$lag" 'BEGIN { print (l > 5) ? 1 : 0 }')" = "1" ]; then
+        blocked="the capture stalled"
+      fi
+    fi
+    if [ -z "$blocked" ]; then
+      hint=$(plutil -extract '/opt/namespace/vmguest.kScreenCapturePrivacyHintDate' raw "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist" 2>/dev/null || true)
+      if [ "$hint" != "4000-01-01T00:00:00Z" ]; then
+        blocked="an alert is on screen"
+      fi
+    fi
+    if [ -n "$blocked" ]; then
+      shot "$DIR/blocked.png" || true
+      kill -CONT "$pid" 2>/dev/null || true
+    fi
+    kill -TERM "$pid" 2>/dev/null || true
     i=0
-    while [ $i -lt 100 ] && kill -0 "$(cat "$DIR/pid")" 2>/dev/null; do
+    while [ $i -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
       sleep 0.1
       i=$((i + 1))
     done
-    if kill -0 "$(cat "$DIR/pid")" 2>/dev/null; then
-      kill -9 "$(cat "$DIR/pid")" 2>/dev/null || true
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
     fi
     now > "$DIR/stop"
     rm "$CUR"
-    printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
+    if [ -n "$blocked" ]; then
+      printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s,"blocked":"%s"}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H" "$blocked"
+    else
+      printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
+    fi
     ;;
   mark)
     # mark LABEL: save the closing shot of the step now ending, then start

@@ -513,6 +513,93 @@ describe("Namespace macOS Recording", () => {
     expect(Number(speed)).toBeGreaterThanOrEqual(0.98);
     expect(Number(speed)).toBeLessThanOrEqual(1.02);
   });
+
+  it("record stop names a capture that stopped during the walk", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    await runCli(env, ["exec", id, "--", "pkill", "-9", "-x", "ffmpeg"]);
+    // When
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    const blocked = join(dir, "proof-blocked.png");
+    expect(stopped.exitCode).toBe(125);
+    expect(stopped.stderr).toBe(
+      `Recording on ${id} failed: the capture stopped, so no Proof video was made. Saved the screen to ${blocked}. Record the walk again.\n`,
+    );
+    expect(readFileSync(blocked).subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+  });
+
+  it("record stop names a stalled capture", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    await runCli(env, ["exec", id, "--", "pkill", "-STOP", "-x", "ffmpeg"]);
+    await setTimeout(8000);
+    // When
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(125);
+    expect(
+      stopped.stderr.startsWith(
+        `Recording on ${id} failed: the capture stalled, so no Proof video was made.`,
+      ),
+    ).toBe(true);
+  });
+
+  it("record stop names an alert on screen", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const replayd =
+      "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
+    const hint = "/opt/namespace/vmguest.kScreenCapturePrivacyHintDate";
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    try {
+      await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "plutil",
+        "-replace",
+        hint,
+        "-date",
+        "2026-01-01T00:00:00Z",
+        replayd,
+      ]);
+      // When
+      const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+      // Then
+      expect(stopped.exitCode).toBe(125);
+      expect(
+        stopped.stderr.startsWith(
+          `Recording on ${id} failed: an alert is on screen, so no Proof video was made.`,
+        ),
+      ).toBe(true);
+    } finally {
+      await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "plutil",
+        "-replace",
+        hint,
+        "-date",
+        "4000-01-01T00:00:00Z",
+        replayd,
+      ]);
+    }
+  });
 });
 
 describe("Namespace macOS Provider at 6x14", () => {

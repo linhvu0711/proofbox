@@ -1,6 +1,7 @@
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
+  CaptureBlockedError,
   NoRecordingError,
   NothingChangedError,
   ProviderError,
@@ -34,6 +35,13 @@ const StoppedRecording = Schema.Struct({
   steps: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   width: Schema.Number.pipe(Schema.int(), Schema.positive()),
   height: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  blocked: Schema.optional(
+    Schema.Literal(
+      "the capture stopped",
+      "the capture stalled",
+      "an alert is on screen",
+    ),
+  ),
 });
 
 export const startRecording = (id: string) =>
@@ -96,6 +104,25 @@ export const stopRecording = (options: {
     const out = options.out;
     if (out === undefined) {
       return yield* Effect.die(new Error("record stop lost --out"));
+    }
+    const base = out.replace(/\.[^./\\]+$/, "");
+    if (info.blocked !== undefined) {
+      let screenshot: string | undefined;
+      const saved = yield* fetchHelper(
+        options.id,
+        RECORD_HELPER,
+        `${info.dir}/blocked.png`,
+        `${base}-blocked.png`,
+        { outcome: "no Proof video was made" },
+      );
+      if (saved.code === 0) {
+        screenshot = `${base}-blocked.png`;
+      }
+      return yield* new CaptureBlockedError({
+        id: options.id,
+        what: info.blocked,
+        screenshot,
+      });
     }
     const buildProof = Effect.gen(function* () {
       const probed = yield* runHelper(
@@ -212,7 +239,6 @@ export const stopRecording = (options: {
     if (video.code !== 0) {
       return yield* helperFailed(video);
     }
-    const base = out.replace(/\.[^./\\]+$/, "");
     const lines = [out];
     for (let k = 1; k <= info.steps; k++) {
       const path = `${base}-${k}.png`;
