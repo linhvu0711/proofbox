@@ -479,6 +479,49 @@ describe("Namespace macOS Provider", () => {
     },
   );
 
+  it.effect(
+    "macOS create refuses and deletes the Mac when the RAM disk cannot be made",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("hdiutil attach -nomount ram://16384")
+            ? { exitCode: 1 }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:abc123def4567 failed the macOS prepare check (the Secrets RAM disk cannot be made); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+        const lines = yield* Ref.get(mac.commands);
+        expect(lines.some((line) => line.includes("labels.json"))).toBe(false);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create makes the Secrets RAM disk after the token is gone and before the test capture",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const at = (text: string) =>
+          lines.findIndex((line) => line.includes(text));
+        expect(at("hdiutil attach -nomount ram://16384")).toBeGreaterThan(
+          at("test ! -e /var/run/nsc/token.json"),
+        );
+        expect(at("hdiutil attach -nomount ram://16384")).toBeLessThan(
+          at("/tmp/proofbox-test.mov"),
+        );
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
   it.effect("macOS create restarts replayd after it writes the approval", () =>
     Effect.gen(function* () {
       // Given
