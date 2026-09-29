@@ -136,7 +136,7 @@ export const sendSecrets = (rawId: string, secrets: ReadonlyArray<Secret>) =>
         Effect.gen(function* () {
           const code = yield* writeSandboxFile(
             rawId,
-            posix.join(provider.secretsDir(id.name), "env"),
+            posix.join(provider.secretsDir(id.name, info.os), "env"),
             new TextEncoder().encode(body),
             { executable: false },
           );

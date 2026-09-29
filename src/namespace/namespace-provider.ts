@@ -34,6 +34,7 @@ import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
+  MAC_SECRETS_DIR,
   macExec,
   prepareMac,
   readMac,
@@ -765,7 +766,7 @@ export const makeNamespaceProvider = (deps: {
       },
       macos: {
         sizes: MACOS_SIZES,
-        features: new Set(["desktop", "recording"]),
+        features: new Set(["desktop", "recording", "secrets"]),
       },
     },
     liveView,
@@ -779,7 +780,8 @@ export const makeNamespaceProvider = (deps: {
     delete: del,
     extend,
     stateDir: () => "/var/lib/proofbox",
-    secretsDir: () => "/run/proofbox/secrets",
+    secretsDir: (_name, os) =>
+      os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
     connect,
     memoryKills,
   };

@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -599,6 +599,102 @@ describe("Namespace macOS Recording", () => {
         replayd,
       ]);
     }
+  });
+});
+
+describe("Namespace macOS Secrets", () => {
+  let env: CliEnv;
+  let id: string;
+
+  beforeAll(async () => {
+    env = makeEnv({ namespace: true });
+    const folder = mkdtempSync(join(tmpdir(), "proofbox-work-"));
+    execFileSync("git", ["init", "-q"], { cwd: folder });
+    const scriptDir = mkdtempSync(join(tmpdir(), "proofbox-setup-"));
+    const script = join(scriptDir, "setup.sh");
+    writeFileSync(script, "#!/bin/sh\nenv > setup-env.txt\n", {
+      mode: 0o755,
+    });
+    const envDir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    const file = join(envDir, "app.env");
+    writeFileSync(file, "API_TOKEN=pb-secret-7f3a91\n", { mode: 0o600 });
+    const created = await createMac(env, [
+      "--work",
+      folder,
+      "--setup",
+      script,
+      "--env-file",
+      file,
+    ]);
+    id = created.id;
+    expect(created.result.exitCode).toBe(0);
+  });
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroy(id.slice("ns:".length));
+    }
+    cleanupEnvs();
+  });
+
+  it("a command after create --env-file on a Mac sees the Secret", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf %s "$API_TOKEN"',
+    ]);
+    // Then
+    expect(seen.stdout).toBe("pb-secret-7f3a91");
+  });
+
+  it("the Setup script on a Mac runs without the Secret", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, ["exec", id, "--", "cat", "setup-env.txt"]);
+    // Then
+    expect(seen.exitCode).toBe(0);
+    expect(seen.stdout).not.toContain("API_TOKEN");
+  });
+
+  it("the Secrets on a Mac are runner's alone", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "stat",
+      "-f",
+      "%Su %Lp",
+      "/var/run/proofbox-secrets",
+      "/var/run/proofbox-secrets/env",
+    ]);
+    // Then
+    expect(seen.stdout).toBe("runner 700\nrunner 600\n");
+  });
+
+  it("the Secrets on a Mac sit only on the RAM disk", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "mount; sudo -n grep -rl pb-secret-7f3a91 /Users/runner /var/lib/proofbox /private/tmp /var/log 2>/dev/null; true",
+    ]);
+    // Then
+    expect(seen.stdout).toContain(
+      "/private/var/run/proofbox-secrets (hfs, local, nodev, nosuid",
+    );
+    expect(seen.stdout).not.toContain("pb-secret-7f3a91");
   });
 });
 
