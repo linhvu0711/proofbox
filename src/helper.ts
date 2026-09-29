@@ -7,21 +7,26 @@ import {
   KeeperClient,
   type KeeperExecOptions,
 } from "./keeper/keeper-client.ts";
-import { type Os, Providers } from "./provider.ts";
+import { type Feature, lacksFeature, type Os, Providers } from "./provider.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
-const resolveHelper = (
-  rawId: string,
-  helpers: Partial<Record<Os, string>>,
-  outcome: string,
-) =>
+// A helper in the Sandbox, the feature it serves, and its path per OS.
+export interface HelperTable {
+  readonly feature: Feature;
+  readonly paths: Partial<Record<Os, string>>;
+}
+
+const resolveHelper = (rawId: string, table: HelperTable, outcome: string) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
     const { provider, name } = yield* resolveSandboxId(rawId, providers);
-    if (!provider.capabilities.has("desktop")) {
+    const hasDesktop = Object.values(provider.offers).some((offer) =>
+      offer.features.has("desktop"),
+    );
+    if (!hasDesktop) {
       return yield* new MissingCapabilityError({
         provider: provider.name,
         capability: "desktop",
@@ -29,20 +34,23 @@ const resolveHelper = (
       });
     }
     const info = yield* provider.get(name);
-    const helper = helpers[info.os];
+    const features = provider.offers[info.os]?.features;
+    if (features === undefined || !features.has("desktop")) {
+      return yield* lacksFeature(provider, info.os, "desktop", outcome);
+    }
+    if (!features.has(table.feature)) {
+      return yield* lacksFeature(provider, info.os, table.feature, outcome);
+    }
+    const helper = table.paths[info.os];
     if (helper === undefined) {
-      return yield* new MissingCapabilityError({
-        provider: provider.name,
-        capability: "desktop",
-        outcome,
-      });
+      return yield* lacksFeature(provider, info.os, table.feature, outcome);
     }
     return { name, provider, info, helper };
   });
 
 export const runHelper = (
   rawId: string,
-  helpers: Partial<Record<Os, string>>,
+  table: HelperTable,
   argv: ReadonlyArray<string>,
   options: {
     readonly outcome: string;
@@ -52,7 +60,7 @@ export const runHelper = (
   Effect.gen(function* () {
     const { name, provider, info, helper } = yield* resolveHelper(
       rawId,
-      helpers,
+      table,
       options.outcome,
     );
     const keeper = yield* KeeperClient;
@@ -100,7 +108,7 @@ export const runHelper = (
 
 export const fetchHelper = (
   rawId: string,
-  helpers: Partial<Record<Os, string>>,
+  table: HelperTable,
   remote: string,
   dest: string,
   options: { readonly outcome: string },
@@ -108,7 +116,7 @@ export const fetchHelper = (
   Effect.gen(function* () {
     const { name, provider, info, helper } = yield* resolveHelper(
       rawId,
-      helpers,
+      table,
       options.outcome,
     );
     const keeper = yield* KeeperClient;

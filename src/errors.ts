@@ -1,4 +1,5 @@
 import { Data } from "effect";
+import type { Os } from "./provider.ts";
 import { formatMb } from "./upload/max-size.ts";
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
@@ -26,10 +27,15 @@ export class ToolBundleHashError extends Data.TaggedError(
 )<{
   readonly file: string;
   readonly sandboxId: string;
-  readonly tag: string;
+  // The image that carried the file; a Mac fetches its tools itself.
+  readonly tag?: string | undefined;
 }> {
   get message() {
-    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. Run docker image rm ${this.tag} and try again`;
+    const next =
+      this.tag === undefined
+        ? "Run create again"
+        : `Run docker image rm ${this.tag} and try again`;
+    return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. ${next}`;
   }
   get reason() {
     return this.message;
@@ -212,10 +218,33 @@ export class SetupScriptMissingError extends Data.TaggedError(
 
 export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
   readonly id: string;
-  readonly what: "the token file" | "the token service";
+  readonly what:
+    | "the token file"
+    | "the Docker config token"
+    | "the token service";
 }> {
   get message() {
     return `Sandbox ${this.id} can reach the Namespace workload token (${this.what}); deleted the host and refused the Sandbox`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
+export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
+  readonly id: string;
+  readonly what:
+    | "the test screenshot is blocked"
+    | "the test capture is blocked"
+    | "an alert is on screen";
+  readonly screenshot?: string | undefined;
+}> {
+  get message() {
+    const saved =
+      this.screenshot === undefined
+        ? ""
+        : `saved the screen to ${this.screenshot} and `;
+    return `Sandbox ${this.id} failed the macOS prepare check (${this.what}); ${saved}deleted the Mac`;
   }
   get reason() {
     return this.message;
@@ -289,10 +318,12 @@ export class MissingCapabilityError extends Data.TaggedError(
 )<{
   readonly provider: string;
   readonly capability: string;
+  readonly os?: Os | undefined;
   readonly outcome: string;
 }> {
   get message() {
-    return `Provider ${this.provider} lacks the Capability ${this.capability}; ${this.outcome}`;
+    const on = this.os === undefined ? "" : ` on ${this.os}`;
+    return `Provider ${this.provider} lacks the Capability ${this.capability}${on}; ${this.outcome}`;
   }
 }
 

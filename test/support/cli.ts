@@ -23,7 +23,14 @@ export const makeEnv = (
   options: { readonly docker?: boolean; readonly namespace?: boolean } = {},
 ): CliEnv => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
-  const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+  // ssh control sockets live in the runtime dir, and macOS caps a socket
+  // path at 103 characters; its per-user tmpdir is too long for that.
+  const runtime = mkdtempSync(
+    join(
+      process.platform === "darwin" ? "/tmp" : tmpdir(),
+      "proofbox-runtime-",
+    ),
+  );
   made.push(root, runtime);
   return {
     root,

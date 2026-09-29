@@ -96,6 +96,30 @@ describe("--size", () => {
     ).toEqual([]);
   });
 
+  it("a size Namespace does not offer on macOS is refused with its list", async () => {
+    // Given: makeEnv points PROOFBOX_NSC at no file, so the refusal must
+    // happen before any nsc call
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "macos",
+      "--provider",
+      "namespace",
+      "--size",
+      "8x16",
+    ]);
+    // Then
+    expect(result.stderr).toBe(
+      "Provider namespace does not offer the size 8x16; use one of: 4x7, 6x14\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(
+      readdirSync(env.runtime).filter((name) => name.startsWith("ns-")),
+    ).toEqual([]);
+  });
+
   it("create --size passes the size to the Provider", async () => {
     // Given
     const env = makeEnv();
@@ -150,6 +174,21 @@ describe("--size", () => {
     // Then
     expect(outOfMemoryMessage({ cpu: 16, ramGb: 32 }, offered)).toBe(
       "Sandbox ran out of memory (16x32). 16x32 is the largest size.",
+    );
+  });
+
+  it("outOfMemoryMessage names 6x14 after 4x7 and calls 6x14 the largest", () => {
+    // Given: the Namespace macOS sizes
+    const offered = [
+      { cpu: 4, ramGb: 7 },
+      { cpu: 6, ramGb: 14 },
+    ];
+    // Then
+    expect(outOfMemoryMessage({ cpu: 4, ramGb: 7 }, offered)).toBe(
+      "Sandbox ran out of memory (4x7). Try --size 6x14.",
+    );
+    expect(outOfMemoryMessage({ cpu: 6, ramGb: 14 }, offered)).toBe(
+      "Sandbox ran out of memory (6x14). 6x14 is the largest size.",
     );
   });
 });

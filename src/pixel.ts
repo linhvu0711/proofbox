@@ -7,11 +7,11 @@ import {
   OutsideScreenError,
   ProviderError,
 } from "./errors.ts";
-import { runHelper } from "./helper.ts";
-import type { Os } from "./provider.ts";
+import { type HelperTable, runHelper } from "./helper.ts";
 
-export const PIXEL_HELPER: Partial<Record<Os, string>> = {
-  linux: "/opt/proofbox/pixel",
+export const PIXEL_HELPER: HelperTable = {
+  feature: "desktop",
+  paths: { linux: "/opt/proofbox/pixel", macos: "/opt/proofbox/pixel" },
 };
 
 export const ACTION_LOG_PATH = "/run/proofbox/action-log.jsonl";

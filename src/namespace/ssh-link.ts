@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
   Chunk,
@@ -10,12 +11,14 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { commandEvents } from "../command-events.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
   type SandboxGoneError,
 } from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
+import type { ExecEvent, ExecOptions } from "../provider.ts";
 import type { NscClient } from "./nsc-client.ts";
 
 export interface HostResult {
@@ -26,12 +29,17 @@ export interface HostResult {
 
 // A Link is one ssh connection to the host: `ssh` is the argument tail for
 // `ssh <...> <command line>` (reusing the ControlMaster when one is up),
-// and `run` runs a remote shell line over it.
+// `run` runs a remote shell line over it and collects its text, and
+// `stream` runs one with stdin and streams its raw bytes.
 export interface Link {
   readonly ssh: ReadonlyArray<string>;
   readonly run: (
     commandLine: string,
   ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
+  readonly stream: (
+    commandLine: string,
+    options?: ExecOptions,
+  ) => Stream.Stream<ExecEvent, ProviderError | ProviderUnavailableError>;
 }
 
 export type LinkOwner = "keeper" | "cli";
@@ -89,7 +97,9 @@ export const makeOpenLink = (
       : new ProviderError({ provider: "namespace", reason: error.message });
 
   // Every independent CLI link gets its own control socket; two opens racing
-  // on the same pid-named socket would unlink each other's live master.
+  // on the same pid-named socket would unlink each other's live master. The
+  // name stays short: ssh adds 17 characters while it binds, and macOS caps
+  // a socket path at 103.
   let cliSeq = 0;
 
   const sshBase = (ctl: string, key: string): ReadonlyArray<string> => [
@@ -164,21 +174,43 @@ export const makeOpenLink = (
             } satisfies HostResult;
           }),
         );
+      const streamWith =
+        (ssh: ReadonlyArray<string>) =>
+        (commandLine: string, options?: ExecOptions) =>
+          commandEvents<ProviderError | ProviderUnavailableError>(
+            executor,
+            Command.make("ssh", "-T", ...ssh, commandLine),
+            options,
+            {
+              spawn: sshError,
+              fail: (reason) =>
+                new ProviderError({ provider: "namespace", reason }),
+              exit: (code) =>
+                code === 255
+                  ? Effect.fail(linkLost("the ssh link dropped mid-command"))
+                  : Effect.succeed(code),
+            },
+          );
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
       // forward or handshake.
       if (owner === "cli" && (yield* checkCtl(paths.control))) {
         const ssh = sshBase(paths.control, paths.key);
-        return { ssh, run: runWith(ssh) } satisfies Link;
+        return {
+          ssh,
+          run: runWith(ssh),
+          stream: streamWith(ssh),
+        } satisfies Link;
       }
       const ctl =
         owner === "keeper"
           ? paths.control
-          : paths.control.replace(/\.ctl$/, `-${process.pid}-${cliSeq++}.ctl`);
+          : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
       const ssh = sshBase(ctl, paths.key);
       const run = runWith(ssh);
+      const stream = streamWith(ssh);
       if (yield* checkCtl(ctl)) {
-        return { ssh, run } satisfies Link;
+        return { ssh, run, stream } satisfies Link;
       }
       // The host's sshd may still be starting when nsc reports the instance,
       // and a port-forward whose first connection dies stops listening, so
@@ -280,6 +312,6 @@ export const makeOpenLink = (
           Effect.fail(linkLost(error.detail)),
         ),
       );
-      return { ssh, run } satisfies Link;
+      return { ssh, run, stream } satisfies Link;
     });
 };

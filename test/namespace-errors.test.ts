@@ -74,6 +74,39 @@ esac`);
     ).toEqual([]);
   });
 
+  it("a Namespace macOS limit exits with the limit and leaves nothing", async () => {
+    // Given: create hangs, and on interrupt reports the macOS capacity limit
+    const fake = makeFakeNsc(`case "$1" in
+auth) exit 0 ;;
+create)
+  trap 'printf "Failed: ran out of capacity: 1st instance limit (want 6 vCPU 14 GB RAM; used all of 6 vCPU 14 GB\\nRAM) https://namespace.so/e/resource-limits (rid=x).\\n" >&2; exit 1' INT
+  sleep 30 </dev/null >/dev/null 2>&1 & wait ;;
+esac`);
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "macos", "--provider", "namespace"],
+      {
+        set: {
+          PROOFBOX_NSC: fake.path,
+          PROOFBOX_NS_CREATE_TIMEOUT: "1s",
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Namespace refused the Sandbox: ran out of capacity: 1st instance limit (want 6 vCPU 14 GB RAM; used all of 6 vCPU 14 GB RAM); nothing was created. Delete a Sandbox or use a smaller --size\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(
+      logLines(fake.log).filter((line) => line.startsWith("destroy")),
+    ).toEqual([]);
+    expect(
+      readdirSync(env.runtime).filter((name) => name.startsWith("ns-")),
+    ).toEqual([]);
+  });
+
   it("a create that times out deletes the half-made host", async () => {
     // Given: create hangs, then reports the host was still made
     const fake = makeFakeNsc(`case "$1" in

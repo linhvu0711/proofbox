@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>proofbox events</title>
+    <style>
+      html, body { margin: 0; }
+      body { height: 4000px; }
+      #t { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; font-size: 48px; }
+    </style>
+  </head>
+  <body>
+    <input id="t" autocomplete="off" />
+    <script>
+      // One JSON line to the events server per event, keys in a fixed order.
+      const send = (event) =>
+        fetch("/log", { method: "POST", body: JSON.stringify(event), keepalive: true });
+      const t = document.getElementById("t");
+      for (const type of ["mousedown", "mouseup"]) {
+        window.addEventListener(type, (e) =>
+          send({ type, x: e.screenX, y: e.screenY, button: e.button }),
+        );
+      }
+      window.addEventListener("keydown", (e) =>
+        send({ type: "keydown", key: e.key, ctrl: e.ctrlKey, meta: e.metaKey }),
+      );
+      t.addEventListener("input", () => send({ type: "input", value: t.value }));
+      window.addEventListener("wheel", (e) =>
+        send({ type: "wheel", dir: e.deltaY > 0 ? "down" : "up" }),
+      );
+      send({ type: "ready" });
+    </script>
+  </body>
+</html>

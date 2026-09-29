@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { ProviderError } from "../errors.ts";
 import { Progress } from "../progress.ts";
-import { TOOL_BUNDLE } from "../tool-bundle.ts";
+import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient, DockerError } from "./docker-client.ts";
 
 export const BASE_IMAGE_DIR = fileURLToPath(
@@ -67,7 +67,7 @@ export const toolBundleForArch = (
         reason: `no Tool bundle for ${arch}`,
       });
     }
-    return TOOL_BUNDLE.map((file) => ({
+    return LINUX_TOOL_BUNDLE.map((file) => ({
       name: file.name,
       path: file.path,
       url: file.linux[arch].url,

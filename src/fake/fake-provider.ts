@@ -401,14 +401,20 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
-    capabilities: new Set(
-      options.snapshots === undefined ? ["os:linux"] : ["os:linux", "snapshot"],
-    ),
-    sizes: [
-      { cpu: 4, ramGb: 8 },
-      { cpu: 8, ramGb: 16 },
-      { cpu: 16, ramGb: 32 },
-    ],
+    offers: {
+      linux: {
+        sizes: [
+          { cpu: 4, ramGb: 8 },
+          { cpu: 8, ramGb: 16 },
+          { cpu: 16, ramGb: 32 },
+        ],
+        features: new Set(
+          options.snapshots === undefined
+            ? ["secrets"]
+            : ["secrets", "snapshot"],
+        ),
+      },
+    },
     create,
     ...(options.snapshots === undefined
       ? {}

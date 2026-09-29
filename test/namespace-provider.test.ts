@@ -68,7 +68,7 @@ const fakeDocker = (options: {
       const line = argv.join(" ");
       if (argv[0] === "sha256sum") {
         const file = TOOL_BUNDLE.find((tool) => tool.path === argv[1]);
-        return ok(`${file?.linux.amd64.sha256 ?? ""}  ${argv[1]}\n`);
+        return ok(`${file?.linux?.amd64.sha256 ?? ""}  ${argv[1]}\n`);
       }
       if (line.includes("xdpyinfo")) {
         return ok();
@@ -175,6 +175,7 @@ const makeProvider = (
     openLink: () =>
       Effect.succeed<Link>({
         ssh: [],
+        stream: () => Stream.empty,
         run,
       }),
     dockerFor: () => docker,
@@ -190,6 +191,7 @@ describe("Namespace Provider", () => {
         const commands = yield* Ref.make<ReadonlyArray<string>>([]);
         const link: Link = {
           ssh: [],
+          stream: () => Stream.empty,
           run: (commandLine) =>
             Ref.update(commands, (all) => [...all, commandLine]).pipe(
               Effect.as({ exitCode: 0, stdout: "", stderr: "" }),
