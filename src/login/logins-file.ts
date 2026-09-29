@@ -1,4 +1,12 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Config, Effect, Schema } from "effect";
 import { BadLoginsFileError } from "../errors.ts";
@@ -51,25 +59,31 @@ export const readLogins = Effect.gen(function* () {
   );
 });
 
-// Write a temp file and rename it over logins.json, so a crash never
-// leaves half a file; the dir and file stay readable by the owner only.
+// Write a unique temp file and rename it over logins.json, so a crash
+// never leaves half a file; the dir and file stay readable by the owner
+// only.
 export const saveLogins = (logins: LoginsFile) =>
   Effect.gen(function* () {
     const path = yield* loginsPath;
     const dir = dirname(path);
-    const temp = `${path}.tmp`;
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     yield* Effect.tryPromise({
       try: async () => {
         await mkdir(dir, { recursive: true, mode: 0o700 });
         // mkdir's mode only applies to a new dir, so chmod always.
         await chmod(dir, 0o700);
-        await writeFile(
-          temp,
-          `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
-          { mode: 0o600 },
-        );
-        await chmod(temp, 0o600);
-        await rename(temp, path);
+        try {
+          await writeFile(
+            temp,
+            `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
+            { mode: 0o600 },
+          );
+          await chmod(temp, 0o600);
+          await rename(temp, path);
+        } catch (cause) {
+          await rm(temp, { force: true });
+          throw cause;
+        }
       },
       catch: () =>
         new BadLoginsFileError({ path, reason: "could not be written" }),
