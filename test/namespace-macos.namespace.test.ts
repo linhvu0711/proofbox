@@ -649,7 +649,9 @@ describe("Namespace macOS Recording", () => {
     expect(at).not.toBeNull();
     const [h, m, s] = (at as RegExpExecArray).slice(1).map(Number);
     const elapsed = (h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0);
-    expect(Number(frames)).toBeGreaterThanOrEqual(Math.floor(elapsed * 30 * 0.98));
+    expect(Number(frames)).toBeGreaterThanOrEqual(
+      Math.floor(elapsed * 30 * 0.98),
+    );
     expect(last.stdout).not.toMatch(/drop=[1-9]/);
     const speed = /speed=\s*([\d.]+)x/.exec(last.stdout)?.[1];
     expect(speed).toBeDefined();
