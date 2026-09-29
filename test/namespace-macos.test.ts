@@ -403,6 +403,30 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
+    "a blocked test capture whose screen cannot be saved names no screenshot",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: the saving screencapture is blocked too
+        const mac = yield* makeMac((line) =>
+          line.includes("/tmp/proofbox-test.mov")
+            ? { exitCode: 1 }
+            : line.includes("/tmp/proofbox-fail.png")
+              ? { exitCode: 1 }
+              : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:abc123def4567 failed the macOS prepare check (the test capture is blocked); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+      }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect(
     "a test capture that hangs names the alert, saves the screen, and deletes the Mac",
     () => {
       const runtime = runtimeDir();

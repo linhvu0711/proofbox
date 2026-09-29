@@ -272,19 +272,24 @@ export const readMemoryKills = (link: Link) =>
     .pipe(Effect.map((result) => countMemoryKills(result.stdout)));
 
 // The screen as it is now, saved next to the host's other files, so a
-// failed prepare shows what was in the way.
+// failed prepare shows what was in the way. No path when the screen could
+// not be captured either.
 const saveScreen = (link: Link, id: string) =>
   Effect.gen(function* () {
-    const events = yield* link
-      .stream(
-        `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-fail.png && cat /tmp/proofbox-fail.png`,
-      )
-      .pipe(Stream.runCollect);
-    const bytes = Buffer.concat(
-      Chunk.toReadonlyArray(events).flatMap((event) =>
-        event._tag === "Stdout" ? [event.bytes] : [],
-      ),
+    const events = Chunk.toReadonlyArray(
+      yield* link
+        .stream(
+          `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-fail.png && cat /tmp/proofbox-fail.png`,
+        )
+        .pipe(Stream.runCollect),
     );
+    const bytes = Buffer.concat(
+      events.flatMap((event) => (event._tag === "Stdout" ? [event.bytes] : [])),
+    );
+    const exit = events.at(-1);
+    if (exit?._tag !== "Exit" || exit.code !== 0 || bytes.length === 0) {
+      return undefined;
+    }
     const path = join(
       (yield* keeperPaths({ provider: "ns", name: id })).dir,
       `ns-${id}-prepare.png`,
