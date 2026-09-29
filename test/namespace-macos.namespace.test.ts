@@ -1,8 +1,10 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
@@ -10,12 +12,37 @@ import { openEventsPage, readEvents } from "./support/events.ts";
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
 
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+
 const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
 
 const destroy = (id: string): Promise<void> =>
   new Promise((resolve) => {
     execFile(nscBin(), ["destroy", id, "--force"], () => resolve());
   });
+
+const nsc = (args: ReadonlyArray<string>): Promise<string> =>
+  new Promise((resolve, reject) => {
+    execFile(nscBin(), args, (error, stdout, stderr) => {
+      if (error === null) {
+        resolve(stdout);
+      } else {
+        reject(new Error(stderr.trim() || stdout.trim() || error.message));
+      }
+    });
+  });
+
+const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
+  const out = await nsc(["list", "-o", "json"]);
+  const parsed: unknown = JSON.parse(out);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null,
+  );
+};
 
 const createMac = async (env: CliEnv, extra: ReadonlyArray<string> = []) => {
   const result = await runCli(env, [
@@ -112,15 +139,121 @@ describe("Namespace macOS Provider", () => {
     expect(found.stdout).toMatch(/^\/usr\/bin\/log stream /);
   });
 
-  it("live on a Mac is refused until #15", async () => {
+  it("live on a Mac prints a local address that offers VNC password login", async () => {
     // Given: the Mac from beforeAll
-    // When
-    const live = await runCli(env, ["live", id]);
-    // Then
-    expect(live.stderr).toBe(
-      "Provider namespace lacks the Capability live-view on macos; no Live view was opened\n",
+    // When: `live` as a child; read its first two stdout lines
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
     );
-    expect(live.exitCode).toBe(125);
+    let port = 0;
+    try {
+      const lines = await new Promise<string[]>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          const found = text.split("\n").filter((line) => line !== "");
+          if (found.length >= 2) {
+            resolve(found.slice(0, 2));
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // Then
+      const [address, passwordLine] = lines as [string, string];
+      expect(address).toMatch(/^127\.0\.0\.1:\d+$/);
+      expect(passwordLine).toMatch(/^password [A-Za-z0-9]{8}$/);
+      port = Number(address.split(":")[1]);
+      const greeting = await new Promise<Buffer>((resolve, reject) => {
+        const socket = connect(port, "127.0.0.1");
+        socket.once("data", (data) => {
+          resolve(data);
+        });
+        socket.once("error", reject);
+      });
+      expect(greeting.subarray(0, 8).toString("utf8")).toBe("RFB 003.");
+      // Answer the handshake and read the security types: 2 is VNC login
+      const types = await new Promise<Buffer>((resolve, reject) => {
+        const socket = connect(port, "127.0.0.1");
+        socket.once("data", () => {
+          socket.write("RFB 003.008\n");
+        });
+        socket.on("data", (data) => {
+          if (!data.subarray(0, 8).toString("utf8").startsWith("RFB")) {
+            socket.destroy();
+            resolve(data);
+          }
+        });
+        socket.once("error", reject);
+      });
+      expect([...types.subarray(1)]).toContain(2);
+    } finally {
+      child.kill("SIGINT");
+    }
+    // And after SIGINT the child exits and the address refuses a connection
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    const closed = await new Promise<boolean>((resolve) => {
+      const socket = connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once("error", () => resolve(true));
+    });
+    expect(closed).toBe(true);
+  });
+
+  it("a Mac with live running has only a private address and no ingress", async () => {
+    // Given: the Mac from beforeAll with `live` running
+    const host = id.slice("ns:".length);
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          if (text.split("\n").filter((line) => line !== "").length >= 2) {
+            resolve();
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // When
+      const entry = (await liveList()).find(
+        (item) => item.cluster_id === host,
+      );
+      const net = await runCli(env, ["exec", id, "--", "ifconfig"]);
+      const addresses = [...net.stdout.matchAll(/inet (\d+\.\d+\.\d+\.\d+)/g)]
+        .map((match) => match[1] as string)
+        .filter((address) => address !== "127.0.0.1");
+      // Then
+      expect(entry === undefined || !("ingress" in entry)).toBe(true);
+      const isPrivate = (address: string) =>
+        address.startsWith("10.") ||
+        /^172\.(1[6-9]|2[0-9]|3[01])\./.test(address) ||
+        address.startsWith("192.168.");
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        expect(isPrivate(address)).toBe(true);
+      }
+    } finally {
+      child.kill("SIGINT");
+    }
   });
 
   it("screenshot --out writes a 2560x1600 PNG", async () => {

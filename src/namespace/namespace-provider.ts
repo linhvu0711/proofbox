@@ -31,6 +31,7 @@ import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { type Os, type Provider, SandboxInfo } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
+import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
@@ -663,7 +664,47 @@ export const makeNamespaceProvider = (deps: {
   const liveView = (name: string) =>
     Effect.gen(function* () {
       if ((yield* osOf(name)) === "macos") {
-        return yield* fail("the Live view is not on macOS yet");
+        const link = yield* openLink(name, "cli");
+        // The candidate goes on stdin, never the command line. The script
+        // reuses the stored VNC password when one is set — one password
+        // per Mac, as on Linux — else it turns on the legacy VNC login,
+        // restarts the agent, and stores the candidate. The printed line
+        // is the settled password.
+        const candidate = makeSandboxName(8);
+        const events = yield* link
+          .stream(
+            `sudo -n sh -c ${shellJoin([
+              'umask 077; f=/var/db/proofbox-live-password; if [ ! -s "$f" ]; then IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; cat "$f"',
+            ])}`,
+            {
+              stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
+            },
+          )
+          .pipe(Stream.runCollect);
+        let exitCode = 1;
+        let stdout = "";
+        let stderr = "";
+        for (const event of Chunk.toReadonlyArray(events)) {
+          if (event._tag === "Exit") {
+            exitCode = event.code;
+          } else if (event._tag === "Stdout") {
+            stdout += Buffer.from(event.bytes).toString("utf8");
+          } else if (event._tag === "Stderr") {
+            stderr += Buffer.from(event.bytes).toString("utf8");
+          }
+        }
+        const password = stdout.trim();
+        if (exitCode !== 0 || password === "") {
+          return yield* fail(
+            `the Live view could not set the VNC password: ${stderr.trim()}`,
+          );
+        }
+        const forward = yield* nsc.portForward(name, 5900);
+        return {
+          address: `127.0.0.1:${forward.port}`,
+          password,
+          gone: forward.gone,
+        };
       }
       const link = yield* openLink(name, "cli");
       const docker = deps.dockerFor(link);
@@ -766,7 +807,7 @@ export const makeNamespaceProvider = (deps: {
       },
       macos: {
         sizes: MACOS_SIZES,
-        features: new Set(["desktop", "recording", "secrets"]),
+        features: new Set(["desktop", "recording", "secrets", "live-view"]),
       },
     },
     liveView,

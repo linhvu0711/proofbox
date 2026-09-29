@@ -35,6 +35,8 @@ const makeMac = (
   answer: (line: string) => Answer | undefined = () => undefined,
   // Runs as the Link runs a line, e.g. to let a step take time.
   during: (line: string) => Effect.Effect<void> = () => Effect.void,
+  // The nsc port-forward a Mac Live view asks for; `calls` still notes it.
+  portForward: NscClient["portForward"] = () => Effect.die("unused"),
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -56,7 +58,10 @@ const makeMac = (
       extend: () => Effect.void,
       ensureImageExpiry: () => Effect.void,
       list: () => Effect.succeed([]),
-      portForward: () => Effect.die("unused"),
+      portForward: (id, port) =>
+        note(calls, `portForward ${id} ${port}`).pipe(
+          Effect.zipRight(portForward(id, port)),
+        ),
     };
     const reply = (line: string) => {
       const found = answer(line) ?? defaultAnswer(line) ?? {};
@@ -610,6 +615,36 @@ describe("Namespace macOS Provider", () => {
         );
         expect(line).toContain("grep 'memorystatus: killing_'");
       }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect(
+    "a Mac Live view sets the VNC password and forwards port 5900",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: the VNC password script prints the settled password
+        const mac = yield* makeMac(
+          (line) =>
+            line.includes("-setvnclegacy")
+              ? { stdout: "Xy7kQ2mA\n" }
+              : undefined,
+          undefined,
+          () => Effect.succeed({ port: 50123, gone: Effect.never }),
+        );
+        yield* mac.provider.create(createMac());
+        // When
+        const liveView = mac.provider.liveView;
+        const view = yield* liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView("abc123def4567");
+        // Then
+        expect(view.address).toBe("127.0.0.1:50123");
+        expect(view.password).toBe("Xy7kQ2mA");
+        expect(yield* Ref.get(mac.calls)).toContain(
+          "portForward abc123def4567 5900",
+        );
+      }).pipe(Effect.scoped, withRuntime(runtime));
     },
   );
 });
