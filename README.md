@@ -68,8 +68,8 @@ A Sandbox id has its Provider as a prefix, for example `ns:abc123`. stdout holds
 
 | Command | What it does |
 | --- | --- |
-| `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 10MB`. |
-| `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. |
+| `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
+| `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. |
 | `screenshot <id> --out <file>` | Saves a PNG of the screen. |
 | `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
@@ -79,7 +79,7 @@ A Sandbox id has its Provider as a prefix, for example `ns:abc123`. stdout holds
 | `drag <id> <x1> <y1> <x2> <y2>` | Drags. |
 | `mark <id> <label>` | Sets a Step mark during a Recording. |
 | `record start <id>` | Starts a Recording. |
-| `record stop <id> --out <file>` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. |
+| `record stop <id> --out <file>` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. `--max-size 10MB` sets the Size limit. |
 | `record stop <id> --discard` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). |
 | `live <id>` | Prints the address and password of a Live view, so a person can watch and control the screen. |
 | `list [--json]` | Lists your Sandboxes. |
