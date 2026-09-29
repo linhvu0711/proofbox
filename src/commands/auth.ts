@@ -84,7 +84,7 @@ export const loginToProvider = (options: {
 
 export const showAuthStatus = Effect.gen(function* () {
   const providers = yield* Providers;
-  const logins = yield* readLogins;
+  const logins = yield* Effect.cached(readLogins);
   const output = yield* CliOutput;
   const now = yield* Clock.currentTimeMillis;
   for (const provider of providers.values()) {
@@ -109,7 +109,7 @@ export const showAuthStatus = Effect.gen(function* () {
           ),
         );
       } else {
-        const saved = logins[provider.name];
+        const saved = (yield* logins)[provider.name];
         if (saved === undefined) {
           line = "not logged in";
         } else if (saved.expiresAt.getTime() <= now) {
