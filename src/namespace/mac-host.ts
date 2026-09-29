@@ -28,6 +28,9 @@ export const MACOS_DIR = fileURLToPath(
 // state the Linux Sandbox keeps in container labels lives in this folder.
 export const MAC_STATE_DIR = "/var/lib/proofbox";
 export const MAC_WORK_DIR = "/Users/runner/work";
+// The Secrets folder is an hfs volume on RAM: a Secret never lands on the
+// Mac's disk.
+export const MAC_SECRETS_DIR = "/var/run/proofbox-secrets";
 const LABELS = `${MAC_STATE_DIR}/labels.json`;
 const DEADLINE = `${MAC_STATE_DIR}/deadline`;
 // Root's folder, not MAC_STATE_DIR: runner owns that one and could swap
@@ -65,7 +68,7 @@ const makeMacFolders = (link: Link) =>
   step(
     link,
     "making the proofbox folders",
-    `sudo -n mkdir -p ${MAC_STATE_DIR} /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
+    `sudo -n mkdir -p ${MAC_STATE_DIR} ${MAC_STATE_DIR}/recordings /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n touch ${MAC_STATE_DIR}/action-log.jsonl && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
   );
 
 // The labels and the first Deadline, as the Docker Provider writes them for
@@ -152,6 +155,7 @@ const installTools = (link: Link, id: string) =>
       }
     }
     yield* sendFile(link, join(MACOS_DIR, "pixel.sh"), "/opt/proofbox/pixel");
+    yield* sendFile(link, join(MACOS_DIR, "record.sh"), "/opt/proofbox/record");
     const sums = yield* step(
       link,
       "checking the Tool bundle",
@@ -249,6 +253,24 @@ const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
 
 const watchMemory = (link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher);
+
+// One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
+// non-zero exit is a MacPrepareError so create deletes the Mac before any
+// Secret is sent.
+const makeSecretsDisk = (link: Link, id: string) =>
+  Effect.gen(function* () {
+    const made = yield* link.run(
+      `sudo -n sh -c ${shellJoin([
+        `dev=$(hdiutil attach -nomount ram://16384 | awk '{print $1}') && newfs_hfs -v proofbox-secrets -U 501 -G 20 -M 700 "$dev" >/dev/null && mkdir -p ${MAC_SECRETS_DIR} && mount -t hfs -o nobrowse,nosuid,nodev "$dev" ${MAC_SECRETS_DIR} && chown runner:staff ${MAC_SECRETS_DIR} && chmod 700 ${MAC_SECRETS_DIR}`,
+      ])}`,
+    );
+    if (made.exitCode !== 0) {
+      return yield* new MacPrepareError({
+        id: `ns:${id}`,
+        what: "the Secrets RAM disk cannot be made",
+      });
+    }
+  });
 
 // Kills of real work: macOS also kills idle daemons under pressure, and
 // those are not the command.
@@ -354,6 +376,10 @@ export const prepareMac = (link: Link, req: MacRequest) =>
     yield* progress.step(
       "setting up screen access",
       grantPrivacy(link).pipe(Effect.zipRight(watchMemory(link))),
+    );
+    yield* progress.step(
+      "making the Secrets RAM disk",
+      makeSecretsDisk(link, req.id),
     );
     yield* progress.step(
       "taking a test screenshot and capture",

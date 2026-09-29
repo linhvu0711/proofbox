@@ -59,6 +59,50 @@ describe("render-edit", () => {
     );
   });
 
+  it("a Mac Recording in points is scaled to 1440 wide", () => {
+    // Given
+    const plan = planEdit({
+      duration: 20,
+      freezes: [],
+      marks: [2, 10],
+      clicks: [],
+    });
+    const options = {
+      width: 1440,
+      height: 900,
+      dir: "/var/lib/proofbox/recordings/1",
+      font: "/System/Library/Fonts/Supplemental/Arial.ttf",
+      screen: { width: 1280, height: 800 },
+    };
+    // When
+    const script = renderEdit(plan, options);
+    // Then
+    expect(script).toContain("fps=30,scale=1440:900[c");
+    expect(script).toContain("pad=1440:972:0:72:color=0x111111");
+    expect(script).toContain("fontsize=36");
+  });
+
+  it("a click on a Mac rings at its point scaled to 1440 wide", () => {
+    // Given
+    const plan = planEdit({
+      duration: 20,
+      freezes: [],
+      marks: [0],
+      clicks: [{ t: 5, x: 640, y: 400 }],
+    });
+    const options = {
+      width: 1440,
+      height: 900,
+      dir: "/var/lib/proofbox/recordings/1",
+      font: "/System/Library/Fonts/Supplemental/Arial.ttf",
+      screen: { width: 1280, height: 800 },
+    };
+    // When
+    const script = renderEdit(plan, options);
+    // Then
+    expect(script).toContain("[v][r0]overlay=x=696:y=498");
+  });
+
   it("a ring is drawn at the click, below the bar", () => {
     // Given
     const plan = planEdit({

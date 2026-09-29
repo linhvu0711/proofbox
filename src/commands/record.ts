@@ -1,6 +1,7 @@
 import { Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
+  CaptureBlockedError,
   NoRecordingError,
   NothingChangedError,
   ProviderError,
@@ -8,19 +9,24 @@ import {
   StopFlagsError,
 } from "../errors.ts";
 import { fetchHelper, type HelperTable, runHelper } from "../helper.ts";
-import { ACTION_LOG_PATH, ActionLogLine } from "../pixel.ts";
+import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
+import type { Os } from "../provider.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",
-  paths: { linux: "/opt/proofbox/record" },
+  paths: { linux: "/opt/proofbox/record", macos: "/opt/proofbox/record" },
 };
 
-const CAPTION_FONT =
-  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf";
+const CAPTION_FONTS: Readonly<Record<Os, string>> = {
+  linux: "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+  macos: "/System/Library/Fonts/Supplemental/Arial.ttf",
+};
+
+const PROOF_WIDTH = 1440;
 
 const StoppedRecording = Schema.Struct({
   dir: Schema.String,
@@ -29,6 +35,13 @@ const StoppedRecording = Schema.Struct({
   steps: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   width: Schema.Number.pipe(Schema.int(), Schema.positive()),
   height: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  blocked: Schema.optional(
+    Schema.Literal(
+      "the capture stopped",
+      "the capture stalled",
+      "an alert is on screen",
+    ),
+  ),
 });
 
 export const startRecording = (id: string) =>
@@ -81,6 +94,30 @@ export const stopRecording = (options: {
     const info = yield* Schema.decodeUnknown(
       Schema.parseJson(StoppedRecording),
     )(stopped.stdout.toString("utf8").trim());
+    const out = options.out;
+    const base = out?.replace(/\.[^./\\]+$/, "") ?? "proof";
+    if (info.blocked !== undefined) {
+      let screenshot: string | undefined;
+      const saved = yield* fetchHelper(
+        options.id,
+        RECORD_HELPER,
+        `${info.dir}/blocked.png`,
+        `${base}-blocked.png`,
+        { outcome: "no Proof video was made" },
+      ).pipe(
+        // The blocked capture is what the caller must hear about; a
+        // screen that cannot be fetched only loses its screenshot.
+        Effect.catchAll(() => Effect.succeed({ code: 1 })),
+      );
+      if (saved.code === 0) {
+        screenshot = `${base}-blocked.png`;
+      }
+      return yield* new CaptureBlockedError({
+        id: options.id,
+        what: info.blocked,
+        screenshot,
+      });
+    }
     if (options.discard === true) {
       const output = yield* CliOutput;
       yield* output.err(
@@ -88,7 +125,6 @@ export const stopRecording = (options: {
       );
       return;
     }
-    const out = options.out;
     if (out === undefined) {
       return yield* Effect.die(new Error("record stop lost --out"));
     }
@@ -125,7 +161,7 @@ export const stopRecording = (options: {
       const actionLog = yield* runHelper(
         options.id,
         RECORD_HELPER,
-        ["fetch", ACTION_LOG_PATH],
+        ["fetch", ACTION_LOG_PATHS[stopped.os]],
         { outcome: "no Proof video was made" },
       );
       if (actionLog.code !== 0) {
@@ -156,12 +192,24 @@ export const stopRecording = (options: {
         marks,
         clicks,
       });
-      const script = renderEdit(plan, {
-        width: info.width,
-        height: info.height,
-        dir: info.dir,
-        font: CAPTION_FONT,
-      });
+      const script = renderEdit(
+        plan,
+        info.width === PROOF_WIDTH
+          ? {
+              width: info.width,
+              height: info.height,
+              dir: info.dir,
+              font: CAPTION_FONTS[stopped.os],
+            }
+          : {
+              width: PROOF_WIDTH,
+              height:
+                Math.round((info.height * PROOF_WIDTH) / info.width / 2) * 2,
+              dir: info.dir,
+              font: CAPTION_FONTS[stopped.os],
+              screen: { width: info.width, height: info.height },
+            },
+      );
       const encode = (crf: number) =>
         Effect.gen(function* () {
           const built = yield* runHelper(
@@ -195,7 +243,6 @@ export const stopRecording = (options: {
     if (video.code !== 0) {
       return yield* helperFailed(video);
     }
-    const base = out.replace(/\.[^./\\]+$/, "");
     const lines = [out];
     for (let k = 1; k <= info.steps; k++) {
       const path = `${base}-${k}.png`;

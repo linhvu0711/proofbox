@@ -1,44 +1,10 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("Capability", () => {
   afterEach(cleanupEnvs);
-
-  it("create --os macos --env-file on namespace is refused before anything is made", async () => {
-    // Given
-    const env = makeEnv();
-    const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
-    const file = join(dir, ".env");
-    writeFileSync(file, "A=1\n", { mode: 0o600 });
-    // When
-    const result = await runCli(env, [
-      "create",
-      "--os",
-      "macos",
-      "--provider",
-      "namespace",
-      "--env-file",
-      file,
-    ]);
-    rmSync(dir, { recursive: true, force: true });
-    // Then
-    expect(result.stderr).toBe(
-      "Provider namespace lacks the Capability secrets on macos; nothing was created\n",
-    );
-    expect(result.exitCode).toBe(125);
-    expect(
-      readdirSync(env.runtime).filter((name) => name.startsWith("ns-")),
-    ).toEqual([]);
-  });
 
   it("create --os macos on fake is refused before anything is made", async () => {
     // Given

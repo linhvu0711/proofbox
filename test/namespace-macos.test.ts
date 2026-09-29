@@ -35,6 +35,8 @@ const makeMac = (
   answer: (line: string) => Answer | undefined = () => undefined,
   // Runs as the Link runs a line, e.g. to let a step take time.
   during: (line: string) => Effect.Effect<void> = () => Effect.void,
+  // The nsc port-forward a Mac Live view asks for; `calls` still notes it.
+  portForward: NscClient["portForward"] = () => Effect.die("unused"),
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -56,7 +58,10 @@ const makeMac = (
       extend: () => Effect.void,
       ensureImageExpiry: () => Effect.void,
       list: () => Effect.succeed([]),
-      portForward: () => Effect.die("unused"),
+      portForward: (id, port) =>
+        note(calls, `portForward ${id} ${port}`).pipe(
+          Effect.zipRight(portForward(id, port)),
+        ),
     };
     const reply = (line: string) => {
       const found = answer(line) ?? defaultAnswer(line) ?? {};
@@ -479,6 +484,49 @@ describe("Namespace macOS Provider", () => {
     },
   );
 
+  it.effect(
+    "macOS create refuses and deletes the Mac when the RAM disk cannot be made",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("hdiutil attach -nomount ram://16384")
+            ? { exitCode: 1 }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:abc123def4567 failed the macOS prepare check (the Secrets RAM disk cannot be made); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy abc123def4567");
+        const lines = yield* Ref.get(mac.commands);
+        expect(lines.some((line) => line.includes("labels.json"))).toBe(false);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create makes the Secrets RAM disk after the token is gone and before the test capture",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const at = (text: string) =>
+          lines.findIndex((line) => line.includes(text));
+        expect(at("hdiutil attach -nomount ram://16384")).toBeGreaterThan(
+          at("test ! -e /var/run/nsc/token.json"),
+        );
+        expect(at("hdiutil attach -nomount ram://16384")).toBeLessThan(
+          at("/tmp/proofbox-test.mov"),
+        );
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
   it.effect("macOS create restarts replayd after it writes the approval", () =>
     Effect.gen(function* () {
       // Given
@@ -569,4 +617,60 @@ describe("Namespace macOS Provider", () => {
       }).pipe(withRuntime(runtime));
     },
   );
+
+  it.effect(
+    "a Mac Live view sets the VNC password and forwards port 5900",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: the VNC password script prints the settled password
+        const mac = yield* makeMac(
+          (line) =>
+            line.includes("-setvnclegacy")
+              ? { stdout: "Xy7kQ2mA\n" }
+              : undefined,
+          undefined,
+          () => Effect.succeed({ port: 50123, gone: Effect.never }),
+        );
+        yield* mac.provider.create(createMac());
+        // When
+        const liveView = mac.provider.liveView;
+        const view = yield* liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView("abc123def4567");
+        // Then
+        expect(view.address).toBe("127.0.0.1:50123");
+        expect(view.password).toBe("Xy7kQ2mA");
+        expect(yield* Ref.get(mac.calls)).toContain(
+          "portForward abc123def4567 5900",
+        );
+      }).pipe(Effect.scoped, withRuntime(runtime));
+    },
+  );
+
+  it.effect("closing the last Mac Live view turns VNC off", () => {
+    const runtime = runtimeDir();
+    return Effect.gen(function* () {
+      // Given: the VNC password script prints the settled password
+      const mac = yield* makeMac(
+        (line) =>
+          line.includes("-setvnclegacy") ? { stdout: "Xy7kQ2mA\n" } : undefined,
+        undefined,
+        () => Effect.succeed({ port: 50123, gone: Effect.never }),
+      );
+      yield* mac.provider.create(createMac());
+      // When: a Live view opens and its scope closes
+      const liveView = mac.provider.liveView;
+      yield* (
+        liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView("abc123def4567")
+      ).pipe(Effect.scoped);
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const last = lines.at(-1);
+      expect(last).toContain('rm -f "$L/$1"');
+      expect(last).toContain("kickstart -deactivate");
+    }).pipe(withRuntime(runtime));
+  });
 });

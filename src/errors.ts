@@ -188,6 +188,28 @@ export class NothingChangedError extends Data.TaggedError(
   }
 }
 
+export class CaptureBlockedError extends Data.TaggedError(
+  "CaptureBlockedError",
+)<{
+  readonly id: string;
+  readonly what:
+    | "the capture stopped"
+    | "the capture stalled"
+    | "an alert is on screen";
+  readonly screenshot?: string | undefined;
+}> {
+  get message() {
+    const saved =
+      this.screenshot === undefined
+        ? ""
+        : `Saved the screen to ${this.screenshot}. `;
+    return `Recording on ${this.id} failed: ${this.what}, so no Proof video was made. ${saved}Record the walk again.`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
   readonly both: boolean;
 }> {
@@ -236,7 +258,8 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   readonly what:
     | "the test screenshot is blocked"
     | "the test capture is blocked"
-    | "an alert is on screen";
+    | "an alert is on screen"
+    | "the Secrets RAM disk cannot be made";
   readonly screenshot?: string | undefined;
 }> {
   get message() {

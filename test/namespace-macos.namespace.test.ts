@@ -1,7 +1,10 @@
-import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
@@ -9,12 +12,37 @@ import { openEventsPage, readEvents } from "./support/events.ts";
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
 
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+
 const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
 
 const destroy = (id: string): Promise<void> =>
   new Promise((resolve) => {
     execFile(nscBin(), ["destroy", id, "--force"], () => resolve());
   });
+
+const nsc = (args: ReadonlyArray<string>): Promise<string> =>
+  new Promise((resolve, reject) => {
+    execFile(nscBin(), args, (error, stdout, stderr) => {
+      if (error === null) {
+        resolve(stdout);
+      } else {
+        reject(new Error(stderr.trim() || stdout.trim() || error.message));
+      }
+    });
+  });
+
+const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
+  const out = await nsc(["list", "-o", "json"]);
+  const parsed: unknown = JSON.parse(out);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null,
+  );
+};
 
 const createMac = async (env: CliEnv, extra: ReadonlyArray<string> = []) => {
   const result = await runCli(env, [
@@ -111,20 +139,131 @@ describe("Namespace macOS Provider", () => {
     expect(found.stdout).toMatch(/^\/usr\/bin\/log stream /);
   });
 
-  it("live and record on a Mac are refused until #15", async () => {
+  it("live on a Mac prints a local address that offers VNC password login", async () => {
     // Given: the Mac from beforeAll
-    // When
-    const live = await runCli(env, ["live", id]);
-    const record = await runCli(env, ["record", "start", id]);
-    // Then
-    expect(live.stderr).toBe(
-      "Provider namespace lacks the Capability live-view on macos; no Live view was opened\n",
+    // When: `live` as a child; read its first two stdout lines
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
     );
-    expect(live.exitCode).toBe(125);
-    expect(record.stderr).toBe(
-      "Provider namespace lacks the Capability recording on macos; no Recording was started\n",
+    let port = 0;
+    try {
+      const lines = await new Promise<string[]>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          const found = text.split("\n").filter((line) => line !== "");
+          if (found.length >= 2) {
+            resolve(found.slice(0, 2));
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // Then
+      const [address, passwordLine] = lines as [string, string];
+      expect(address).toMatch(/^127\.0\.0\.1:\d+$/);
+      expect(passwordLine).toMatch(/^password [A-Za-z0-9]{8}$/);
+      port = Number(address.split(":")[1]);
+      const greeting = await new Promise<Buffer>((resolve, reject) => {
+        const socket = connect(port, "127.0.0.1");
+        socket.once("data", (data) => {
+          resolve(data);
+        });
+        socket.once("error", reject);
+      });
+      expect(greeting.subarray(0, 8).toString("utf8")).toBe("RFB 003.");
+      // Answer the handshake and read the security types: 2 is VNC login
+      const types = await new Promise<Buffer>((resolve, reject) => {
+        const socket = connect(port, "127.0.0.1");
+        socket.once("data", () => {
+          socket.write("RFB 003.008\n");
+        });
+        socket.on("data", (data) => {
+          if (!data.subarray(0, 8).toString("utf8").startsWith("RFB")) {
+            socket.destroy();
+            resolve(data);
+          }
+        });
+        socket.once("error", reject);
+      });
+      expect([...types.subarray(1)]).toContain(2);
+    } finally {
+      child.kill("SIGINT");
+    }
+    // And after SIGINT the child exits and the address refuses a connection
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    const closed = await new Promise<boolean>((resolve) => {
+      const socket = connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.once("error", () => resolve(true));
+    });
+    expect(closed).toBe(true);
+    // And closing the last live session turns VNC back off on the Mac
+    const off = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sudo",
+      "-n",
+      "sh",
+      "-c",
+      "test ! -s /var/db/proofbox-live/.password && ! pgrep -f ARDAgent >/dev/null",
+    ]);
+    expect(off.exitCode).toBe(0);
+  });
+
+  it("a Mac with live running has only a private address and no ingress", async () => {
+    // Given: the Mac from beforeAll with `live` running
+    const host = id.slice("ns:".length);
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, ...env.env },
+      },
     );
-    expect(record.exitCode).toBe(125);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          text += chunk.toString("utf8");
+          if (text.split("\n").filter((line) => line !== "").length >= 2) {
+            resolve();
+          }
+        });
+        child.on("exit", (code) =>
+          reject(new Error(`live exited ${code}: ${text}`)),
+        );
+      });
+      // When
+      const entry = (await liveList()).find((item) => item.cluster_id === host);
+      const net = await runCli(env, ["exec", id, "--", "ifconfig"]);
+      const addresses = [...net.stdout.matchAll(/inet (\d+\.\d+\.\d+\.\d+)/g)]
+        .map((match) => match[1] as string)
+        .filter((address) => address !== "127.0.0.1");
+      // Then
+      expect(entry === undefined || !("ingress" in entry)).toBe(true);
+      const isPrivate = (address: string) =>
+        address.startsWith("10.") ||
+        /^172\.(1[6-9]|2[0-9]|3[01])\./.test(address) ||
+        address.startsWith("192.168.");
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        expect(isPrivate(address)).toBe(true);
+      }
+    } finally {
+      child.kill("SIGINT");
+    }
   });
 
   it("screenshot --out writes a 2560x1600 PNG", async () => {
@@ -276,6 +415,443 @@ describe("Namespace macOS Provider", () => {
         button: 0,
       });
     });
+  });
+});
+
+describe("Namespace macOS Recording", () => {
+  let env: CliEnv;
+  let created: Awaited<ReturnType<typeof createMac>>;
+  let id: string;
+
+  beforeAll(async () => {
+    env = makeEnv({ namespace: true });
+    created = await createMac(env);
+    id = created.id;
+  });
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroy(id.slice("ns:".length));
+    }
+    cleanupEnvs();
+  });
+
+  const ffmpeg = (argv: string[]): Promise<Buffer> =>
+    new Promise((resolve, reject) => {
+      execFile(
+        "ffmpeg",
+        argv,
+        { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
+        (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
+      );
+    });
+
+  const grayRow = async (file: string, y: number): Promise<Buffer> =>
+    ffmpeg([
+      "-v",
+      "error",
+      "-i",
+      file,
+      "-vf",
+      `crop=1440:2:0:${y},format=gray`,
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-",
+    ]);
+
+  it("record stop on a Mac downloads an H.264 MP4 with the index first", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await setTimeout(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(2000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.stdout.split("\n")[0]).toBe(out);
+    const bytes = readFileSync(out);
+    expect(bytes.subarray(4, 8).toString("utf8")).toBe("ftyp");
+    const moov = bytes.indexOf("moov");
+    expect(moov).toBeGreaterThan(-1);
+    expect(moov).toBeLessThan(bytes.indexOf("mdat"));
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/var/lib/proofbox/recordings/1/proof.mp4",
+    ]);
+    expect(probe.stderr).toContain("h264 (High)");
+    expect(probe.stderr).toContain("yuv420p");
+  });
+
+  it("a Mac Proof video is 1440x972 with a caption bar", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await setTimeout(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(2000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const frame = await ffmpeg([
+      "-v",
+      "error",
+      "-ss",
+      "1",
+      "-i",
+      out,
+      "-frames:v",
+      "1",
+      "-f",
+      "image2pipe",
+      "-vcodec",
+      "png",
+      "-",
+    ]);
+    expect(frame.readUInt32BE(16)).toBe(1440);
+    expect(frame.readUInt32BE(20)).toBe(972);
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/var/lib/proofbox/recordings/2/proof.mp4",
+    ]);
+    expect(probe.stderr).toContain("1440x972");
+    expect(probe.stderr).toContain("yuv420p");
+    // The caption bar is the top 72 pixels: a row in it is dark, a row in
+    // the picture is not.
+    const bar = await grayRow(out, 36);
+    const picture = await grayRow(out, 500);
+    expect(Math.max(...bar)).toBeLessThan(64);
+    expect(Math.max(...picture)).toBeGreaterThanOrEqual(64);
+  });
+
+  it("each mark on a Mac saves a 2560x1600 Proof screenshot", async () => {
+    // Given: the Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(1000);
+    await runCli(env, ["mark", id, "step 1: look"]);
+    await setTimeout(1000);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await runCli(env, ["mark", id, "step 2: look"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(1000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const first = `${dir}/proof-1.png`;
+    const second = `${dir}/proof-2.png`;
+    expect(stopped.stdout).toBe(`${out}\n${first}\n${second}\n`);
+    for (const file of [first, second]) {
+      const bytes = readFileSync(file);
+      expect(bytes.readUInt32BE(16)).toBe(2560);
+      expect(bytes.readUInt32BE(20)).toBe(1600);
+    }
+    expect(readFileSync(first).equals(readFileSync(second))).toBe(false);
+  });
+
+  it("a click on a Mac goes into the Action log in points", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const clicked = await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--pace",
+      "fast",
+    ]);
+    expect(clicked.exitCode).toBe(0);
+    const tail = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "tail",
+      "-n",
+      "1",
+      "/var/lib/proofbox/action-log.jsonl",
+    ]);
+    // Then
+    const entry = JSON.parse(tail.stdout.trim()) as {
+      kind: string;
+      x: number;
+      y: number;
+    };
+    expect(entry.kind).toBe("click");
+    expect(entry.x).toBe(640);
+    expect(entry.y).toBe(400);
+  });
+
+  it("a 60 s Recording on a Mac runs at real speed with no drops", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(60_000);
+    const stopped = await runCli(env, ["record", "stop", id, "--discard"]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const last = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "tr '\\r' '\\n' < /var/lib/proofbox/recordings/4/ffmpeg.log | grep 'speed=' | tail -n 1",
+    ]);
+    // avfoundation prints no drop= counter; the frame count is the proof:
+    // 1868 frames over 62.26 s at 30 fps is every frame, no drops.
+    const frames = /frame=\s*(\d+)/.exec(last.stdout)?.[1];
+    const at = /time=(\d+):(\d+):([\d.]+)/.exec(last.stdout);
+    expect(frames).toBeDefined();
+    expect(at).not.toBeNull();
+    const [h, m, s] = (at as RegExpExecArray).slice(1).map(Number);
+    const elapsed = (h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0);
+    expect(Number(frames)).toBeGreaterThanOrEqual(
+      Math.floor(elapsed * 30 * 0.98),
+    );
+    expect(last.stdout).not.toMatch(/drop=[1-9]/);
+    const speed = /speed=\s*([\d.]+)x/.exec(last.stdout)?.[1];
+    expect(speed).toBeDefined();
+    expect(Number(speed)).toBeGreaterThanOrEqual(0.98);
+    expect(Number(speed)).toBeLessThanOrEqual(1.02);
+  });
+
+  it("record stop names a capture that stopped during the walk", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    await runCli(env, ["exec", id, "--", "pkill", "-9", "-x", "ffmpeg"]);
+    // When
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    const blocked = join(dir, "proof-blocked.png");
+    expect(stopped.exitCode).toBe(125);
+    expect(stopped.stderr).toBe(
+      `Recording on ${id} failed: the capture stopped, so no Proof video was made. Saved the screen to ${blocked}. Record the walk again.\n`,
+    );
+    expect(readFileSync(blocked).subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+  });
+
+  it("record stop names a stalled capture", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    await runCli(env, ["exec", id, "--", "pkill", "-STOP", "-x", "ffmpeg"]);
+    await setTimeout(8000);
+    // When
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(125);
+    expect(
+      stopped.stderr.startsWith(
+        `Recording on ${id} failed: the capture stalled, so no Proof video was made.`,
+      ),
+    ).toBe(true);
+  });
+
+  it("record stop names an alert on screen", async () => {
+    // Given: a Recording on the Mac of the describe
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const replayd =
+      "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
+    const hint = "/opt/namespace/vmguest.kScreenCapturePrivacyHintDate";
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await setTimeout(2000);
+    try {
+      await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "plutil",
+        "-replace",
+        hint,
+        "-date",
+        "2026-01-01T00:00:00Z",
+        replayd,
+      ]);
+      // When
+      const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+      // Then
+      expect(stopped.exitCode).toBe(125);
+      expect(
+        stopped.stderr.startsWith(
+          `Recording on ${id} failed: an alert is on screen, so no Proof video was made.`,
+        ),
+      ).toBe(true);
+    } finally {
+      await runCli(env, [
+        "exec",
+        id,
+        "--",
+        "plutil",
+        "-replace",
+        hint,
+        "-date",
+        "4000-01-01T00:00:00Z",
+        replayd,
+      ]);
+    }
+  });
+});
+
+describe("Namespace macOS Secrets", () => {
+  let env: CliEnv;
+  let id: string;
+
+  beforeAll(async () => {
+    env = makeEnv({ namespace: true });
+    const folder = mkdtempSync(join(tmpdir(), "proofbox-work-"));
+    execFileSync("git", ["init", "-q"], { cwd: folder });
+    const scriptDir = mkdtempSync(join(tmpdir(), "proofbox-setup-"));
+    const script = join(scriptDir, "setup.sh");
+    writeFileSync(script, "#!/bin/sh\nenv > setup-env.txt\n", {
+      mode: 0o755,
+    });
+    const envDir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+    const file = join(envDir, "app.env");
+    writeFileSync(file, "API_TOKEN=pb-secret-7f3a91\n", { mode: 0o600 });
+    const created = await createMac(env, [
+      "--work",
+      folder,
+      "--setup",
+      script,
+      "--env-file",
+      file,
+    ]);
+    id = created.id;
+    expect(created.result.exitCode).toBe(0);
+  });
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroy(id.slice("ns:".length));
+    }
+    cleanupEnvs();
+  });
+
+  it("a command after create --env-file on a Mac sees the Secret", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf %s "$API_TOKEN"',
+    ]);
+    // Then
+    expect(seen.stdout).toBe("pb-secret-7f3a91");
+  });
+
+  it("the Setup script on a Mac runs without the Secret", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, ["exec", id, "--", "cat", "setup-env.txt"]);
+    // Then
+    expect(seen.exitCode).toBe(0);
+    expect(seen.stdout).not.toContain("API_TOKEN");
+  });
+
+  it("the Secrets on a Mac are runner's alone", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "stat",
+      "-f",
+      "%Su %Lp",
+      "/var/run/proofbox-secrets",
+      "/var/run/proofbox-secrets/env",
+    ]);
+    // Then
+    expect(seen.stdout).toBe("runner 700\nrunner 600\n");
+  });
+
+  it("the Secrets on a Mac sit only on the RAM disk", async () => {
+    // Given: the describe's Mac
+    // When
+    const seen = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "mount; sudo -n grep -rl pb-secret-7f3a91 /Users/runner /var/lib/proofbox /private/tmp /var/log 2>/dev/null; true",
+    ]);
+    // Then
+    expect(seen.stdout).toContain(
+      "/private/var/run/proofbox-secrets (hfs, local, nodev, nosuid",
+    );
+    expect(seen.stdout).not.toContain("pb-secret-7f3a91");
   });
 });
 

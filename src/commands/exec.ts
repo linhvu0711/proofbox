@@ -25,7 +25,10 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
     const keeper = yield* KeeperClient;
     const events = yield* keeper.exec(
       rawId,
-      withSecrets(posix.join(provider.secretsDir(id.name), "env"), argv),
+      withSecrets(
+        posix.join(provider.secretsDir(id.name, info.os), "env"),
+        argv,
+      ),
     );
     let exitCode: number | undefined;
     // The repeated push never completes on its own, so the stream's value wins.
