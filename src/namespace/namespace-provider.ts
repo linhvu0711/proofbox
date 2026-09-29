@@ -674,7 +674,7 @@ export const makeNamespaceProvider = (deps: {
         const events = yield* link
           .stream(
             `sudo -n sh -c ${shellJoin([
-              'umask 077; f=/var/db/proofbox-live-password; if [ ! -s "$f" ]; then IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; cat "$f"',
+              'umask 077; f=/var/db/proofbox-live-password; if [ ! -s "$f" ]; then IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; cat "$f"',
             ])}`,
             {
               stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
