@@ -70,6 +70,26 @@ describe("auth", () => {
     ).toThrow();
   });
 
+  it("a token that is an inherited Object key is rejected", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "toString\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Fake did not accept this token. It may be wrong, revoked, or expired.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(() =>
+      statSync(join(home, ".config", "proofbox", "logins.json")),
+    ).toThrow();
+  });
+
   it("a logins.json that is not JSON fails with one line naming the file", async () => {
     // Given
     const env = makeEnv();
@@ -273,6 +293,23 @@ describe("auth", () => {
       "docker  no login needed\n" +
         "namespace  logs in with nsc for now\n" +
         "fake  PROOFBOX_FAKE_TOKEN is set, but fake did not accept it\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status uses the env token when the saved logins file is bad", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome("{nope");
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home, PROOFBOX_FAKE_TOKEN: "t0k" },
+    });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\n" +
+        "namespace  logs in with nsc for now\n" +
+        "fake  logged in as ada, expires 2999-01-01T00:00:00Z, env token PROOFBOX_FAKE_TOKEN\n",
     );
     expect(result.exitCode).toBe(0);
   });

@@ -86,7 +86,8 @@ export const makeFakeProvider = (options: {
           expiresAt: new Date("2999-01-01T00:00:00.000Z"),
         },
       };
-      const found = known[Redacted.value(token)];
+      const key = Redacted.value(token);
+      const found = Object.hasOwn(known, key) ? known[key] : undefined;
       if (found === undefined) {
         return yield* new TokenRejectedError({ provider: "fake" });
       }
