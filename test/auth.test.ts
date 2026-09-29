@@ -163,6 +163,40 @@ describe("auth", () => {
     expect(result.exitCode).toBe(125);
   });
 
+  it("a second login replaces the first and names the old account", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    // When
+    const result = await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t1k\n",
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged in to fake as bob (replaced ada).\n");
+    expect(result.exitCode).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
+      ),
+    ).toEqual({
+      fake: {
+        way: "token",
+        token: "t1k",
+        account: "bob",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+    });
+  });
+
   it("auth login --token with nothing on stdin saves nothing", async () => {
     // Given
     const env = makeEnv();
