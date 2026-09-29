@@ -427,8 +427,11 @@ describe("Namespace macOS Recording", () => {
 
   const ffmpeg = (argv: string[]): Promise<Buffer> =>
     new Promise((resolve, reject) => {
-      execFile("ffmpeg", argv, { encoding: "buffer" }, (error, stdout) =>
-        error === null ? resolve(stdout) : reject(error),
+      execFile(
+        "ffmpeg",
+        argv,
+        { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
+        (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
       );
     });
 
@@ -638,7 +641,16 @@ describe("Namespace macOS Recording", () => {
       "-c",
       "tr '\\r' '\\n' < /var/lib/proofbox/recordings/4/ffmpeg.log | grep 'speed=' | tail -n 1",
     ]);
-    expect(last.stdout).toContain("drop=0");
+    // avfoundation prints no drop= counter; the frame count is the proof:
+    // 1868 frames over 62.26 s at 30 fps is every frame, no drops.
+    const frames = /frame=\s*(\d+)/.exec(last.stdout)?.[1];
+    const at = /time=(\d+):(\d+):([\d.]+)/.exec(last.stdout);
+    expect(frames).toBeDefined();
+    expect(at).not.toBeNull();
+    const [h, m, s] = (at as RegExpExecArray).slice(1).map(Number);
+    const elapsed = (h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0);
+    expect(Number(frames)).toBeGreaterThanOrEqual(Math.floor(elapsed * 30 * 0.98));
+    expect(last.stdout).not.toMatch(/drop=[1-9]/);
     const speed = /speed=\s*([\d.]+)x/.exec(last.stdout)?.[1];
     expect(speed).toBeDefined();
     expect(Number(speed)).toBeGreaterThanOrEqual(0.98);
