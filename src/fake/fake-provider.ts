@@ -11,16 +11,23 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Clock, Duration, Effect, Schema, Stream } from "effect";
+import { Clock, Duration, Effect, Redacted, Schema, Stream } from "effect";
 import { nextDeadline } from "../deadline.ts";
-import { ProviderError, SandboxGoneError } from "../errors.ts";
+import {
+  ProviderError,
+  SandboxGoneError,
+  TokenRejectedError,
+} from "../errors.ts";
 import { Progress } from "../progress.ts";
 import {
   type Connection,
   type ExecEvent,
   IdleSeconds,
+  type LoginWay,
   Os,
   type Provider,
+  type ProviderAccount,
+  type ProviderLogin,
   SandboxInfo,
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
@@ -50,6 +57,7 @@ const hasCode = (cause: unknown, code: string) =>
 export const makeFakeProvider = (options: {
   readonly root: string;
   readonly watch: "process" | "none";
+  readonly login?: ProviderLogin | undefined;
   // Snapshots live in their own folder, one entry per Fingerprint; `fail`
   // makes a save ("push") or a start from one ("pull") fail.
   readonly snapshots?:
@@ -64,6 +72,26 @@ export const makeFakeProvider = (options: {
     new ProviderError({ provider: "fake", reason });
   const gone = (name: string) => new SandboxGoneError({ id: `fake:${name}` });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
+
+  // A fixed offline table stands in for a Provider's token check.
+  const checkToken = (token: Redacted.Redacted<string>) =>
+    Effect.gen(function* () {
+      const known: Record<string, ProviderAccount> = {
+        t0k: {
+          account: "ada",
+          expiresAt: new Date("2999-01-01T00:00:00.000Z"),
+        },
+        t1k: {
+          account: "bob",
+          expiresAt: new Date("2999-01-01T00:00:00.000Z"),
+        },
+      };
+      const found = known[Redacted.value(token)];
+      if (found === undefined) {
+        return yield* new TokenRejectedError({ provider: "fake" });
+      }
+      return found;
+    });
 
   const readFileInfo = (name: string) =>
     Effect.gen(function* () {
@@ -401,6 +429,11 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
+    login: {
+      _tag: "Ways",
+      ways: new Set<LoginWay>(["token"]),
+      checkToken,
+    },
     offers: {
       linux: {
         sizes: [

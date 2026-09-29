@@ -1,5 +1,6 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option } from "effect";
+import { loginToProvider } from "./commands/auth.ts";
 import { clickAt } from "./commands/click.ts";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
@@ -270,6 +271,17 @@ const record = Command.make("record").pipe(
   Command.withSubcommands([recordStart, recordStop]),
 );
 
+const authLogin = Command.make(
+  "login",
+  {
+    provider: Args.text({ name: "provider" }),
+    token: Options.boolean("token"),
+  },
+  ({ provider, token }) => loginToProvider({ provider, token }),
+);
+
+const auth = Command.make("auth").pipe(Command.withSubcommands([authLogin]));
+
 const upload = Command.make(
   "upload",
   {
@@ -313,6 +325,7 @@ const command = Command.make("proofbox").pipe(
     live,
     record,
     mark,
+    auth,
   ]),
 );
 

@@ -375,6 +375,84 @@ export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   }
 }
 
+export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
+  }
+}
+
+export class BadLoginsFileError extends Data.TaggedError("BadLoginsFileError")<{
+  readonly path: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `Bad logins file ${this.path}: ${this.reason}; delete it and log in again`;
+  }
+}
+
+export class NotLoggedInError extends Data.TaggedError("NotLoggedInError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `Not logged in to ${this.provider}. Run: proofbox auth login ${this.provider}`;
+  }
+}
+
+export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `Your Provider login for ${this.provider} expired. Run: proofbox auth login ${this.provider}`;
+  }
+}
+
+export class NoSuchProviderError extends Data.TaggedError(
+  "NoSuchProviderError",
+)<{
+  readonly provider: string;
+  readonly known: ReadonlyArray<string>;
+}> {
+  get message() {
+    return `No provider named "${this.provider}". Providers: ${this.known.join(", ")}.`;
+  }
+}
+
+export class NoLoginNeededError extends Data.TaggedError("NoLoginNeededError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `${this.provider} needs no login.`;
+  }
+}
+
+export class NoLoginWayError extends Data.TaggedError("NoLoginWayError")<{
+  readonly provider: string;
+  readonly way: string;
+}> {
+  get message() {
+    return `${this.provider} has no ${this.way} login. Use --token.`;
+  }
+}
+
+export class ExternalLoginError extends Data.TaggedError("ExternalLoginError")<{
+  readonly provider: string;
+  readonly tool: string;
+}> {
+  get message() {
+    return `${this.provider} logs in with ${this.tool} for now. Run: ${this.tool} login`;
+  }
+}
+
+export class NoTokenError extends Data.TaggedError("NoTokenError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `No token on stdin. Run: echo <token> | proofbox auth login ${this.provider} --token`;
+  }
+}
+
 export class UnknownProviderError extends Data.TaggedError(
   "UnknownProviderError",
 )<{

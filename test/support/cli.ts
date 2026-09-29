@@ -105,6 +105,7 @@ export const runCli = (
   options: {
     readonly set?: Readonly<Record<string, string>>;
     readonly unset?: ReadonlyArray<string>;
+    readonly input?: string;
   } = {},
 ): Promise<CliResult> =>
   new Promise((resolve) => {
@@ -116,7 +117,7 @@ export const runCli = (
     for (const key of options.unset ?? []) {
       delete childEnv[key];
     }
-    execFile(
+    const child = execFile(
       process.execPath,
       // `--` ends Node's own flag scan; without it Node treats a
       // `--env-file` meant for the CLI as its own (nodejs/node#54232).
@@ -138,4 +139,7 @@ export const runCli = (
         });
       },
     );
+    if (options.input !== undefined) {
+      child.stdin?.end(options.input);
+    }
   });

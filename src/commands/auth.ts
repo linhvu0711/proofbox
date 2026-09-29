@@ -1,0 +1,81 @@
+import { text } from "node:stream/consumers";
+import { Effect, Redacted } from "effect";
+import { CliOutput } from "../cli-output.ts";
+import {
+  ExternalLoginError,
+  NoLoginNeededError,
+  NoLoginWayError,
+  NoSuchProviderError,
+  NoTokenError,
+  ProviderError,
+} from "../errors.ts";
+import { readLogins, saveLogins } from "../login/logins-file.ts";
+import { type LoginWay, Providers } from "../provider.ts";
+
+// The Provider plus its Ways login part, or the refusal to print.
+const loginPartFor = (name: string) =>
+  Effect.gen(function* () {
+    const providers = yield* Providers;
+    const provider = providers.get(name);
+    if (provider === undefined) {
+      return yield* new NoSuchProviderError({
+        provider: name,
+        known: [...providers.keys()],
+      });
+    }
+    const part = provider.login;
+    if (part._tag === "None") {
+      return yield* new NoLoginNeededError({ provider: provider.name });
+    }
+    if (part._tag === "External") {
+      return yield* new ExternalLoginError({
+        provider: provider.name,
+        tool: part.tool,
+      });
+    }
+    return { provider, part } as const;
+  });
+
+export const loginToProvider = (options: {
+  readonly provider: string;
+  readonly token: boolean;
+}) =>
+  Effect.gen(function* () {
+    const { provider, part } = yield* loginPartFor(options.provider);
+    // --token picks the token way; with no flag the browser way is the
+    // default (#49). A Provider that lacks the picked way refuses.
+    const way: LoginWay = options.token ? "token" : "browser";
+    if (!part.ways.has(way)) {
+      return yield* new NoLoginWayError({ provider: provider.name, way });
+    }
+    const raw = yield* Effect.tryPromise({
+      try: () => text(process.stdin),
+      catch: (cause) =>
+        new ProviderError({
+          provider: "local",
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    });
+    const token = raw.trim();
+    if (token === "") {
+      return yield* new NoTokenError({ provider: provider.name });
+    }
+    const account = yield* part.checkToken(Redacted.make(token));
+    const logins = yield* readLogins;
+    const previous = logins[provider.name];
+    yield* saveLogins({
+      ...logins,
+      [provider.name]: {
+        way: "token",
+        token: Redacted.make(token),
+        account: account.account,
+        expiresAt: account.expiresAt,
+      },
+    });
+    const output = yield* CliOutput;
+    yield* output.err(
+      previous === undefined
+        ? `Logged in to ${provider.name} as ${account.account}.\n`
+        : `Logged in to ${provider.name} as ${account.account} (replaced ${previous.account}).\n`,
+    );
+  });

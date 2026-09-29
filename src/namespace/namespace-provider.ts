@@ -808,6 +808,7 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
+    login: { _tag: "External", tool: "nsc" },
     offers: {
       linux: {
         sizes: LINUX_SIZES,

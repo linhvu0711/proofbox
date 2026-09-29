@@ -3,18 +3,23 @@ import {
   Context,
   type Duration,
   type Effect,
+  type Redacted,
   Schema,
   type Scope,
   type Stream,
 } from "effect";
 import {
+  type BadLoginsFileError,
+  type LoginExpiredError,
   type MacPrepareError,
   MissingCapabilityError,
+  type NotLoggedInError,
   type ProviderError,
   type ProviderLimitError,
   type ProviderUnavailableError,
   type SandboxGoneError,
   type TokenExposedError,
+  type TokenRejectedError,
   type ToolBundleHashError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
@@ -40,6 +45,40 @@ export interface OsOffer {
   readonly sizes: "any" | ReadonlyArray<Size>;
   readonly features: ReadonlySet<Feature>;
 }
+
+export const LoginWay = Schema.Literal("browser", "token");
+export type LoginWay = typeof LoginWay.Type;
+
+export interface ProviderAccount {
+  readonly account: string;
+  readonly expiresAt: Date;
+}
+
+export interface LoginWays {
+  readonly _tag: "Ways";
+  readonly ways: ReadonlySet<LoginWay>;
+  readonly checkToken: (
+    token: Redacted.Redacted<string>,
+  ) => Effect.Effect<
+    ProviderAccount,
+    TokenRejectedError | ProviderUnavailableError
+  >;
+}
+
+// What a Provider offers `proofbox auth`: no login at all, an outside CLI
+// for now, or its own login ways.
+export type LoginPart =
+  | { readonly _tag: "None" }
+  // Stand-in until #48: the Provider logs in with its own CLI.
+  | { readonly _tag: "External"; readonly tool: string }
+  | LoginWays;
+
+// The token a command uses to act for a Provider account, from the env or
+// the saved login.
+export type ProviderLogin = Effect.Effect<
+  Redacted.Redacted<string>,
+  NotLoggedInError | LoginExpiredError | BadLoginsFileError
+>;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   name: Schema.String,
@@ -73,6 +112,7 @@ export interface Connection {
 export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
+  readonly login: LoginPart;
   readonly offers: Readonly<Partial<Record<Os, OsOffer>>>;
   readonly create: (req: {
     readonly os: Os;
