@@ -47,8 +47,11 @@ pnpm link --global
 
 ## Example
 
+Run this from your app's folder. The Setup script installs the app's dependencies, and the env file holds its Secrets. Keep both outside the repo (ADR 0007).
+
 ```sh
-id=$(proofbox create --os linux --work . --setup ./setup-linux.sh --env-file ./.env.proof)
+cd ~/code/my-app
+id=$(proofbox create --os linux --work . --setup ~/proof/my-app/setup-linux.sh --env-file ~/proof/my-app/app.env)
 
 proofbox exec "$id" -- npm run build
 proofbox exec "$id" -- sh -c 'nohup npm start >/tmp/app.log 2>&1 &'
