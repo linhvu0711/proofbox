@@ -19,7 +19,7 @@ One thing a Provider can or cannot do, such as an OS, Snapshots, or a Live view.
 _Avoid_: feature, support flag
 
 **Sandbox id**:
-The name of a Sandbox, prefixed by its Provider (`ns:abc123`), so every command knows where to go. Local state is never the source of truth.
+The name of a Sandbox, prefixed by its Provider and, for a Provider with regions, its region (`ns:us:abc123`), so every command knows where to go. Local state is never the source of truth.
 _Avoid_: handle, session id
 
 **Keeper**:
