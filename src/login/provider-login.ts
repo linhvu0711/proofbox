@@ -21,9 +21,7 @@ export const loginFor = (provider: string): ProviderLogin =>
     }
     // HOME missing cannot give a saved login to read.
     const logins = yield* readLogins.pipe(
-      Effect.catchTag("ConfigError", () =>
-        new NotLoggedInError({ provider }),
-      ),
+      Effect.catchTag("ConfigError", () => new NotLoggedInError({ provider })),
     );
     const saved = logins[provider];
     if (saved === undefined) {
