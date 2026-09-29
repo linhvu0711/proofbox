@@ -706,7 +706,7 @@ export const makeNamespaceProvider = (deps: {
           link
             .run(
               `sudo -n sh -c ${shellJoin([
-                'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
+                'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then rm -f "$L/$1"; exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
                 "sh",
                 candidate,
               ])}`,
