@@ -154,7 +154,7 @@ export const withSecrets = (
 ): ReadonlyArray<string> => [
   "sh",
   "-c",
-  'case $- in *x*) x=1;; *) x=0;; esac; set +x; if [ -r "$1" ]; then . "$1"; fi; if [ "$x" = 1 ]; then set -x; fi; shift; exec "$@"',
+  'set +x; if [ -r "$1" ]; then . "$1"; fi; shift; exec "$@"',
   "sh",
   envPath,
   ...argv,

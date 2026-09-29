@@ -669,12 +669,13 @@ export const makeNamespaceProvider = (deps: {
         // Linux, a lock serializes live-view starts, the stored password
         // is reused when set — one password per Mac — and each viewer
         // drops a session marker the finalizer counts. The printed line
-        // is the settled password.
+        // is the settled password. macOS has no flock, so the lock is a
+        // mkdir'ed dir that a waiter steals once its pid is gone.
         const candidate = makeSandboxName(8);
         const events = yield* link
           .stream(
             `sudo -n sh -c ${shellJoin([
-              'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; trap \'rmdir "$L/.lock" 2>/dev/null\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
+              'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ] && ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
             ])} ${candidate}`,
             {
               stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
