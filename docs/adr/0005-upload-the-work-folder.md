@@ -4,4 +4,4 @@ proofbox sends the Caller's tracked and new files (minus git-ignored ones) into 
 
 ## Consequences
 
-- The Sandbox has no `.git` folder. Repo scripts that look for one act differently; clocktrace's postinstall printed "not a git checkout, nothing to do".
+- The Sandbox has no `.git` folder. Repo scripts that look for one act differently, for example a postinstall script that skips its work when it finds no git checkout.
