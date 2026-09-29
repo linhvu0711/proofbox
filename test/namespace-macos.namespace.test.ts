@@ -215,6 +215,27 @@ describe("Namespace macOS Provider", () => {
       });
     });
 
+    it("key sends xdotool punctuation names", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, ["key", id, "ctrl+equal comma"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({
+        type: "keydown",
+        key: "=",
+        ctrl: true,
+        meta: false,
+      });
+      expect(events).toContainEqual({
+        type: "keydown",
+        key: ",",
+        ctrl: false,
+        meta: false,
+      });
+    });
+
     it("scroll sends wheel steps down and up", async () => {
       // Given: the events page open
       // When

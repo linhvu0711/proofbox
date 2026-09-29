@@ -7,7 +7,7 @@
 //   move X Y MS               glide to X Y over MS ms (0 jumps)
 //   click BUTTON              press and release at the pointer (1 2 3)
 //   type LETTER_MS TEXT       type TEXT, LETTER_MS between characters
-//   key KEYS                  xdotool keys: "ctrl+a Return"
+//   key KEYS                  xdotool keys: "ctrl+a Return", "cmd+equal"
 //   scroll BUTTON STEPS       4 up, 5 down, 6 left, 7 right
 //   drag X1 Y1 X2 Y2 MS       left-drag from X1 Y1 to X2 Y2
 
@@ -106,6 +106,10 @@ let named: [String: Int] = [
   "z": kVK_ANSI_Z,
   "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3, "4": kVK_ANSI_4,
   "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9,
+  "equal": kVK_ANSI_Equal, "minus": kVK_ANSI_Minus, "comma": kVK_ANSI_Comma,
+  "period": kVK_ANSI_Period, "slash": kVK_ANSI_Slash, "backslash": kVK_ANSI_Backslash,
+  "semicolon": kVK_ANSI_Semicolon, "apostrophe": kVK_ANSI_Quote, "grave": kVK_ANSI_Grave,
+  "bracketleft": kVK_ANSI_LeftBracket, "bracketright": kVK_ANSI_RightBracket,
 ]
 
 // Each space-separated combo is "mod+mod+key", as xdotool takes it.
