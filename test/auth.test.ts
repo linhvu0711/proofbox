@@ -105,4 +105,81 @@ describe("auth", () => {
     );
     expect(result.exitCode).toBe(125);
   });
+
+  it("auth login with an unknown Provider names the known ones", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "foo"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_ROOT"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      'No provider named "foo". Providers: docker, namespace.\n',
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth login docker says no login is needed", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "docker"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe("docker needs no login.\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth login without --token asks for --token", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "fake"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe("fake has no browser login. Use --token.\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth login namespace points to nsc for now", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "namespace logs in with nsc for now. Run: nsc login\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth login --token with nothing on stdin saves nothing", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "No token on stdin. Run: echo <token> | proofbox auth login fake --token\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(() =>
+      statSync(join(home, ".config", "proofbox", "logins.json")),
+    ).toThrow();
+  });
 });
