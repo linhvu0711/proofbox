@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   statSync,
   writeFileSync,
@@ -272,6 +273,85 @@ describe("auth", () => {
       "docker  no login needed\n" +
         "namespace  logs in with nsc for now\n" +
         "fake  PROOFBOX_FAKE_TOKEN is set, but fake did not accept it\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("create with no Provider login says how to log in", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { HOME: home }, unset: ["PROOFBOX_FAKE_TOKEN"] },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Not logged in to fake. Run: proofbox auth login fake\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+
+  it("create with an expired saved login says it expired", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2000-01-01T00:00:00.000Z"}}',
+    );
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { HOME: home }, unset: ["PROOFBOX_FAKE_TOKEN"] },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Your Provider login for fake expired. Run: proofbox auth login fake\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("create with a saved login makes the Sandbox", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // Then
+    expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status shows an expired saved login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2000-01-01T00:00:00.000Z"}}',
+    );
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\n" +
+        "namespace  logs in with nsc for now\n" +
+        "fake  expired 2000-01-01T00:00:00Z. Run: proofbox auth login fake\n",
     );
     expect(result.exitCode).toBe(0);
   });

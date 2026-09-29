@@ -133,7 +133,10 @@ export interface Provider {
     | ProviderUnavailableError
     | ToolBundleHashError
     | TokenExposedError
-    | MacPrepareError,
+    | MacPrepareError
+    | NotLoggedInError
+    | LoginExpiredError
+    | BadLoginsFileError,
     Progress
   >;
   readonly extend: (

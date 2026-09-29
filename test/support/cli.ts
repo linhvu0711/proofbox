@@ -12,6 +12,7 @@ export interface CliEnv {
   readonly env: {
     readonly PROOFBOX_FAKE_ROOT: string;
     readonly PROOFBOX_RUNTIME_DIR: string;
+    readonly PROOFBOX_FAKE_TOKEN: string;
     readonly DOCKER_HOST?: string;
     readonly PROOFBOX_NSC?: string;
   };
@@ -38,6 +39,9 @@ export const makeEnv = (
     env: {
       PROOFBOX_FAKE_ROOT: root,
       PROOFBOX_RUNTIME_DIR: runtime,
+      // The fake Provider needs a login; plain tests log in with the
+      // env token unless they unset it.
+      PROOFBOX_FAKE_TOKEN: "t0k",
       // Plain tests must not touch the host Docker daemon.
       ...(options.docker === true
         ? {}

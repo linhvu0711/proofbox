@@ -271,8 +271,12 @@ export const makeFakeProvider = (options: {
     readonly size?: Size | undefined;
     readonly snapshot?: string | undefined;
   }) =>
-    Effect.flatMap(Progress, (progress) =>
-      progress.step("creating fake Sandbox", createWork(req)),
+    (options.login ?? Effect.void).pipe(
+      Effect.zipRight(
+        Effect.flatMap(Progress, (progress) =>
+          progress.step("creating fake Sandbox", createWork(req)),
+        ),
+      ),
     );
 
   const get = (name: string) => readFileInfo(name);

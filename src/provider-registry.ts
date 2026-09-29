@@ -3,6 +3,7 @@ import { Config, Effect, Layer, Option } from "effect";
 import { makeDockerClient } from "./docker/docker-client.ts";
 import { makeDockerProvider } from "./docker/docker-provider.ts";
 import { ProviderError } from "./errors.ts";
+import { loginFor } from "./login/provider-login.ts";
 import { makeNamespaceProvider } from "./namespace/namespace-provider.ts";
 import { makeNscClient } from "./namespace/nsc-client.ts";
 import { makeOpenLink } from "./namespace/ssh-link.ts";
@@ -44,6 +45,7 @@ export const ProvidersLive = Layer.effect(
         fake.makeFakeProvider({
           root: fakeRoot.value,
           watch: "process",
+          login: loginFor("fake"),
           snapshots: Option.isSome(snapshotsRoot)
             ? {
                 root: snapshotsRoot.value,

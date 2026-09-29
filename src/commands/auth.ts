@@ -1,5 +1,5 @@
 import { text } from "node:stream/consumers";
-import { Effect, Option, Redacted } from "effect";
+import { Clock, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   ExternalLoginError,
@@ -86,6 +86,7 @@ export const showAuthStatus = Effect.gen(function* () {
   const providers = yield* Providers;
   const logins = yield* readLogins;
   const output = yield* CliOutput;
+  const now = yield* Clock.currentTimeMillis;
   for (const provider of providers.values()) {
     const part = provider.login;
     let line: string;
@@ -109,10 +110,13 @@ export const showAuthStatus = Effect.gen(function* () {
         );
       } else {
         const saved = logins[provider.name];
-        line =
-          saved === undefined
-            ? "not logged in"
-            : `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+        if (saved === undefined) {
+          line = "not logged in";
+        } else if (saved.expiresAt.getTime() <= now) {
+          line = `expired ${formatTime(saved.expiresAt)}. Run: proofbox auth login ${provider.name}`;
+        } else {
+          line = `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+        }
       }
     }
     yield* output.out(`${provider.name}  ${line}\n`);

@@ -398,6 +398,9 @@ export class NotLoggedInError extends Data.TaggedError("NotLoggedInError")<{
   get message() {
     return `Not logged in to ${this.provider}. Run: proofbox auth login ${this.provider}`;
   }
+  get reason() {
+    return this.message;
+  }
 }
 
 export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
@@ -405,6 +408,9 @@ export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
 }> {
   get message() {
     return `Your Provider login for ${this.provider} expired. Run: proofbox auth login ${this.provider}`;
+  }
+  get reason() {
+    return this.message;
   }
 }
 
