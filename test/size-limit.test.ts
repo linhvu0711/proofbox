@@ -51,7 +51,7 @@ describe("Size limit", () => {
         // Then
         expect(error._tag).toBe("ProofTooBigError");
         expect(error.message).toBe(
-          "Proof video is 10.6 MB at the lowest quality, over the 10.0 MB Size limit, so nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; record a shorter walk, or raise --max-size.",
+          "Proof video is 10.6 MB at the lowest quality, over the 10.0 MB Size limit, so nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; make a shorter Recording, or raise --max-size.",
         );
       }).pipe(Effect.provide(CliOutput.Test)),
   );
