@@ -94,18 +94,8 @@ export const stopRecording = (options: {
     const info = yield* Schema.decodeUnknown(
       Schema.parseJson(StoppedRecording),
     )(stopped.stdout.toString("utf8").trim());
-    if (options.discard === true) {
-      const output = yield* CliOutput;
-      yield* output.err(
-        `proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv\n`,
-      );
-      return;
-    }
     const out = options.out;
-    if (out === undefined) {
-      return yield* Effect.die(new Error("record stop lost --out"));
-    }
-    const base = out.replace(/\.[^./\\]+$/, "");
+    const base = out?.replace(/\.[^./\\]+$/, "") ?? "proof";
     if (info.blocked !== undefined) {
       let screenshot: string | undefined;
       const saved = yield* fetchHelper(
@@ -123,6 +113,16 @@ export const stopRecording = (options: {
         what: info.blocked,
         screenshot,
       });
+    }
+    if (options.discard === true) {
+      const output = yield* CliOutput;
+      yield* output.err(
+        `proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv\n`,
+      );
+      return;
+    }
+    if (out === undefined) {
+      return yield* Effect.die(new Error("record stop lost --out"));
     }
     const buildProof = Effect.gen(function* () {
       const probed = yield* runHelper(

@@ -82,13 +82,14 @@ case "$cmd" in
     fi
     DIR=$(readlink "$CUR")
     steps=$(cat "$DIR/steps" 2>/dev/null || echo 0)
+    # A macOS capture can stop, stall, or be blocked by a privacy alert;
+    # name which before the walk ends silently with a half video. A failed
+    # screencapture is itself the alert, not a reason to die mid-stop.
+    blocked=""
     if [ "$steps" -ge 1 ]; then
-      shot "$DIR/shot-$steps.png"
+      shot "$DIR/shot-$steps.png" || blocked="an alert is on screen"
     fi
     pid=$(cat "$DIR/pid")
-    # A macOS capture can stop, stall, or be blocked by a privacy alert;
-    # name which before the walk ends silently with a half video.
-    blocked=""
     if ! kill -0 "$pid" 2>/dev/null; then
       blocked="the capture stopped"
     else

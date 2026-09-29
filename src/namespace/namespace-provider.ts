@@ -665,17 +665,17 @@ export const makeNamespaceProvider = (deps: {
     Effect.gen(function* () {
       if ((yield* osOf(name)) === "macos") {
         const link = yield* openLink(name, "cli");
-        // The candidate goes on stdin, never the command line. The script
-        // reuses the stored VNC password when one is set — one password
-        // per Mac, as on Linux — else it turns on the legacy VNC login,
-        // restarts the agent, and stores the candidate. The printed line
+        // The candidate goes on stdin, never the command line. As on
+        // Linux, a lock serializes live-view starts, the stored password
+        // is reused when set — one password per Mac — and each viewer
+        // drops a session marker the finalizer counts. The printed line
         // is the settled password.
         const candidate = makeSandboxName(8);
         const events = yield* link
           .stream(
             `sudo -n sh -c ${shellJoin([
-              'umask 077; f=/var/db/proofbox-live-password; if [ ! -s "$f" ]; then IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; cat "$f"',
-            ])}`,
+              'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; trap \'rmdir "$L/.lock" 2>/dev/null\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
+            ])} ${candidate}`,
             {
               stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
             },
@@ -699,6 +699,17 @@ export const makeNamespaceProvider = (deps: {
             `the Live view could not set the VNC password: ${stderr.trim()}`,
           );
         }
+        yield* Effect.addFinalizer(() =>
+          link
+            .run(
+              `sudo -n sh -c ${shellJoin([
+                'L=/var/db/proofbox-live; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; true',
+                "sh",
+                candidate,
+              ])}`,
+            )
+            .pipe(Effect.ignore),
+        );
         const forward = yield* nsc.portForward(name, 5900);
         return {
           address: `127.0.0.1:${forward.port}`,

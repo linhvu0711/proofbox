@@ -207,6 +207,18 @@ describe("Namespace macOS Provider", () => {
       socket.once("error", () => resolve(true));
     });
     expect(closed).toBe(true);
+    // And closing the last live session turns VNC back off on the Mac
+    const off = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sudo",
+      "-n",
+      "sh",
+      "-c",
+      "test ! -s /var/db/proofbox-live/.password && ! pgrep -f ARDAgent >/dev/null",
+    ]);
+    expect(off.exitCode).toBe(0);
   });
 
   it("a Mac with live running has only a private address and no ingress", async () => {
