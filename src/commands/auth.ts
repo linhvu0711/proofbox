@@ -1,5 +1,5 @@
 import { text } from "node:stream/consumers";
-import { Effect, Redacted } from "effect";
+import { Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   ExternalLoginError,
@@ -11,6 +11,7 @@ import {
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
 import { readLogins, saveLogins } from "../login/logins-file.ts";
+import { envToken, envTokenName } from "../login/provider-login.ts";
 import { type LoginWay, Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -93,11 +94,26 @@ export const showAuthStatus = Effect.gen(function* () {
     } else if (part._tag === "External") {
       line = `logs in with ${part.tool} for now`;
     } else {
-      const saved = logins[provider.name];
-      line =
-        saved === undefined
-          ? "not logged in"
-          : `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+      const env = yield* envToken(provider.name);
+      if (Option.isSome(env)) {
+        line = yield* part.checkToken(env.value).pipe(
+          Effect.map(
+            (account) =>
+              `logged in as ${account.account}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`,
+          ),
+          Effect.catchTag("TokenRejectedError", () =>
+            Effect.succeed(
+              `${envTokenName(provider.name)} is set, but ${provider.name} did not accept it`,
+            ),
+          ),
+        );
+      } else {
+        const saved = logins[provider.name];
+        line =
+          saved === undefined
+            ? "not logged in"
+            : `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+      }
     }
     yield* output.out(`${provider.name}  ${line}\n`);
   }
