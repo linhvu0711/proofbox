@@ -234,9 +234,7 @@ describe("Namespace macOS Provider", () => {
         );
       });
       // When
-      const entry = (await liveList()).find(
-        (item) => item.cluster_id === host,
-      );
+      const entry = (await liveList()).find((item) => item.cluster_id === host);
       const net = await runCli(env, ["exec", id, "--", "ifconfig"]);
       const addresses = [...net.stdout.matchAll(/inet (\d+\.\d+\.\d+\.\d+)/g)]
         .map((match) => match[1] as string)
