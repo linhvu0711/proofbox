@@ -381,6 +381,9 @@ export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
   get message() {
     return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
   }
+  get reason() {
+    return this.message;
+  }
 }
 
 export class BadLoginsFileError extends Data.TaggedError("BadLoginsFileError")<{

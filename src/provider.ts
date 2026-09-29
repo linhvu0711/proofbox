@@ -136,7 +136,8 @@ export interface Provider {
     | MacPrepareError
     | NotLoggedInError
     | LoginExpiredError
-    | BadLoginsFileError,
+    | BadLoginsFileError
+    | TokenRejectedError,
     Progress
   >;
   readonly extend: (

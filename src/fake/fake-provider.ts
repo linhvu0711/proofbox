@@ -272,13 +272,17 @@ export const makeFakeProvider = (options: {
     readonly size?: Size | undefined;
     readonly snapshot?: string | undefined;
   }) =>
-    (options.login ?? Effect.void).pipe(
-      Effect.zipRight(
-        Effect.flatMap(Progress, (progress) =>
-          progress.step("creating fake Sandbox", createWork(req)),
-        ),
-      ),
-    );
+    Effect.gen(function* () {
+      const token = yield* options.login ?? Effect.void;
+      // The fake stands in for a real Provider, which rejects a bad
+      // token at its API — a rejected login makes no Sandbox.
+      if (Redacted.isRedacted(token)) {
+        yield* checkToken(token);
+      }
+      return yield* Effect.flatMap(Progress, (progress) =>
+        progress.step("creating fake Sandbox", createWork(req)),
+      );
+    });
 
   const get = (name: string) => readFileInfo(name);
 

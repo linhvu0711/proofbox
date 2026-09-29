@@ -373,6 +373,24 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("create with a token the Provider rejects makes no Sandbox", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { HOME: home, PROOFBOX_FAKE_TOKEN: "nope" } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Fake did not accept this token. It may be wrong, revoked, or expired.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+
   it("auth status shows an expired saved login", async () => {
     // Given
     const env = makeEnv();
