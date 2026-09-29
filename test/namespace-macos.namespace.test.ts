@@ -442,7 +442,7 @@ describe("Namespace macOS Recording", () => {
       "-i",
       file,
       "-vf",
-      `crop=1440:1:0:${y},format=gray`,
+      `crop=1440:2:0:${y},format=gray`,
       "-frames:v",
       "1",
       "-f",
