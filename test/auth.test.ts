@@ -197,6 +197,46 @@ describe("auth", () => {
     });
   });
 
+  it("auth status with no logins shows not logged in", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\n" +
+        "namespace  logs in with nsc for now\n" +
+        "fake  not logged in\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status shows the saved login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    // When
+    const result = await runCli(env, ["auth", "status"], { set, unset });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\n" +
+        "namespace  logs in with nsc for now\n" +
+        "fake  logged in as ada, expires 2999-01-01T00:00:00Z, saved login\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
   it("auth login --token with nothing on stdin saves nothing", async () => {
     // Given
     const env = makeEnv();

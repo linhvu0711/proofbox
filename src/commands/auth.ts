@@ -9,6 +9,7 @@ import {
   NoTokenError,
   ProviderError,
 } from "../errors.ts";
+import { formatTime } from "../format-time.ts";
 import { readLogins, saveLogins } from "../login/logins-file.ts";
 import { type LoginWay, Providers } from "../provider.ts";
 
@@ -79,3 +80,25 @@ export const loginToProvider = (options: {
         : `Logged in to ${provider.name} as ${account.account} (replaced ${previous.account}).\n`,
     );
   });
+
+export const showAuthStatus = Effect.gen(function* () {
+  const providers = yield* Providers;
+  const logins = yield* readLogins;
+  const output = yield* CliOutput;
+  for (const provider of providers.values()) {
+    const part = provider.login;
+    let line: string;
+    if (part._tag === "None") {
+      line = "no login needed";
+    } else if (part._tag === "External") {
+      line = `logs in with ${part.tool} for now`;
+    } else {
+      const saved = logins[provider.name];
+      line =
+        saved === undefined
+          ? "not logged in"
+          : `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+    }
+    yield* output.out(`${provider.name}  ${line}\n`);
+  }
+});
