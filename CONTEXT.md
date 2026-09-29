@@ -19,7 +19,7 @@ One thing a Provider can or cannot do, such as an OS, Snapshots, or a Live view.
 _Avoid_: feature, support flag
 
 **Sandbox id**:
-The name of a Sandbox, prefixed by its Provider (`ns:abc123`), so every command knows where to go. Local state is never the source of truth.
+The name of a Sandbox, prefixed by its Provider and, for a Provider with regions, its region (`ns:us:abc123`), so every command knows where to go. Local state is never the source of truth.
 _Avoid_: handle, session id
 
 **Keeper**:
@@ -37,6 +37,16 @@ _Avoid_: hard TTL, lease
 **Sandbox size**:
 The CPU count and RAM of a Sandbox, written `4x8` (4 vCPU, 8 GB). Each Provider has a default per OS and an ordered list of bigger sizes. Not the Size limit, which is about the Proof video.
 _Avoid_: machine type, shape, spec, instance size
+
+### Accounts
+
+**Provider account**:
+The Caller's own account at a Provider, which owns and pays for its Sandboxes. proofbox has no account of its own.
+_Avoid_: tenant, workspace, proofbox account
+
+**Provider login**:
+What proofbox keeps on the Caller's machine so it can act for one Provider account: a browser login or a token the Caller gave it. It is never a Secret and never enters a Sandbox.
+_Avoid_: credential, auth, session, API key
 
 ### Getting the app ready
 
