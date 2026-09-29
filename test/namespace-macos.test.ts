@@ -33,6 +33,8 @@ interface Answer {
 // command line it runs and answers it from `answer` (exit 0 by default).
 const makeMac = (
   answer: (line: string) => Answer | undefined = () => undefined,
+  // Runs as the Link runs a line, e.g. to let a step take time.
+  during: (line: string) => Effect.Effect<void> = () => Effect.void,
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -69,6 +71,7 @@ const makeMac = (
       ssh: [],
       run: (line) =>
         note(commands, line).pipe(
+          Effect.zipRight(during(line)),
           Effect.map((): HostResult => {
             const { exitCode, stdout, stderr } = reply(line);
             return {
@@ -497,6 +500,29 @@ describe("Namespace macOS Provider", () => {
       expect(restart).toBeGreaterThanOrEqual(approval);
       expect(restart).toBeLessThan(capture);
     }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a Mac whose prepare outlasts the idle time gets its Deadline from the end of prepare",
+    () =>
+      Effect.gen(function* () {
+        // Given: the Tool bundle check takes 10 minutes, past idle plus 60 s
+        const mac = yield* makeMac(undefined, (line) =>
+          line.startsWith("shasum -a 256")
+            ? TestClock.adjust(Duration.minutes(10))
+            : Effect.void,
+        );
+        yield* TestClock.setTime(0);
+        // When
+        const info = yield* mac.provider.create(createMac());
+        // Then
+        expect(info.createdAt.toISOString()).toBe("1970-01-01T00:00:00.000Z");
+        expect(info.deadline.toISOString()).toBe("1970-01-01T00:16:00.000Z");
+        const lines = yield* Ref.get(mac.commands);
+        expect(lines.find((line) => line.includes("/deadline"))).toContain(
+          "960",
+        );
+      }).pipe(withRuntime(runtimeDir())),
   );
 
   it("countMemoryKills counts kernel kills and skips idle-daemon kills", () => {
