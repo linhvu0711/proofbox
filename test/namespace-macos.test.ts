@@ -647,4 +647,30 @@ describe("Namespace macOS Provider", () => {
       }).pipe(Effect.scoped, withRuntime(runtime));
     },
   );
+
+  it.effect("closing the last Mac Live view turns VNC off", () => {
+    const runtime = runtimeDir();
+    return Effect.gen(function* () {
+      // Given: the VNC password script prints the settled password
+      const mac = yield* makeMac(
+        (line) =>
+          line.includes("-setvnclegacy") ? { stdout: "Xy7kQ2mA\n" } : undefined,
+        undefined,
+        () => Effect.succeed({ port: 50123, gone: Effect.never }),
+      );
+      yield* mac.provider.create(createMac());
+      // When: a Live view opens and its scope closes
+      const liveView = mac.provider.liveView;
+      yield* (
+        liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView("abc123def4567")
+      ).pipe(Effect.scoped);
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const last = lines.at(-1);
+      expect(last).toContain('rm -f "$L/$1"');
+      expect(last).toContain("kickstart -deactivate");
+    }).pipe(withRuntime(runtime));
+  });
 });
