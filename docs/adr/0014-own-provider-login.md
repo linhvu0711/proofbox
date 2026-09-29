@@ -4,7 +4,7 @@ The Caller logs in to their own Provider account with `proofbox auth login <prov
 
 Namespace has no public login for outside apps. The browser login uses two private calls that `nsc login` uses (`StartLogin` / `CompleteTenantLogin`, and `IssueTenantTokenFromSession` to trade the 30-day session for short tenant tokens). They live in one file, so a change on Namespace's side is a one-file fix. We chose not to ask Namespace before building it. If those calls break, the token way still works: `PROOFBOX_NAMESPACE_TOKEN`, made with `proofbox auth token namespace` (the public `CreateRevokableToken` call) while the browser login still worked, or with `nsc token create`.
 
-The Provider login holds the region new Sandboxes go to, but a Sandbox id carries its own region (`ns:us:abc123`), because each Namespace region sees only its own instances. A later login with another region still reaches older Sandboxes.
+The Provider login holds the region new Sandboxes go to, but a Sandbox id carries its own region (`ns:us:abc123`), because each Namespace region sees only its own instances. A later login with another region still reaches older Sandboxes. One Provider login works in every region; only the address differs. So `list` and `auth logout`, which start from no id, ask every region proofbox knows and show each Sandbox with its region.
 
 `auth logout` always removes the Provider login. It names the Sandboxes that still run, and when it cannot reach the Provider (no network, expired login) it says it could not check. Sandboxes left behind stop at their Deadline (ADR 0003).
 
