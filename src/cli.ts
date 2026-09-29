@@ -1,6 +1,10 @@
 import { Args, Command, Options } from "@effect/cli";
 import { Effect, Option } from "effect";
-import { loginToProvider, showAuthStatus } from "./commands/auth.ts";
+import {
+  loginToProvider,
+  logoutOfProvider,
+  showAuthStatus,
+} from "./commands/auth.ts";
 import { clickAt } from "./commands/click.ts";
 import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
@@ -282,8 +286,16 @@ const authLogin = Command.make(
 
 const authStatus = Command.make("status", {}, () => showAuthStatus);
 
+const authLogout = Command.make(
+  "logout",
+  {
+    provider: Args.text({ name: "provider" }),
+  },
+  ({ provider }) => logoutOfProvider(provider),
+);
+
 const auth = Command.make("auth").pipe(
-  Command.withSubcommands([authLogin, authStatus]),
+  Command.withSubcommands([authLogin, authStatus, authLogout]),
 );
 
 const upload = Command.make(

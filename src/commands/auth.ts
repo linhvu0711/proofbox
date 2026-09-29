@@ -1,5 +1,5 @@
 import { text } from "node:stream/consumers";
-import { Clock, Effect, Option, Redacted } from "effect";
+import { Clock, Effect, Either, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   ExternalLoginError,
@@ -122,3 +122,37 @@ export const showAuthStatus = Effect.gen(function* () {
     yield* output.out(`${provider.name}  ${line}\n`);
   }
 });
+
+// Logout lists the still-running Sandboxes as the result, removes the
+// saved slot whatever `list` gives, and says what it did on stderr.
+export const logoutOfProvider = (name: string) =>
+  Effect.gen(function* () {
+    const { provider } = yield* loginPartFor(name);
+    const output = yield* CliOutput;
+    const logins = yield* readLogins;
+    if (logins[provider.name] === undefined) {
+      yield* output.err(`No saved login for ${provider.name}.\n`);
+      return;
+    }
+    const listed = yield* Effect.either(provider.list);
+    const rest = { ...logins };
+    delete rest[provider.name];
+    yield* saveLogins(rest);
+    if (Either.isLeft(listed)) {
+      yield* output.err(
+        `Logged out of ${provider.name}. Could not check for running Sandboxes. Any left stop at their Deadline.\n`,
+      );
+      return;
+    }
+    const infos = listed.right;
+    const note =
+      infos.length === 0
+        ? ""
+        : infos.length === 1
+          ? " 1 Sandbox still runs. It stops at its Deadline."
+          : ` ${infos.length} Sandboxes still run. They stop at their Deadline.`;
+    yield* output.err(`Logged out of ${provider.name}.${note}\n`);
+    for (const info of infos) {
+      yield* output.out(`${provider.idPrefix}:${info.name}\n`);
+    }
+  });

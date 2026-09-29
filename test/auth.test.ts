@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 
@@ -353,6 +353,133 @@ describe("auth", () => {
         "namespace  logs in with nsc for now\n" +
         "fake  expired 2000-01-01T00:00:00Z. Run: proofbox auth login fake\n",
     );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout removes the login and names the Sandboxes that still run", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    const first = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    const second = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. 2 Sandboxes still run. They stop at their Deadline.\n",
+    );
+    expect(new Set(result.stdout.trim().split("\n"))).toEqual(
+      new Set([first.stdout.trim(), second.stdout.trim()]),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
+      ),
+    ).toEqual({});
+  });
+
+  it("auth logout names one Sandbox in the singular", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    const sandbox = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. 1 Sandbox still runs. It stops at its Deadline.\n",
+    );
+    expect(result.stdout).toBe(sandbox.stdout);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout with no Sandboxes only logs out", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}',
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake.\n");
+    expect(result.stdout).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout still removes the login when it cannot list Sandboxes", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}',
+    );
+    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
+    trackTempDir(dirname(file));
+    writeFileSync(file, "x");
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { HOME: home, PROOFBOX_FAKE_ROOT: file },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. Could not check for running Sandboxes. Any left stop at their Deadline.\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
+      ),
+    ).toEqual({});
+  });
+
+  it("auth logout with no saved login says so", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe("No saved login for fake.\n");
     expect(result.exitCode).toBe(0);
   });
 
