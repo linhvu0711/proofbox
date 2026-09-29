@@ -52,9 +52,12 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       [provider.memoryKills(id.name), push],
       { concurrency: 2 },
     );
-    // The kill count is container-wide; a new kill plus a clean or 137 exit
-    // means the command hid an OOM child (e.g. an early pipeline stage).
-    if (killsAfter > killsBefore && (exitCode === 0 || exitCode === 137)) {
+    // On Linux the kill count is container-wide, so a new kill plus a clean
+    // exit means the command hid an OOM child (e.g. an early pipeline
+    // stage). On a Mac it is host-wide and takes in other apps, so only a
+    // command that was itself killed (137) counts.
+    const killed = exitCode === 137 || (exitCode === 0 && info.os !== "macos");
+    if (killsAfter > killsBefore && killed) {
       const offered = provider.offers[info.os]?.sizes ?? "any";
       yield* output.err(`${outOfMemoryMessage(info.size, offered)}\n`);
       yield* output.setExitCode(OUT_OF_MEMORY_EXIT);
