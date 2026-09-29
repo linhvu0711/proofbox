@@ -9,16 +9,27 @@ export const renderEdit = (
     readonly height: number;
     readonly dir: string;
     readonly font: string;
+    // The screen in Action log units (points on a Mac); given, every clip
+    // is scaled to width x height and every ring is placed by it.
+    readonly screen?: { readonly width: number; readonly height: number };
   },
 ): string => {
   const size = Math.round(options.width / 40);
   const bar = 2 * size;
+  const scale =
+    options.screen === undefined
+      ? ""
+      : `,scale=${options.width}:${options.height}`;
+  const sx =
+    options.screen === undefined ? 1 : options.width / options.screen.width;
+  const sy =
+    options.screen === undefined ? 1 : options.height / options.screen.height;
   const chains = plan.clips.map((clip, index) => {
     if (clip.kind === "cut") {
       return (
         `movie=${options.dir}/raw.mkv:seek_point=${num(clip.from)}` +
         `,trim=start=${num(clip.from)}:end=${num(clip.to)}` +
-        `,setpts=PTS-STARTPTS,fps=30[c${index}]`
+        `,setpts=PTS-STARTPTS,fps=30${scale}[c${index}]`
       );
     }
     const at = Math.max(clip.at - 0.1, 0);
@@ -33,7 +44,7 @@ export const renderEdit = (
     return (
       `movie=${options.dir}/raw.mkv:seek_point=${num(at)}` +
       `,trim=start=${num(at)},setpts=PTS-STARTPTS,trim=end_frame=1` +
-      `,loop=loop=${frames}:size=1:start=0,setpts=N/30/TB${label}[c${index}]`
+      `,loop=loop=${frames}:size=1:start=0,setpts=N/30/TB${scale}${label}[c${index}]`
     );
   });
   const captions = plan.captions.map(
@@ -65,8 +76,8 @@ export const renderEdit = (
     const input = index === 0 ? "v" : `o${index - 1}`;
     const output = index === plan.rings.length - 1 ? "out" : `o${index}`;
     return (
-      `[${input}][r${index}]overlay=x=${ring.x - half}` +
-      `:y=${ring.y + bar - half}` +
+      `[${input}][r${index}]overlay=x=${Math.round(ring.x * sx) - half}` +
+      `:y=${Math.round(ring.y * sy) + bar - half}` +
       `:enable='between(t,${num(ring.from)},${num(ring.to)})'[${output}]`
     );
   });
