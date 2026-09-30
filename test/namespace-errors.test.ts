@@ -16,6 +16,9 @@ const CREATE = ["create", "--os", "linux", "--provider", "namespace"];
 const nsEnv = (ns: FakeNamespace) => ({
   PROOFBOX_NAMESPACE_TOKEN: TOKEN,
   PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+  // The fake keeps refusing, so the limit would otherwise take the full
+  // retry window.
+  PROOFBOX_NS_LIMIT_WAIT: "0s",
 });
 
 const nsFiles = (runtime: string) =>

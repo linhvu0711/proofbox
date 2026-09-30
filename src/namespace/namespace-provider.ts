@@ -20,7 +20,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { parseSpan } from "../deadline.ts";
+import { PACE_SPAN, parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -506,6 +506,13 @@ export const makeNamespaceProvider = (deps: {
     Config.withDefault("60s"),
   );
 
+  // A destroy frees the host's quota a moment after it returns, so a
+  // create right behind a delete can land on a full-looking account:
+  // give a plan-limit refusal this long to lift before reporting it.
+  const limitWait = Config.string("PROOFBOX_NS_LIMIT_WAIT").pipe(
+    Config.withDefault("45s"),
+  );
+
   const create = (req: {
     readonly os: Parameters<Provider["create"]>[0]["os"];
     readonly idle: Duration.Duration;
@@ -596,34 +603,50 @@ export const makeNamespaceProvider = (deps: {
           "PROOFBOX_NS_CREATE_TIMEOUT",
           spanText,
         ).pipe(Effect.mapError((error) => fail(error.message)));
+        const limitSpan = yield* parseSpan(
+          "PROOFBOX_NS_LIMIT_WAIT",
+          yield* limitWait.pipe(
+            Effect.mapError((error) => fail(error.message)),
+          ),
+          PACE_SPAN,
+        ).pipe(Effect.mapError((error) => fail(error.message)));
         const instanceId = yield* Effect.timeoutOption(
           Effect.gen(function* () {
             const nowMillis = yield* Clock.currentTimeMillis;
             deadlineAt = Math.floor(
               (nowMillis + durationSeconds * 1000) / 1000,
             );
-            const made = yield* api.create(region, {
-              shape: {
-                os: req.os,
-                machineArch: macos ? "arm64" : "amd64",
-                virtualCpu: size.cpu,
-                memoryMegabytes: size.ramGb * 1024,
-                selectors: macos
-                  ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
-                      name,
-                      value,
-                    }))
-                  : [],
-              },
-              labels: [
-                { name: "proofbox.os", value: req.os },
-                { name: "proofbox.region", value: region },
-                { name: "proofbox.size", value: formatSize(size) },
-                { name: "proofbox.create-token", value: createToken },
-              ],
-              deadline: new Date(nowMillis + durationSeconds * 1000),
-              authorizedSshKeys: [sshKey],
-            });
+            const made = yield* api
+              .create(region, {
+                shape: {
+                  os: req.os,
+                  machineArch: macos ? "arm64" : "amd64",
+                  virtualCpu: size.cpu,
+                  memoryMegabytes: size.ramGb * 1024,
+                  selectors: macos
+                    ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
+                        name,
+                        value,
+                      }))
+                    : [],
+                },
+                labels: [
+                  { name: "proofbox.os", value: req.os },
+                  { name: "proofbox.region", value: region },
+                  { name: "proofbox.size", value: formatSize(size) },
+                  { name: "proofbox.create-token", value: createToken },
+                ],
+                deadline: new Date(nowMillis + durationSeconds * 1000),
+                authorizedSshKeys: [sshKey],
+              })
+              .pipe(
+                Effect.retry({
+                  while: (error) => error instanceof ProviderLimitError,
+                  schedule: Schedule.spaced(Duration.seconds(5)).pipe(
+                    Schedule.upTo(limitSpan),
+                  ),
+                }),
+              );
             yield* api.wait(region, made);
             return made;
           }),

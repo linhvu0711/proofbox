@@ -16,7 +16,11 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
-import { NotLoggedInError, ProviderUnavailableError } from "../src/errors.ts";
+import {
+  NotLoggedInError,
+  ProviderLimitError,
+  ProviderUnavailableError,
+} from "../src/errors.ts";
 import type {
   ApiError,
   ApiLoginError,
@@ -41,12 +45,23 @@ const fakeApi = (
     readonly listError?: (
       region: string,
     ) => ApiError | ApiLoginError | undefined;
+    // An error the nth `create` call (1-based) fails with.
+    readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
+  let creates = 0;
   return {
     create: (region) =>
-      note(`create ${region}`).pipe(Effect.as("abc123def4567")),
+      Effect.gen(function* () {
+        creates += 1;
+        yield* note(`create ${region}`);
+        const error = options?.createError?.(creates);
+        if (error !== undefined) {
+          return yield* error;
+        }
+        return "abc123def4567";
+      }),
     wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
     destroy: (region, instanceId) => note(`destroy ${region} ${instanceId}`),
     extend: (region, instanceId) => note(`extend ${region} ${instanceId}`),
@@ -239,6 +254,7 @@ const makeProvider = (
     readonly listError?: (
       region: string,
     ) => ApiError | ApiLoginError | undefined;
+    readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     readonly region?: string;
   },
 ) =>
@@ -622,6 +638,39 @@ describe("Namespace Provider", () => {
           "list us",
           "list us",
           "destroy us abc123def4567",
+        ]);
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  // Live clock: the retry's 5 s pace has to actually elapse.
+  it.live(
+    "a create refused for the plan limit tries again while the quota frees",
+    () =>
+      Effect.gen(function* () {
+        // Given: a destroy frees quota a moment after it returns, so the
+        // first create can still land on a full-looking account
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          createError: (n) =>
+            n === 1
+              ? new ProviderLimitError({
+                  provider: "namespace",
+                  limit: "want 4 vCPU 7 GB RAM; used all of 6 vCPU 14 GB RAM",
+                })
+              : undefined,
+        });
+        // When
+        const info = yield* provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        });
+        // Then
+        expect(info.name).toBe("us:abc123def4567");
+        expect((yield* Ref.get(calls)).slice(0, 3)).toEqual([
+          "create us",
+          "create us",
+          "wait us abc123def4567",
         ]);
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
