@@ -503,6 +503,16 @@ export class NoTokenMakingError extends Data.TaggedError("NoTokenMakingError")<{
   }
 }
 
+export class BadTokenFlagError extends Data.TaggedError("BadTokenFlagError")<{
+  readonly flag: "name" | "expires";
+}> {
+  get message() {
+    return this.flag === "name"
+      ? "--name is required (for example ci)."
+      : "--expires is required (for example 30d, at most 1y).";
+  }
+}
+
 export class UnknownProviderError extends Data.TaggedError(
   "UnknownProviderError",
 )<{

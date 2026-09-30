@@ -1945,4 +1945,83 @@ describe("auth", () => {
     expect(result.stderr).toBe("fake cannot make tokens.\n");
     expect(result.exitCode).toBe(125);
   });
+
+  it("auth token namespace without --expires says it is required", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace --expires over one year gives the limit", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "366d"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace with an --expires it cannot read gives the limit", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30x"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace without --name says it is required", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--expires", "30d"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe("--name is required (for example ci).\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token docker says docker needs no login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "token", "docker"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe("docker needs no login.\n");
+    expect(result.exitCode).toBe(125);
+  });
 });

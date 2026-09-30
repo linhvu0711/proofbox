@@ -300,15 +300,10 @@ const authToken = Command.make(
   "token",
   {
     provider: Args.text({ name: "provider" }),
-    name: Options.text("name"),
-    expires: Options.text("expires"),
+    name: Options.text("name").pipe(Options.optional),
+    expires: Options.text("expires").pipe(Options.optional),
   },
-  ({ provider, name, expires }) =>
-    makeRobotToken({
-      provider,
-      name: Option.some(name),
-      expires: Option.some(expires),
-    }),
+  ({ provider, name, expires }) => makeRobotToken({ provider, name, expires }),
 );
 
 const auth = Command.make("auth").pipe(

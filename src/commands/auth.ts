@@ -13,6 +13,7 @@ import {
 import { CliOutput } from "../cli-output.ts";
 import { parseSpan, TOKEN_SPAN } from "../deadline.ts";
 import {
+  BadTokenFlagError,
   LoginExpiredError,
   LoginTimeoutError,
   NoLoginNeededError,
@@ -201,11 +202,26 @@ export const makeRobotToken = (options: {
       return yield* new NoTokenMakingError({ provider: provider.name });
     }
     const name = Option.getOrElse(options.name, () => "");
+    if (name === "") {
+      return yield* new BadTokenFlagError({ flag: "name" });
+    }
+    if (Option.isNone(options.expires)) {
+      return yield* new BadTokenFlagError({ flag: "expires" });
+    }
     const span = yield* parseSpan(
       "expires",
-      Option.getOrElse(options.expires, () => ""),
+      options.expires.value,
       TOKEN_SPAN,
+    ).pipe(
+      Effect.catchTag(
+        "BadSpanError",
+        () => new BadTokenFlagError({ flag: "expires" }),
+      ),
     );
+    // Namespace caps a token's life at one year (365 days).
+    if (Duration.toMillis(span) > 31_536_000_000) {
+      return yield* new BadTokenFlagError({ flag: "expires" });
+    }
     const logins = yield* readLogins.pipe(
       Effect.catchTag(
         "ConfigError",
