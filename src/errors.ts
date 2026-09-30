@@ -399,9 +399,10 @@ export class TokenPermissionError extends Data.TaggedError(
 )<{
   readonly provider: string;
   readonly call: string;
+  readonly need?: string;
 }> {
   get message() {
-    return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can manage instances.`;
+    return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
   }
   get reason() {
     return this.message;

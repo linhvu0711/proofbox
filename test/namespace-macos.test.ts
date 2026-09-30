@@ -21,7 +21,6 @@ import type {
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
-import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type {
   HostResult,
   Link,
@@ -71,10 +70,8 @@ const makeMac = (
         note(calls, `extend ${region} ${instanceId}`),
       list: (region) => note(calls, `list ${region}`).pipe(Effect.as([])),
       sshConfig: () => Effect.die("unused"),
+      ensureImageExpiry: () => Effect.die("unused"),
       checkToken: () => Effect.die("unused"),
-    };
-    const nsc: NscClient = {
-      ensureImageExpiry: () => Effect.void,
     };
     const reply = (line: string) => {
       const found = answer(line) ?? defaultAnswer(line) ?? {};
@@ -126,7 +123,6 @@ const makeMac = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      nsc,
       openLink: () => Effect.succeed(link),
       forward: (ref, port) =>
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(

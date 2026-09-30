@@ -74,6 +74,7 @@ describe("ssh link", () => {
           extend: () => Effect.die("unused"),
           list: () => Effect.die("unused"),
           checkToken: () => Effect.die("unused"),
+          ensureImageExpiry: () => Effect.die("unused"),
           sshConfig: (region, instanceId) =>
             Ref.update(asked, (all) => [
               ...all,
@@ -147,6 +148,7 @@ describe("ssh link", () => {
           extend: () => Effect.die("unused"),
           list: () => Effect.die("unused"),
           checkToken: () => Effect.die("unused"),
+          ensureImageExpiry: () => Effect.die("unused"),
           sshConfig: (region, instanceId) =>
             Ref.update(asked, (all) => [
               ...all,
