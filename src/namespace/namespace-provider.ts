@@ -47,8 +47,9 @@ import {
   type Provider,
   type ProviderLogin,
   SandboxInfo,
+  type SandboxRef,
 } from "../provider.ts";
-import { makeSandboxName } from "../sandbox-id.ts";
+import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
@@ -62,13 +63,9 @@ import {
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
+import { completeLogin, startLogin } from "./namespace-signin.ts";
 import type { NscClient } from "./nsc-client.ts";
-import {
-  DEFAULT_REGION,
-  hostName,
-  KNOWN_REGIONS,
-  splitHostName,
-} from "./regions.ts";
+import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import {
   pullSnapshot,
   pushSnapshot,
@@ -123,21 +120,23 @@ export const makeNamespaceProvider = (deps: {
   const forward = deps.forward;
   const fail = (reason: string) =>
     new ProviderError({ provider: "namespace", reason });
-  const gone = (name: string) => new SandboxGoneError({ id: `ns:${name}` });
-  const brandFor = (name: string) => ({
+  const sandboxId = (ref: SandboxRef) =>
+    formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
+  const gone = (ref: SandboxRef) =>
+    new SandboxGoneError({ id: sandboxId(ref) });
+  const brandFor = (ref: SandboxRef) => ({
     provider: "namespace",
-    id: () => `ns:${name}`,
+    id: () => sandboxId(ref),
   });
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
-  // A `:` is not legal in a container name, so the container takes only
-  // the instance part of `<region>:<instanceId>`.
-  const containerOf = (name: string) =>
-    `proofbox-${splitHostName(name).instanceId.slice(0, 6)}`;
+  const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
+  // The container takes the first six characters of the instance id.
+  const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
   // The host's OS, written at create; a host made before macOS existed has
   // no file and is Linux.
-  const osOf = (name: string) =>
+  const osOf = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      const file = (yield* paths(name)).os;
+      const file = (yield* refPaths(ref)).os;
       const text = yield* Effect.promise(() =>
         readFile(file, "utf8").catch(() => "linux"),
       );
@@ -146,24 +145,25 @@ export const makeNamespaceProvider = (deps: {
 
   // Link bring-up can outlast a short host Deadline, so every open first
   // bumps the host's own lifetime — detached, since nsc needs no link.
-  const openLink = (name: string, owner: "cli" | "keeper") =>
+  const openLink = (ref: SandboxRef, owner: "cli" | "keeper") =>
     Effect.gen(function* () {
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
-        name,
+        ref.region ?? "",
+        ref.name,
         "120",
       ]);
-      return yield* deps.openLink(name, yield* paths(name), owner);
+      return yield* deps.openLink(ref, yield* refPaths(ref), owner);
     });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
   // call so the Keeper's ControlMaster path stays the Keeper's alone.
   const withCliLink = <A, E>(
-    name: string,
+    ref: SandboxRef,
     use: (link: Link) => Effect.Effect<A, E>,
   ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const link = yield* openLink(name, "cli");
+        const link = yield* openLink(ref, "cli");
         return yield* use(link);
       }),
     );
@@ -218,9 +218,9 @@ export const makeNamespaceProvider = (deps: {
       return tag;
     });
 
-  const getWith = (link: Link, name: string) =>
+  const getWith = (link: Link, ref: SandboxRef) =>
     Effect.gen(function* () {
-      const container = containerOf(name);
+      const container = containerOf(ref);
       const result = yield* link.run(
         `docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}' ${container} && docker exec -u root ${container} cat /run/proofbox/deadline`,
       );
@@ -233,7 +233,7 @@ export const makeNamespaceProvider = (deps: {
         stderr.includes("is not running");
       if (result.exitCode !== 0 || missing) {
         if (missing) {
-          return yield* gone(name);
+          return yield* gone(ref);
         }
         return yield* fail(
           `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
@@ -247,7 +247,7 @@ export const makeNamespaceProvider = (deps: {
         );
       }
       if (first.slice(separator + 1).trim() !== "true") {
-        return yield* gone(name);
+        return yield* gone(ref);
       }
       const seconds = Number(result.stdout.trim().split("\n").pop());
       if (!Number.isFinite(seconds)) {
@@ -260,13 +260,14 @@ export const makeNamespaceProvider = (deps: {
         catch: (cause) => fail(describe(cause)),
       });
       const info = yield* sandboxInfoFromLabels(
-        brandFor(name),
-        splitHostName(name).instanceId.slice(0, 6),
+        brandFor(ref),
+        ref.name.slice(0, 6),
         labels,
         seconds,
       );
       return new SandboxInfo({
-        name,
+        name: ref.name,
+        region: ref.region,
         os: info.os,
         createdAt: info.createdAt,
         idleSeconds: info.idleSeconds,
@@ -277,17 +278,17 @@ export const makeNamespaceProvider = (deps: {
       });
     });
 
-  const getAs = (os: Os, name: string) =>
-    withCliLink(name, (link) =>
-      os === "macos" ? readMac(link, name) : getWith(link, name),
+  const getAs = (os: Os, ref: SandboxRef) =>
+    withCliLink(ref, (link) =>
+      os === "macos" ? readMac(link, ref) : getWith(link, ref),
     );
 
-  const get = (name: string) =>
+  const get = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      return yield* getAs(yield* osOf(name), name);
+      return yield* getAs(yield* osOf(ref), ref);
     });
 
-  const extend = (name: string, deadline: Date) =>
+  const extend = (ref: SandboxRef, deadline: Date) =>
     Effect.gen(function* () {
       const seconds = Math.ceil(
         (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
@@ -295,7 +296,7 @@ export const makeNamespaceProvider = (deps: {
       // The detached host-expiry destroys the host at this instant: the
       // record lands before the push so a link that is slow or dead cannot
       // leave the host living past the Sandbox's Deadline.
-      const dir = yield* paths(name);
+      const dir = yield* refPaths(ref);
       yield* Effect.promise(() =>
         writeFile(dir.deadline, String(Math.ceil(deadline.getTime() / 1000)), {
           mode: 0o600,
@@ -304,20 +305,21 @@ export const makeNamespaceProvider = (deps: {
       // The host side first and detached: the nsc call needs no link, and the
       // link write below can spend a while in bring-up.
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
-        name,
+        ref.region ?? "",
+        ref.name,
         String(seconds),
       ]);
-      const os = yield* osOf(name);
-      const written = yield* withCliLink(name, (link) =>
+      const os = yield* osOf(ref);
+      const written = yield* withCliLink(ref, (link) =>
         os === "macos"
           ? writeMacDeadline(link, seconds)
           : link.run(
-              `docker exec -u root ${containerOf(name)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
+              `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
             ),
       );
       if (written.exitCode !== 0) {
         if (written.stderr.toLowerCase().includes("no such container")) {
-          return yield* gone(name);
+          return yield* gone(ref);
         }
         return yield* fail(
           `could not write the Deadline: ${written.stderr.trim()}`,
@@ -406,7 +408,9 @@ export const makeNamespaceProvider = (deps: {
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
     const alive = new Set(
-      live.map((host) => hostName(host.region, host.instance.id)),
+      live.map((host) =>
+        fileStem({ name: host.instance.id, region: host.region }),
+      ),
     );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
@@ -452,7 +456,7 @@ export const makeNamespaceProvider = (deps: {
     const infos = yield* Effect.forEach(
       live,
       ({ os, region, instance }) =>
-        getAs(os, hostName(region, instance.id)).pipe(
+        getAs(os, { name: instance.id, region }).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
         ),
       { discard: false },
@@ -468,9 +472,10 @@ export const makeNamespaceProvider = (deps: {
     ),
   );
 
-  const del = (name: string) =>
+  const del = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      const { region, instanceId } = splitHostName(name);
+      const region = ref.region ?? "";
+      const instanceId = ref.name;
       const hosts = yield* listHostsFor(region).pipe(
         Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
       );
@@ -483,7 +488,7 @@ export const makeNamespaceProvider = (deps: {
       // Hosts that expire on their own never reach destroy, so the local
       // keypair and Max-life cap are removed whether or not the host is
       // still listed.
-      const dir = yield* paths(name);
+      const dir = yield* refPaths(ref);
       yield* Effect.promise(() =>
         Promise.all([
           rm(dir.key, { force: true }).catch(() => {}),
@@ -541,7 +546,7 @@ export const makeNamespaceProvider = (deps: {
       // Whatever part of the make is left — key files, the host — leaves
       // nothing behind on a failed create.
       const createToken = makeSandboxName();
-      let hostId: string | undefined;
+      let hostRef: SandboxRef | undefined;
       let deadlineAt = 0;
       const cleanup = Effect.gen(function* () {
         yield* Effect.promise(() =>
@@ -550,8 +555,8 @@ export const makeNamespaceProvider = (deps: {
             rm(`${keyBase}.pub`, { force: true }).catch(() => {}),
           ]).then(() => {}),
         );
-        if (hostId !== undefined) {
-          const hostPaths = yield* paths(hostId);
+        if (hostRef !== undefined) {
+          const hostPaths = yield* refPaths(hostRef);
           yield* Effect.promise(() =>
             Promise.all([
               rm(hostPaths.key, { force: true }).catch(() => {}),
@@ -560,9 +565,8 @@ export const makeNamespaceProvider = (deps: {
               rm(hostPaths.os, { force: true }).catch(() => {}),
             ]).then(() => {}),
           );
-          const host = splitHostName(hostId);
           yield* api
-            .destroy(host.region, host.instanceId)
+            .destroy(hostRef.region ?? "", hostRef.name)
             .pipe(Effect.orElseSucceed(() => {}));
         }
       });
@@ -692,14 +696,14 @@ export const makeNamespaceProvider = (deps: {
                 }),
           ),
         );
-        hostId = hostName(region, instanceId);
-        const id = hostId;
+        const ref: SandboxRef = { name: instanceId, region };
+        hostRef = ref;
         if (maxLifeSeconds <= Math.floor(Date.now() / 1000)) {
           return yield* fail(
             "making the host took the whole Max life; try a larger --max-life",
           );
         }
-        const hostPaths = yield* paths(id);
+        const hostPaths = yield* refPaths(ref);
         yield* Effect.tryPromise({
           try: async () => {
             await rename(keyBase, hostPaths.key);
@@ -719,7 +723,8 @@ export const makeNamespaceProvider = (deps: {
         // it can sit later than the Max life; a detached process destroys
         // the host at the absolute Max life.
         yield* deps.spawnDetached("namespace", "namespace/expire-main", [
-          id,
+          region,
+          instanceId,
           String(maxLifeSeconds),
         ]);
         // Provisioning can outlast the create duration (a cold image build):
@@ -748,10 +753,10 @@ export const makeNamespaceProvider = (deps: {
             Schedule.spaced(Duration.seconds(15)),
           ),
         );
-        const link = yield* deps.openLink(id, hostPaths, "cli");
+        const link = yield* deps.openLink(ref, hostPaths, "cli");
         if (macos) {
           return yield* prepareMac(link, {
-            id,
+            ref,
             idle: req.idle,
             maxLifeAt: new Date(maxLifeSeconds * 1000),
             size,
@@ -783,18 +788,18 @@ export const makeNamespaceProvider = (deps: {
               ? []
               : ["--label", `proofbox.snapshot=${req.snapshot}`]),
           ],
-          brand: brandFor(id),
+          brand: brandFor(ref),
         });
         const info = yield* inner.create({
           ...req,
           size,
-          name: splitHostName(id).instanceId.slice(0, 6),
+          name: instanceId.slice(0, 6),
           maxLifeAt: new Date(maxLifeSeconds * 1000),
         });
         // The Base image must hide the host's workload token from user code:
         // neither the token file nor the link-local token service may answer.
         const docker = deps.dockerFor(link);
-        const container = containerOf(id);
+        const container = containerOf(ref);
         yield* progress.step(
           "checking the Namespace token is out of reach",
           Effect.gen(function* () {
@@ -805,7 +810,7 @@ export const makeNamespaceProvider = (deps: {
             ]);
             if (file.exitCode !== 0) {
               return yield* new TokenExposedError({
-                id: `ns:${id}`,
+                id: sandboxId(ref),
                 what: "the token file",
               });
             }
@@ -816,14 +821,15 @@ export const makeNamespaceProvider = (deps: {
             ]);
             if (service.exitCode !== 0) {
               return yield* new TokenExposedError({
-                id: `ns:${id}`,
+                id: sandboxId(ref),
                 what: "the token service",
               });
             }
           }),
         );
         return new SandboxInfo({
-          name: id,
+          name: ref.name,
+          region: ref.region,
           os: info.os,
           createdAt: info.createdAt,
           idleSeconds: info.idleSeconds,
@@ -843,16 +849,16 @@ export const makeNamespaceProvider = (deps: {
       );
     }).pipe(Effect.scoped);
 
-  const connect = (name: string) =>
+  const connect = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      const link = yield* openLink(name, "keeper");
-      if ((yield* osOf(name)) === "macos") {
-        yield* readMac(link, name);
+      const link = yield* openLink(ref, "keeper");
+      if ((yield* osOf(ref)) === "macos") {
+        yield* readMac(link, ref);
         return { exec: macExec(link) };
       }
-      yield* getWith(link, name);
+      yield* getWith(link, ref);
       const docker = deps.dockerFor(link);
-      const container = containerOf(name);
+      const container = containerOf(ref);
       return {
         exec: (
           argv: ReadonlyArray<string>,
@@ -861,16 +867,16 @@ export const makeNamespaceProvider = (deps: {
       };
     });
 
-  const memoryKills = (name: string) =>
+  const memoryKills = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      if ((yield* osOf(name)) === "macos") {
-        return yield* withCliLink(name, readMemoryKills);
+      if ((yield* osOf(ref)) === "macos") {
+        return yield* withCliLink(ref, readMemoryKills);
       }
-      yield* get(name);
-      const read = yield* withCliLink(name, (link) =>
+      yield* get(ref);
+      const read = yield* withCliLink(ref, (link) =>
         deps
           .dockerFor(link)
-          .execText(containerOf(name), "root", [
+          .execText(containerOf(ref), "root", [
             "sh",
             "-c",
             "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
@@ -880,10 +886,10 @@ export const makeNamespaceProvider = (deps: {
       return match === null ? 0 : Number(match[1]);
     });
 
-  const liveView = (name: string) =>
+  const liveView = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      if ((yield* osOf(name)) === "macos") {
-        const link = yield* openLink(name, "cli");
+      if ((yield* osOf(ref)) === "macos") {
+        const link = yield* openLink(ref, "cli");
         // The candidate goes on stdin, never the command line. As on
         // Linux, a lock serializes live-view starts, the stored password
         // is reused when set — one password per Mac — and each viewer
@@ -932,16 +938,16 @@ export const makeNamespaceProvider = (deps: {
             )
             .pipe(Effect.ignore),
         );
-        const live = yield* forward(name, 5900);
+        const live = yield* forward(ref, 5900);
         return {
           address: `127.0.0.1:${live.port}`,
           password,
           gone: live.gone,
         };
       }
-      const link = yield* openLink(name, "cli");
+      const link = yield* openLink(ref, "cli");
       const docker = deps.dockerFor(link);
-      const container = containerOf(name);
+      const container = containerOf(ref);
       // The marker doubles as this session's slot and as the candidate
       // password; the flock'd script reuses an open session's password when
       // one is set, otherwise stores the candidate it reads from stdin —
@@ -1002,7 +1008,7 @@ export const makeNamespaceProvider = (deps: {
           ])
           .pipe(Effect.ignore),
       );
-      const live = yield* forward(name, 5900);
+      const live = yield* forward(ref, 5900);
       return {
         address: `127.0.0.1:${live.port}`,
         password,
@@ -1012,13 +1018,13 @@ export const makeNamespaceProvider = (deps: {
 
   // The Snapshot holds the container's disk; the Secrets live in a tmpfs,
   // which docker commit leaves out.
-  const saveSnapshot = (name: string, fingerprint: string) =>
+  const saveSnapshot = (ref: SandboxRef, fingerprint: string) =>
     Effect.gen(function* () {
       const progress = yield* Progress;
-      yield* withCliLink(name, (link) =>
+      yield* withCliLink(ref, (link) =>
         Effect.gen(function* () {
           const tag = snapshotTag(yield* readTenant(link), fingerprint);
-          yield* pushSnapshot(link, containerOf(name), tag);
+          yield* pushSnapshot(link, containerOf(ref), tag);
           yield* keepSnapshot(link, tag, progress);
         }),
       );
@@ -1029,7 +1035,7 @@ export const makeNamespaceProvider = (deps: {
     idPrefix: "ns",
     login: {
       _tag: "Ways",
-      ways: new Set(["token"]),
+      browser: { start: startLogin(), complete: completeLogin },
       checkToken: api.checkToken,
     },
     regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },

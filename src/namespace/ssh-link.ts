@@ -20,9 +20,9 @@ import {
   SandboxGoneError,
 } from "../errors.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
-import type { ExecEvent, ExecOptions } from "../provider.ts";
+import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
-import { splitHostName } from "./regions.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -48,7 +48,7 @@ export interface Link {
 export type LinkOwner = "keeper" | "cli";
 
 export type OpenLink = (
-  id: string,
+  ref: SandboxRef,
   paths: KeeperPaths,
   owner: LinkOwner,
 ) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
@@ -139,7 +139,7 @@ export const makeOpenLink = (
       Effect.asVoid,
     );
 
-  return (id, paths, owner) =>
+  return (ref, paths, owner) =>
     Effect.gen(function* () {
       const runWith = (ssh: ReadonlyArray<string>) => (commandLine: string) =>
         Effect.scoped(
@@ -197,7 +197,8 @@ export const makeOpenLink = (
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
       // handshake.
-      const { region, instanceId } = splitHostName(id);
+      const region = ref.region ?? "";
+      const instanceId = ref.name;
       const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
       const targetFile = `${paths.control.replace(/\.ctl$/, "")}.sshtarget`;
       // A warm open rides the Keeper's ControlMaster; the stored target
@@ -375,7 +376,15 @@ export const makeOpenLink = (
                 ): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
                   instances.some((instance) => instance.id === instanceId)
                     ? Effect.fail(error)
-                    : Effect.fail(new SandboxGoneError({ id: `ns:${id}` })),
+                    : Effect.fail(
+                        new SandboxGoneError({
+                          id: formatSandboxId({
+                            provider: "ns",
+                            region: ref.region,
+                            name: ref.name,
+                          }),
+                        }),
+                      ),
               ),
             ),
         ),
@@ -400,9 +409,9 @@ export const makeOpenLink = (
 // not cover, and it dies with `websocket: bad handshake` (verified live
 // 2026-09-30). Scoped: the forward lives until the scope closes; `gone`
 // resolves with the failure if the ssh process exits after the port is
-// up. `name` is the full host name, `<region>:<instanceId>`.
+// up. `ref` names the Sandbox the forward serves.
 export type SshForward = (
-  name: string,
+  ref: SandboxRef,
   port: number,
 ) => Effect.Effect<
   {
@@ -420,12 +429,13 @@ export const makeSshForward = (
   let seq = 0;
   const fail = (reason: string) =>
     new ProviderError({ provider: "namespace", reason });
-  return (name, port) =>
+  return (ref, port) =>
     Effect.gen(function* () {
-      const { region, instanceId } = splitHostName(name);
+      const region = ref.region ?? "";
+      const instanceId = ref.name;
       const cfg = yield* api.sshConfig(region, instanceId);
       const target = `${cfg.username}@${cfg.endpoint}`;
-      const dir = (yield* keeperPaths({ provider: "ns", name })).dir;
+      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name })).dir;
       const pid = process.pid;
       const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
       const hosts = `${key}.known-hosts`;
@@ -567,7 +577,15 @@ export const makeSshForward = (
                             `the Live view's forward died: ${tail(text, 3)}`,
                           ),
                         )
-                      : Effect.fail(new SandboxGoneError({ id: `ns:${name}` })),
+                      : Effect.fail(
+                          new SandboxGoneError({
+                            id: formatSandboxId({
+                              provider: "ns",
+                              region: ref.region,
+                              name: ref.name,
+                            }),
+                          }),
+                        ),
                 ),
               ),
           ),

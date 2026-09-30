@@ -11,7 +11,7 @@ import {
   type TokenPermissionError,
   type TokenRejectedError,
 } from "./errors.ts";
-import type { Os, Provider, SandboxInfo } from "./provider.ts";
+import type { Os, Provider, SandboxInfo, SandboxRef } from "./provider.ts";
 
 export const idleDefault = (os: Os): Duration.Duration =>
   os === "macos" ? Duration.minutes(5) : Duration.minutes(15);
@@ -99,7 +99,7 @@ export const nextDeadline = (options: {
 // One push of the Sandbox Deadline: idle from `now`, capped at max life.
 export const deadlinePush = (
   provider: Provider,
-  name: string,
+  sandbox: SandboxRef,
   info: SandboxInfo,
 ): Effect.Effect<
   void,
@@ -115,7 +115,7 @@ export const deadlinePush = (
 > =>
   Effect.flatMap(Clock.currentTimeMillis, (millis) =>
     provider.extend(
-      name,
+      sandbox,
       nextDeadline({
         now: new Date(millis),
         idle: Duration.seconds(info.idleSeconds),
@@ -125,7 +125,7 @@ export const deadlinePush = (
   );
 
 export const withDeadlinePush =
-  (provider: Provider, name: string, info: SandboxInfo) =>
+  (provider: Provider, sandbox: SandboxRef, info: SandboxInfo) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
@@ -144,7 +144,7 @@ export const withDeadlinePush =
   > =>
     Effect.gen(function* () {
       const idle = Duration.seconds(info.idleSeconds);
-      const push = deadlinePush(provider, name, info);
+      const push = deadlinePush(provider, sandbox, info);
       yield* push;
       // The repeated push never completes on its own, so the winner is always
       // the raced effect's value.

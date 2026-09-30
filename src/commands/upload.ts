@@ -13,7 +13,7 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
-import { resolveSandboxId } from "../sandbox-id.ts";
+import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import {
   diffHashList,
   HashList,
@@ -124,18 +124,18 @@ export const sendWorkFolder = (
     const progress = yield* Progress;
     const output = yield* CliOutput;
     const keeper = yield* KeeperClient;
-    const info = yield* provider.get(id.name);
+    const info = yield* provider.get(id);
     const listPath = hashListPath(provider.stateDir(id.name));
     const diff = yield* progress.step(
       "uploading Work folder",
       withDeadlinePush(
         provider,
-        id.name,
+        id,
         info,
       )(
         withUploadLock(
           id.prefix,
-          id.name,
+          fileStem(id),
           Effect.gen(function* () {
             const old = yield* runInSandbox(keeper, rawId, [
               "cat",

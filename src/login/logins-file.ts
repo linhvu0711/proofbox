@@ -12,13 +12,24 @@ import { Config, Duration, Effect, Schema } from "effect";
 import { BadLoginsFileError, LoginsBusyError } from "../errors.ts";
 import { withFileLock } from "../file-lock.ts";
 
-export const SavedLogin = Schema.Struct({
-  way: Schema.Literal("token"),
-  token: Schema.Redacted(Schema.String),
-  account: Schema.optional(Schema.String),
-  expiresAt: Schema.optional(Schema.Date),
-  region: Schema.optional(Schema.String),
-});
+export const SavedLogin = Schema.Union(
+  // The token way: the token itself, saved verbatim.
+  Schema.Struct({
+    way: Schema.Literal("token"),
+    token: Schema.Redacted(Schema.String),
+    account: Schema.optional(Schema.String),
+    expiresAt: Schema.optional(Schema.Date),
+    region: Schema.optional(Schema.String),
+  }),
+  // The browser way: the session the login made and what it was for.
+  Schema.Struct({
+    way: Schema.Literal("browser"),
+    session: Schema.Redacted(Schema.String),
+    account: Schema.String,
+    expiresAt: Schema.Date,
+    region: Schema.optional(Schema.String),
+  }),
+);
 export type SavedLogin = typeof SavedLogin.Type;
 
 // One slot per Provider, keyed by Provider name.

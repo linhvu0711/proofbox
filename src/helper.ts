@@ -22,7 +22,8 @@ export interface HelperTable {
 const resolveHelper = (rawId: string, table: HelperTable, outcome: string) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const { provider, name } = yield* resolveSandboxId(rawId, providers);
+    const id = yield* resolveSandboxId(rawId, providers);
+    const provider = id.provider;
     const hasDesktop = Object.values(provider.offers).some((offer) =>
       offer.features.has("desktop"),
     );
@@ -33,7 +34,7 @@ const resolveHelper = (rawId: string, table: HelperTable, outcome: string) =>
         outcome,
       });
     }
-    const info = yield* provider.get(name);
+    const info = yield* provider.get(id);
     const features = provider.offers[info.os]?.features;
     if (features === undefined || !features.has("desktop")) {
       return yield* lacksFeature(provider, info.os, "desktop", outcome);
@@ -45,7 +46,7 @@ const resolveHelper = (rawId: string, table: HelperTable, outcome: string) =>
     if (helper === undefined) {
       return yield* lacksFeature(provider, info.os, table.feature, outcome);
     }
-    return { name, provider, info, helper };
+    return { id, provider, info, helper };
   });
 
 export const runHelper = (
@@ -58,7 +59,7 @@ export const runHelper = (
   },
 ) =>
   Effect.gen(function* () {
-    const { name, provider, info, helper } = yield* resolveHelper(
+    const { id, provider, info, helper } = yield* resolveHelper(
       rawId,
       table,
       options.outcome,
@@ -66,7 +67,7 @@ export const runHelper = (
     const keeper = yield* KeeperClient;
     const collected = yield* withDeadlinePush(
       provider,
-      name,
+      id,
       info,
     )(
       Effect.gen(function* () {
@@ -115,7 +116,7 @@ export const fetchHelper = (
   options: { readonly outcome: string },
 ) =>
   Effect.gen(function* () {
-    const { name, provider, info, helper } = yield* resolveHelper(
+    const { id, provider, info, helper } = yield* resolveHelper(
       rawId,
       table,
       options.outcome,
@@ -123,7 +124,7 @@ export const fetchHelper = (
     const keeper = yield* KeeperClient;
     const collected = yield* withDeadlinePush(
       provider,
-      name,
+      id,
       info,
     )(
       Effect.gen(function* () {

@@ -57,9 +57,27 @@ export interface ProviderAccount {
   readonly expiresAt?: Date;
 }
 
+// A Provider with a browser login: `start` opens the wait and names the
+// login page's URL, `complete` holds until the page was clicked and
+// hands the Provider login it made.
+export interface BrowserWay {
+  readonly start: Effect.Effect<
+    { readonly loginId: string; readonly url: string },
+    ProviderUnavailableError | ProviderError
+  >;
+  readonly complete: (loginId: string) => Effect.Effect<
+    {
+      readonly session: Redacted.Redacted<string>;
+      readonly account: string;
+      readonly expiresAt: Date;
+    },
+    ProviderUnavailableError | ProviderError
+  >;
+}
+
 export interface LoginWays {
   readonly _tag: "Ways";
-  readonly ways: ReadonlySet<LoginWay>;
+  readonly browser?: BrowserWay;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,
@@ -82,11 +100,23 @@ export interface LoginInHand {
 
 export type ProviderLogin = Effect.Effect<
   LoginInHand,
-  NotLoggedInError | LoginExpiredError | BadLoginsFileError
+  | NotLoggedInError
+  | LoginExpiredError
+  | BadLoginsFileError
+  | ProviderUnavailableError
+  | ProviderError
 >;
+
+// What a Provider's calls name a Sandbox with: its name and, on a Provider
+// with regions, the region it lives in.
+export interface SandboxRef {
+  readonly name: string;
+  readonly region: string | undefined;
+}
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   name: Schema.String,
+  region: Schema.optional(Schema.String),
   os: Os,
   createdAt: Schema.Date,
   idleSeconds: IdleSeconds,
@@ -154,7 +184,7 @@ export interface Provider {
     Progress
   >;
   readonly extend: (
-    name: string,
+    sandbox: SandboxRef,
     deadline: Date,
   ) => Effect.Effect<
     void,
@@ -170,7 +200,7 @@ export interface Provider {
   >;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
-  readonly liveView?: (name: string) => Effect.Effect<
+  readonly liveView?: (sandbox: SandboxRef) => Effect.Effect<
     {
       readonly address: string;
       readonly password: string;
@@ -200,7 +230,7 @@ export interface Provider {
   readonly snapshots?: {
     readonly baseVersion: Effect.Effect<string, ProviderError>;
     readonly save: (
-      name: string,
+      sandbox: SandboxRef,
       fingerprint: string,
     ) => Effect.Effect<
       void,
@@ -217,7 +247,7 @@ export interface Provider {
     >;
   };
   readonly get: (
-    name: string,
+    sandbox: SandboxRef,
   ) => Effect.Effect<
     SandboxInfo,
     | BadLoginsFileError
@@ -242,7 +272,7 @@ export interface Provider {
     | BadLoginsFileError
   >;
   readonly delete: (
-    name: string,
+    sandbox: SandboxRef,
   ) => Effect.Effect<
     "deleted" | "gone",
     | ProviderError
@@ -258,7 +288,7 @@ export interface Provider {
   readonly stateDir: (name: string) => string;
   readonly secretsDir: (name: string, os: Os) => string;
   readonly connect: (
-    name: string,
+    sandbox: SandboxRef,
   ) => Effect.Effect<
     Connection,
     | BadLoginsFileError
@@ -273,7 +303,7 @@ export interface Provider {
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
   readonly memoryKills: (
-    name: string,
+    sandbox: SandboxRef,
   ) => Effect.Effect<
     number,
     | BadLoginsFileError

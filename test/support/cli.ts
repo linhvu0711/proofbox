@@ -16,6 +16,8 @@ export interface CliEnv {
     readonly DOCKER_HOST?: string;
     readonly PROOFBOX_NSC?: string;
     readonly PROOFBOX_NAMESPACE_COMPUTE_URL?: string;
+    readonly PROOFBOX_NAMESPACE_IAM_URL?: string;
+    readonly PROOFBOX_OPEN?: string;
   };
 }
 
@@ -54,6 +56,8 @@ export const makeEnv = (
         : {
             PROOFBOX_NSC: "/nonexistent/proofbox-test-nsc",
             PROOFBOX_NAMESPACE_COMPUTE_URL: "http://127.0.0.1:9/{region}",
+            PROOFBOX_NAMESPACE_IAM_URL: "http://127.0.0.1:9",
+            PROOFBOX_OPEN: "/nonexistent/proofbox-test-open",
           }),
     },
   };

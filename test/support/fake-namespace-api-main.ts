@@ -1,10 +1,13 @@
 // Standalone fake Compute API for the UI videos: `node
 // fake-namespace-api-main.ts <mode> <port>`. A mode answers every call
 // one way: "capacity" refuses a create on capacity, "denied" refuses
-// every call on permission, "rejected" rejects every token.
+// every call on permission, "rejected" rejects every token, "login"
+// plays the sign-in calls and the login page and answers `{}` to
+// every Compute call.
 import {
   type FakeNamespaceAnswer,
   type FakeNamespaceCall,
+  fakeSignin,
   startFakeNamespace,
 } from "./fake-namespace-api.ts";
 
@@ -29,5 +32,9 @@ const answer = (call: FakeNamespaceCall): FakeNamespaceAnswer => {
   return { json: {} };
 };
 
-const server = await startFakeNamespace(answer, port);
+const server = await startFakeNamespace(
+  answer,
+  port,
+  mode === "login" ? fakeSignin() : undefined,
+);
 console.log(`fake-namespace-api ${mode} on ${server.url}`);

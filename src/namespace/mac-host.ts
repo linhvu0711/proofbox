@@ -12,7 +12,8 @@ import {
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import { type ExecOptions, SandboxInfo } from "../provider.ts";
+import { type ExecOptions, SandboxInfo, type SandboxRef } from "../provider.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
@@ -40,9 +41,12 @@ const MEMORY_KILLS = "/var/log/proofbox-memory-kills.log";
 const fail = (reason: string) =>
   new ProviderError({ provider: "namespace", reason });
 
-const brandFor = (name: string) => ({
+const sandboxId = (ref: SandboxRef) =>
+  formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
+
+const brandFor = (ref: SandboxRef) => ({
   provider: "namespace",
-  id: () => `ns:${name}`,
+  id: () => sandboxId(ref),
 });
 
 // Runs one host step; a non-zero exit fails with the step's words.
@@ -58,7 +62,7 @@ const step = (link: Link, what: string, commandLine: string) =>
   });
 
 interface MacRequest {
-  readonly id: string;
+  readonly ref: SandboxRef;
   readonly idle: Duration.Duration;
   readonly maxLifeAt: Date;
   readonly size: Size;
@@ -86,7 +90,7 @@ const writeMacState = (link: Link, req: MacRequest, createdAt: Date) =>
       ) / 1000,
     );
     const labels = JSON.stringify({
-      "proofbox.name": req.id,
+      "proofbox.name": req.ref.name,
       "proofbox.os": "macos",
       "proofbox.created-at": createdAt.toISOString(),
       "proofbox.idle-seconds": String(Duration.toSeconds(req.idle)),
@@ -99,7 +103,8 @@ const writeMacState = (link: Link, req: MacRequest, createdAt: Date) =>
       `printf '%s\\n' ${shellJoin([labels])} > ${LABELS} && printf '%s\\n' ${deadline} > ${DEADLINE}`,
     );
     return new SandboxInfo({
-      name: req.id,
+      name: req.ref.name,
+      region: req.ref.region,
       os: "macos",
       createdAt,
       idleSeconds: Duration.toSeconds(req.idle),
@@ -136,7 +141,7 @@ const sendFile = (link: Link, local: string, remote: string) =>
 // The macOS Tool bundle: downloads come through Namespace's cache with the
 // workload token (so this runs before the token goes), proofbox's own files
 // over the link; then every file is hashed on the Mac. No Homebrew.
-const installTools = (link: Link, id: string) =>
+const installTools = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     const tools = TOOL_BUNDLE.flatMap((tool) =>
       tool.macos === undefined
@@ -168,7 +173,7 @@ const installTools = (link: Link, id: string) =>
       if (line?.split("  ")[0] !== tool.source.sha256) {
         return yield* new ToolBundleHashError({
           file: tool.path,
-          sandboxId: `ns:${id}`,
+          sandboxId: sandboxId(ref),
         });
       }
     }
@@ -176,7 +181,7 @@ const installTools = (link: Link, id: string) =>
 
 // `runner` has passwordless sudo, so the workload token must be gone before
 // any user code runs (ADR 0009); then each way to it is checked.
-const dropToken = (link: Link, id: string) =>
+const dropToken = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     yield* step(
       link,
@@ -197,7 +202,7 @@ const dropToken = (link: Link, id: string) =>
     for (const [commandLine, what] of checks) {
       const result = yield* link.run(commandLine);
       if (result.exitCode !== 0) {
-        return yield* new TokenExposedError({ id: `ns:${id}`, what });
+        return yield* new TokenExposedError({ id: sandboxId(ref), what });
       }
     }
   });
@@ -257,7 +262,7 @@ const watchMemory = (link: Link) =>
 // One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
 // non-zero exit is a MacPrepareError so create deletes the Mac before any
 // Secret is sent.
-const makeSecretsDisk = (link: Link, id: string) =>
+const makeSecretsDisk = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     const made = yield* link.run(
       `sudo -n sh -c ${shellJoin([
@@ -266,7 +271,7 @@ const makeSecretsDisk = (link: Link, id: string) =>
     );
     if (made.exitCode !== 0) {
       return yield* new MacPrepareError({
-        id: `ns:${id}`,
+        id: sandboxId(ref),
         what: "the Secrets RAM disk cannot be made",
       });
     }
@@ -295,7 +300,7 @@ export const readMemoryKills = (link: Link) =>
 // The screen as it is now, saved next to the host's other files, so a
 // failed prepare shows what was in the way. No path when the screen could
 // not be captured either.
-const saveScreen = (link: Link, id: string) =>
+const saveScreen = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     const events = Chunk.toReadonlyArray(
       yield* link
@@ -312,8 +317,8 @@ const saveScreen = (link: Link, id: string) =>
       return undefined;
     }
     const path = join(
-      (yield* keeperPaths({ provider: "ns", name: id })).dir,
-      `ns-${id}-prepare.png`,
+      (yield* keeperPaths({ provider: "ns", name: ref.name })).dir,
+      `ns-${ref.name}-prepare.png`,
     );
     yield* Effect.tryPromise({
       try: () => writeFile(path, bytes, { mode: 0o600 }),
@@ -326,14 +331,14 @@ const saveScreen = (link: Link, id: string) =>
 // A test screenshot, then a 1 s capture. A capture its 15 s timer kills
 // (137), or a replayd alert (the capture itself does not wait on that one),
 // means an alert is on screen.
-const checkScreen = (link: Link, id: string) =>
+const checkScreen = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     const shot = yield* link.run(
       `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-test.png && test -s /tmp/proofbox-test.png`,
     );
     if (shot.exitCode !== 0) {
       return yield* new MacPrepareError({
-        id: `ns:${id}`,
+        id: sandboxId(ref),
         what: "the test screenshot is blocked",
       });
     }
@@ -347,9 +352,9 @@ const checkScreen = (link: Link, id: string) =>
     );
     const alerted = hint.stdout.trim() !== REPLAYD_HINT;
     if (capture.exitCode !== 0 || alerted) {
-      const screenshot = yield* saveScreen(link, id);
+      const screenshot = yield* saveScreen(link, ref);
       return yield* new MacPrepareError({
-        id: `ns:${id}`,
+        id: sandboxId(ref),
         what:
           capture.exitCode === 0 || capture.exitCode === 137
             ? "an alert is on screen"
@@ -367,11 +372,11 @@ export const prepareMac = (link: Link, req: MacRequest) =>
     yield* makeMacFolders(link);
     yield* progress.step(
       "installing the Tool bundle",
-      installTools(link, req.id),
+      installTools(link, req.ref),
     );
     yield* progress.step(
       "checking the Namespace token is out of reach",
-      dropToken(link, req.id),
+      dropToken(link, req.ref),
     );
     yield* progress.step(
       "setting up screen access",
@@ -379,22 +384,22 @@ export const prepareMac = (link: Link, req: MacRequest) =>
     );
     yield* progress.step(
       "making the Secrets RAM disk",
-      makeSecretsDisk(link, req.id),
+      makeSecretsDisk(link, req.ref),
     );
     yield* progress.step(
       "taking a test screenshot and capture",
-      checkScreen(link, req.id),
+      checkScreen(link, req.ref),
     );
     return yield* writeMacState(link, req, createdAt);
   });
 
-export const readMac = (link: Link, name: string) =>
+export const readMac = (link: Link, ref: SandboxRef) =>
   Effect.gen(function* () {
     const result = yield* link.run(`cat ${LABELS} && cat ${DEADLINE}`);
     if (result.exitCode !== 0) {
       // No state file: the create never finished, so there is no Sandbox.
       if (result.stderr.includes("No such file")) {
-        return yield* new SandboxGoneError({ id: `ns:${name}` });
+        return yield* new SandboxGoneError({ id: sandboxId(ref) });
       }
       return yield* fail(
         `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
@@ -414,7 +419,13 @@ export const readMac = (link: Link, name: string) =>
       catch: (cause) =>
         fail(cause instanceof Error ? cause.message : String(cause)),
     });
-    return yield* sandboxInfoFromLabels(brandFor(name), name, labels, seconds);
+    return yield* sandboxInfoFromLabels(
+      brandFor(ref),
+      ref.name,
+      labels,
+      seconds,
+      ref.region,
+    );
   });
 
 export const writeMacDeadline = (link: Link, seconds: number) =>

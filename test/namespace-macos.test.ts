@@ -128,9 +128,9 @@ const makeMac = (
       }),
       nsc,
       openLink: () => Effect.succeed(link),
-      forward: (id, port) =>
-        note(calls, `portForward ${id} ${port}`).pipe(
-          Effect.zipRight(portForward(id, port)),
+      forward: (ref, port) =>
+        note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
+          Effect.zipRight(portForward(ref, port)),
         ),
       dockerFor: () => {
         throw new Error("a Mac has no Docker");
@@ -225,7 +225,10 @@ describe("Namespace macOS Provider", () => {
         name: "proofbox.size",
         value: "4x7",
       });
-      expect(info.name).toBe("us:abc123def4567");
+      expect({ name: info.name, region: info.region }).toEqual({
+        name: "abc123def4567",
+        region: "us",
+      });
       expect(info.os).toBe("macos");
       expect(info.size).toEqual({ cpu: 4, ramGb: 7 });
     }).pipe(withRuntime(runtimeDir())),
@@ -260,7 +263,7 @@ describe("Namespace macOS Provider", () => {
       const expire = (yield* Ref.get(mac.detached)).find(
         ([rel]) => rel === "namespace/expire-main",
       );
-      expect(expire?.[1][0]).toBe("us:abc123def4567");
+      expect(expire?.[1].slice(0, 2)).toEqual(["us", "abc123def4567"]);
     }).pipe(withRuntime(runtimeDir())),
   );
 
@@ -274,11 +277,14 @@ describe("Namespace macOS Provider", () => {
         const mac = yield* makeMac();
         yield* TestClock.setTime(0);
         // When
-        yield* mac.provider.extend("us:abc123def4567", new Date(300_000));
+        yield* mac.provider.extend(
+          { name: "abc123def4567", region: "us" },
+          new Date(300_000),
+        );
         // Then
         expect(yield* Ref.get(mac.detached)).toContainEqual([
           "namespace/extend-main",
-          ["us:abc123def4567", "300"],
+          ["us", "abc123def4567", "300"],
         ]);
         const lines = yield* Ref.get(mac.commands);
         expect(lines.some((line) => line.includes("/deadline"))).toBe(true);
@@ -438,7 +444,7 @@ describe("Namespace macOS Provider", () => {
         // When
         const error = yield* Effect.flip(mac.provider.create(createMac()));
         // Then
-        const saved = join(runtime, "ns-us:abc123def4567-prepare.png");
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
         expect(error.message).toBe(
           `Sandbox ns:us:abc123def4567 failed the macOS prepare check (the test capture is blocked); saved the screen to ${saved} and deleted the Mac`,
         );
@@ -488,7 +494,7 @@ describe("Namespace macOS Provider", () => {
         // When
         const error = yield* Effect.flip(mac.provider.create(createMac()));
         // Then
-        const saved = join(runtime, "ns-us:abc123def4567-prepare.png");
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
         expect(error.message).toBe(
           `Sandbox ns:us:abc123def4567 failed the macOS prepare check (an alert is on screen); saved the screen to ${saved} and deleted the Mac`,
         );
@@ -513,7 +519,7 @@ describe("Namespace macOS Provider", () => {
         // When
         const error = yield* Effect.flip(mac.provider.create(createMac()));
         // Then
-        const saved = join(runtime, "ns-us:abc123def4567-prepare.png");
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
         expect(error.message).toBe(
           `Sandbox ns:us:abc123def4567 failed the macOS prepare check (an alert is on screen); saved the screen to ${saved} and deleted the Mac`,
         );
@@ -630,7 +636,10 @@ describe("Namespace macOS Provider", () => {
           : undefined,
       );
       // When
-      const kills = yield* mac.provider.memoryKills("us:abc123def4567");
+      const kills = yield* mac.provider.memoryKills({
+        name: "abc123def4567",
+        region: "us",
+      });
       // Then
       expect(kills).toBe(2);
     }).pipe(withRuntime(runtime));
@@ -645,7 +654,10 @@ describe("Namespace macOS Provider", () => {
         // Given: the watcher's pid is not running
         const mac = yield* makeMac();
         // When
-        yield* mac.provider.memoryKills("us:abc123def4567");
+        yield* mac.provider.memoryKills({
+          name: "abc123def4567",
+          region: "us",
+        });
         // Then
         const [line] = yield* Ref.get(mac.commands);
         expect(line).toMatch(
@@ -675,7 +687,7 @@ describe("Namespace macOS Provider", () => {
         const liveView = mac.provider.liveView;
         const view = yield* liveView === undefined
           ? Effect.die("no liveView")
-          : liveView("us:abc123def4567");
+          : liveView({ name: "abc123def4567", region: "us" });
         // Then
         expect(view.address).toBe("127.0.0.1:50123");
         expect(view.password).toBe("Xy7kQ2mA");
@@ -702,7 +714,7 @@ describe("Namespace macOS Provider", () => {
       yield* (
         liveView === undefined
           ? Effect.die("no liveView")
-          : liveView("us:abc123def4567")
+          : liveView({ name: "abc123def4567", region: "us" })
       ).pipe(Effect.scoped);
       // Then
       const lines = yield* Ref.get(mac.commands);

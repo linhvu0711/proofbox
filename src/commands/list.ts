@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { formatTime } from "../format-time.ts";
 import { Providers } from "../provider.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
 
 export const listSandboxes = (options: { readonly json: boolean }) =>
   Effect.gen(function* () {
@@ -14,7 +15,11 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
           Effect.map((result) => ({
             unreached: result.unreached,
             sandboxes: result.infos.map((info) => ({
-              id: `${provider.idPrefix}:${info.name}`,
+              id: formatSandboxId({
+                provider: provider.idPrefix,
+                region: info.region,
+                name: info.name,
+              }),
               info,
             })),
           })),

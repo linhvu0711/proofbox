@@ -20,6 +20,7 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { Progress } from "../progress.ts";
 import { lacksFeature, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
@@ -137,11 +138,16 @@ export const createSandbox = (options: {
       size,
       snapshot: fp,
     });
+    const sandbox = { name: info.name, region: info.region };
     // A Sandbox that started from the Snapshot already has the Setup
     // script's work in it.
     const reused = fp !== undefined && info.snapshot === fp;
     const output = yield* CliOutput;
-    const id = `${provider.idPrefix}:${info.name}`;
+    const id = formatSandboxId({
+      provider: provider.idPrefix,
+      region: info.region,
+      name: info.name,
+    });
     const keeper = yield* KeeperClient;
     const progress = yield* Progress;
     yield* progress
@@ -174,9 +180,9 @@ export const createSandbox = (options: {
             "saving the Snapshot",
             withDeadlinePush(
               provider,
-              info.name,
+              sandbox,
               info,
-            )(snapshots.save(info.name, fp)),
+            )(snapshots.save(sandbox, fp)),
           )
           .pipe(
             Effect.zipRight(
@@ -194,7 +200,7 @@ export const createSandbox = (options: {
       }
     }).pipe(
       Effect.tapError(() =>
-        provider.delete(info.name).pipe(
+        provider.delete(sandbox).pipe(
           Effect.zipRight(keeper.stop(id)),
           Effect.catchAll(() => Effect.void),
         ),

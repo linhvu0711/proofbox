@@ -447,6 +447,18 @@ export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
   }
 }
 
+export class LoginTimeoutError extends Data.TaggedError("LoginTimeoutError")<{
+  readonly provider: string;
+  readonly wait: string;
+}> {
+  get message() {
+    return `The browser login did not finish in ${this.wait}. Run: proofbox auth login ${this.provider}`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class NoSuchProviderError extends Data.TaggedError(
   "NoSuchProviderError",
 )<{

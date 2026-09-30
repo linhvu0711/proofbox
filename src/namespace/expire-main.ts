@@ -3,12 +3,13 @@ import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
-import { loginFor } from "../login/provider-login.ts";
+import { fileStem } from "../sandbox-id.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
-import { splitHostName } from "./regions.ts";
+import { namespaceLogin } from "./namespace-login.ts";
 
-const id = process.argv[2];
-const at = Number(process.argv[3]);
+const region = process.argv[2];
+const instanceId = process.argv[3];
+const at = Number(process.argv[4]);
 
 // The host's own Deadline drifts ahead of the Sandbox's: the gateway counts
 // every ssh session as use and pushes the host's Deadline minutes out, so
@@ -19,12 +20,17 @@ const at = Number(process.argv[3]);
 // landed while this process was waking.
 const SLACK_SECONDS = 15;
 
-(id === undefined || !Number.isFinite(at) || at <= 0
+(region === undefined ||
+instanceId === undefined ||
+!Number.isFinite(at) ||
+at <= 0
   ? Effect.void
   : Effect.gen(function* () {
-      const api = makeNamespaceApi({ login: loginFor("namespace") });
-      const paths = yield* keeperPaths({ provider: "ns", name: id });
-      const { region, instanceId } = splitHostName(id);
+      const api = makeNamespaceApi({ login: namespaceLogin });
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: fileStem({ name: instanceId, region }),
+      });
       const capFile = paths.maxLife;
       const epoch = (file: string) =>
         Effect.promise(() =>

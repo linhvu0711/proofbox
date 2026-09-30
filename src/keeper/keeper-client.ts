@@ -15,8 +15,9 @@ import {
   type ExecOptions,
   type Provider,
   Providers,
+  type SandboxRef,
 } from "../provider.ts";
-import { resolveSandboxId } from "../sandbox-id.ts";
+import { fileStem, formatSandboxId, resolveSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeReply, encodeInput, encodeRequest } from "./protocol.ts";
@@ -63,12 +64,12 @@ const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
 // the wrapped one, as the Keeper path does with feederError.
 const execDirect = (
   provider: Provider,
-  name: string,
+  sandbox: SandboxRef,
   argv: ReadonlyArray<string>,
   options?: KeeperExecOptions,
 ) =>
   Effect.gen(function* () {
-    const connection = yield* provider.connect(name);
+    const connection = yield* provider.connect(sandbox);
     const stdinError = yield* Ref.make<StdinError | undefined>(undefined);
     const fed =
       options?.stdin === undefined
@@ -126,10 +127,14 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         const id = yield* resolveSandboxId(rawId, providers);
         const paths = yield* keeperPaths({
           provider: id.prefix,
-          name: id.name,
+          name: fileStem(id),
         });
         yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
-          `${id.prefix}:${id.name}`,
+          formatSandboxId({
+            provider: id.prefix,
+            region: id.region,
+            name: id.name,
+          }),
         ]);
         yield* connectSocket(paths.socket, id.provider.name).pipe(
           Effect.retry({
@@ -248,7 +253,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           const provider = id.provider;
           const paths = yield* keeperPaths({
             provider: id.prefix,
-            name: id.name,
+            name: fileStem(id),
           });
           const socket = yield* connectSocket(
             paths.socket,
@@ -269,7 +274,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             yield* output.err(
               "proofbox: Keeper did not start; running without it\n",
             );
-            return yield* execDirect(provider, id.name, argv, options);
+            return yield* execDirect(provider, id, argv, options);
           }
           yield* writeLine(
             socket.value,
@@ -334,7 +339,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         const id = yield* resolveSandboxId(rawId, providers);
         const paths = yield* keeperPaths({
           provider: id.prefix,
-          name: id.name,
+          name: fileStem(id),
         });
         const pidText = yield* Effect.promise(() =>
           readFile(paths.pid, "utf8").catch(() => ""),
@@ -384,7 +389,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         ) =>
           Effect.gen(function* () {
             const id = yield* resolveSandboxId(rawId, providers);
-            return yield* execDirect(id.provider, id.name, argv, options);
+            return yield* execDirect(id.provider, id, argv, options);
           }),
       });
     }),

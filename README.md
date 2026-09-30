@@ -35,7 +35,7 @@ No file means `namespace` for both. `create --provider <name>` overrides it for 
 
 ## Install
 
-Needs Node 24 or later and pnpm. The `namespace` Provider needs a Namespace token (`echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`) and `nsc` on PATH for SSH and Live view. The `docker` Provider needs Docker.
+Needs Node 24 or later and pnpm. The `namespace` Provider needs a Namespace login: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. `nsc` on PATH is still needed for SSH and Live view. The `docker` Provider needs Docker.
 
 ```sh
 git clone https://github.com/linhvu0711/proofbox.git
@@ -65,12 +65,15 @@ proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1
 proofbox delete "$id"
 ```
 
-A Sandbox id has its Provider as a prefix, for example `ns:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
+A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
+| `auth login <provider>` | Logs in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
+| `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. |
+| `auth logout <provider>` | Removes the saved login and lists the Sandboxes that still run. |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. |

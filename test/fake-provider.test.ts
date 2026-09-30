@@ -67,12 +67,13 @@ describe("fake Provider", () => {
         [
           Effect.forEach(
             Array.from({ length: 200 }),
-            () => fake.extend(sandbox.name, deadline),
+            () =>
+              fake.extend({ name: sandbox.name, region: undefined }, deadline),
             { discard: true },
           ),
           Effect.forEach(
             Array.from({ length: 200 }),
-            () => fake.get(sandbox.name),
+            () => fake.get({ name: sandbox.name, region: undefined }),
             { discard: true },
           ),
         ],
@@ -98,16 +99,18 @@ describe("fake Provider", () => {
         })
         .pipe(Effect.provideService(Progress, noProgress));
       // When: `cat` runs with a stdin stream
-      const collected = yield* fake.connect(sandbox.name).pipe(
-        Effect.flatMap((connection) =>
-          Stream.runCollect(
-            connection.exec(["cat"], {
-              stdin: Stream.make(new TextEncoder().encode("hi\n")),
-            }),
+      const collected = yield* fake
+        .connect({ name: sandbox.name, region: undefined })
+        .pipe(
+          Effect.flatMap((connection) =>
+            Stream.runCollect(
+              connection.exec(["cat"], {
+                stdin: Stream.make(new TextEncoder().encode("hi\n")),
+              }),
+            ),
           ),
-        ),
-        Effect.scoped,
-      );
+          Effect.scoped,
+        );
       // Then: the bytes come back on stdout and the exit is clean
       const events = Chunk.toReadonlyArray(collected);
       const decoder = new TextDecoder();

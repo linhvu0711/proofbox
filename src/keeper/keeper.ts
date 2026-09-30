@@ -10,7 +10,7 @@ import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
 import { ProviderError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
-import { resolveSandboxId } from "../sandbox-id.ts";
+import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest } from "./protocol.ts";
 
@@ -51,7 +51,7 @@ export const runKeeper = (rawId: string) =>
     const provider = id.provider;
     const paths = yield* keeperPaths({
       provider: id.prefix,
-      name: id.name,
+      name: fileStem(id),
     });
     if (yield* socketAnswers(paths.socket)) {
       return;
@@ -62,7 +62,7 @@ export const runKeeper = (rawId: string) =>
 
     const serve = Effect.scoped(
       Effect.gen(function* () {
-        const connection = yield* provider.connect(id.name);
+        const connection = yield* provider.connect(id);
         const runtime =
           yield* Effect.runtime<CommandExecutor.CommandExecutor>();
         const handleClient = (socket: Socket) => {
@@ -276,7 +276,7 @@ export const runKeeper = (rawId: string) =>
     );
 
     const watchGone = Effect.repeat(
-      provider.get(id.name),
+      provider.get(id),
       Schedule.spaced("2 seconds"),
     ).pipe(Effect.asVoid);
 

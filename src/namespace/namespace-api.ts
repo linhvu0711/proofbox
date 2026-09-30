@@ -20,12 +20,14 @@ import {
   TokenRejectedError,
 } from "../errors.ts";
 import type { ProviderAccount, ProviderLogin } from "../provider.ts";
-import { DEFAULT_REGION, hostName } from "./regions.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
+import { DEFAULT_REGION } from "./regions.ts";
 
 export type ApiLoginError =
   | NotLoggedInError
   | LoginExpiredError
-  | BadLoginsFileError;
+  | BadLoginsFileError
+  | ProviderUnavailableError;
 
 export type ApiError =
   | ProviderError
@@ -167,7 +169,11 @@ export const fromConnect =
     }
     if (cause.code === Code.NotFound && host !== undefined) {
       return new SandboxGoneError({
-        id: `ns:${hostName(host.region, host.instanceId)}`,
+        id: formatSandboxId({
+          provider: "ns",
+          region: host.region,
+          name: host.instanceId,
+        }),
       });
     }
     if (
@@ -216,7 +222,11 @@ export const httpError = (
   }
   if (code === "not_found" && host !== undefined) {
     return new SandboxGoneError({
-      id: `ns:${hostName(host.region, host.instanceId)}`,
+      id: formatSandboxId({
+        provider: "ns",
+        region: host.region,
+        name: host.instanceId,
+      }),
     });
   }
   if (code === "unavailable" || code === "deadline_exceeded" || status >= 500) {
