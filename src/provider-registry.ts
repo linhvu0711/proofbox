@@ -4,6 +4,7 @@ import { makeDockerClient } from "./docker/docker-client.ts";
 import { makeDockerProvider } from "./docker/docker-provider.ts";
 import { ProviderError } from "./errors.ts";
 import { loginFor } from "./login/provider-login.ts";
+import { makeNamespaceApi } from "./namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "./namespace/namespace-provider.ts";
 import { makeNscClient } from "./namespace/nsc-client.ts";
 import { makeOpenLink } from "./namespace/ssh-link.ts";
@@ -15,11 +16,14 @@ export const ProvidersLive = Layer.effect(
   Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
     const nsc = makeNscClient(executor);
+    const namespaceLogin = loginFor("namespace");
     const providers = new Map<string, Provider>([
       ["docker", makeDockerProvider({ client: makeDockerClient(executor) })],
       [
         "namespace",
         makeNamespaceProvider({
+          api: makeNamespaceApi({ login: namespaceLogin }),
+          login: namespaceLogin,
           nsc,
           openLink: makeOpenLink(nsc, executor),
           dockerFor: (link) => makeDockerClient(executor, { ssh: link.ssh }),

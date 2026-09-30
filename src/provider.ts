@@ -3,6 +3,7 @@ import {
   Context,
   type Duration,
   type Effect,
+  type Option,
   type Redacted,
   Schema,
   type Scope,
@@ -19,6 +20,7 @@ import {
   type ProviderUnavailableError,
   type SandboxGoneError,
   type TokenExposedError,
+  type TokenPermissionError,
   type TokenRejectedError,
   type ToolBundleHashError,
 } from "./errors.ts";
@@ -59,24 +61,26 @@ export interface LoginWays {
   readonly ways: ReadonlySet<LoginWay>;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
+    region: Option.Option<string>,
   ) => Effect.Effect<
     ProviderAccount,
-    TokenRejectedError | ProviderUnavailableError
+    TokenRejectedError | TokenPermissionError | ProviderUnavailableError
   >;
 }
 
-// What a Provider offers `proofbox auth`: no login at all, an outside CLI
-// for now, or its own login ways.
-export type LoginPart =
-  | { readonly _tag: "None" }
-  // Stand-in until #48: the Provider logs in with its own CLI.
-  | { readonly _tag: "External"; readonly tool: string }
-  | LoginWays;
+// What a Provider offers `proofbox auth`: no login at all, or its own
+// login ways.
+export type LoginPart = { readonly _tag: "None" } | LoginWays;
 
-// The token a command uses to act for a Provider account, from the env or
-// the saved login.
+// The token and region a command uses to act for a Provider account, from
+// the env or the saved login.
+export interface LoginInHand {
+  readonly token: Redacted.Redacted<string>;
+  readonly region: Option.Option<string>;
+}
+
 export type ProviderLogin = Effect.Effect<
-  Redacted.Redacted<string>,
+  LoginInHand,
   NotLoggedInError | LoginExpiredError | BadLoginsFileError
 >;
 
@@ -113,6 +117,12 @@ export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
   readonly login: LoginPart;
+  // A Provider whose API is regional names the regions it knows and the
+  // one new Sandboxes go to when the login has none.
+  readonly regions?: {
+    readonly known: ReadonlyArray<string>;
+    readonly fallback: string;
+  };
   readonly offers: Readonly<Partial<Record<Os, OsOffer>>>;
   readonly create: (req: {
     readonly os: Os;

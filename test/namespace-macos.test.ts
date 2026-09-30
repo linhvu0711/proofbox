@@ -108,6 +108,11 @@ const makeMac = (
         ),
     };
     const provider = makeNamespaceProvider({
+      api: {
+        list: () => Effect.succeed([]),
+        checkToken: () => Effect.die("unused"),
+      },
+      login: Effect.die("unused"),
       nsc,
       openLink: () => Effect.succeed(link),
       dockerFor: () => {

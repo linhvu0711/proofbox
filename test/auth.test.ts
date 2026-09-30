@@ -28,6 +28,17 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { changeLogins } from "../src/login/logins-file.ts";
 import { type Provider, Providers } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
+import {
+  type FakeNamespace,
+  type FakeNamespaceAnswer,
+  type FakeNamespaceCall,
+  startFakeNamespace,
+} from "./support/fake-namespace-api.ts";
+
+// A Namespace JWT the fake Compute API sees (tenant tnt_test, exp
+// 3000-01-01T00:00:00Z).
+const TOKEN =
+  "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig";
 
 const makeHome = (logins?: string): string => {
   const home = mkdtempSync(join(tmpdir(), "proofbox-home-"));
@@ -57,9 +68,25 @@ const EVE =
   '{"other":{"way":"token","token":"o1k","account":"eve","expiresAt":"2999-01-01T00:00:00.000Z"}}';
 const BOTH =
   '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"},"other":{"way":"token","token":"o1k","account":"eve","expiresAt":"2999-01-01T00:00:00.000Z"}}';
+const NS_EU =
+  '{"namespace":{"way":"token","token":"nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"eu"}}';
+
+const namespaces: FakeNamespace[] = [];
+const fakeNamespace = async (
+  answer: (call: FakeNamespaceCall) => FakeNamespaceAnswer,
+) => {
+  const server = await startFakeNamespace(answer);
+  namespaces.push(server);
+  return server;
+};
 
 describe("auth", () => {
-  afterEach(cleanupEnvs);
+  afterEach(async () => {
+    cleanupEnvs();
+    for (const server of namespaces.splice(0)) {
+      await server.close();
+    }
+  });
 
   it("auth login --token saves the login, owner-only", async () => {
     // Given
@@ -205,19 +232,228 @@ describe("auth", () => {
     expect(result.exitCode).toBe(125);
   });
 
-  it("auth login namespace points to nsc for now", async () => {
+  it("auth login namespace --token saves the tenant and the region", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token", "--region", "eu"],
+      {
+        input: `${TOKEN}\n`,
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe("Logged in to namespace as tnt_test.\n");
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls).toEqual([
+      {
+        region: "eu",
+        method: "ListInstances",
+        body: { maxEntries: "1" },
+        authorization: `Bearer ${TOKEN}`,
+      },
+    ]);
+    expect(readSaved(home)).toEqual({
+      namespace: {
+        way: "token",
+        token: TOKEN,
+        account: "tnt_test",
+        expiresAt: "3000-01-01T00:00:00.000Z",
+        region: "eu",
+      },
+    });
+  });
+
+  it("auth login namespace with a token Namespace rejects saves nothing", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({
+      error: { code: "unauthenticated", message: "bad token" },
+    }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token"],
+      {
+        input: `${TOKEN}\n`,
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Namespace did not accept this token. It may be wrong, revoked, or expired.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("auth login namespace with a token that is not a Namespace token asks nothing", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token"],
+      {
+        input: "not-a-token\n",
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Namespace did not accept this token. It may be wrong, revoked, or expired.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(ns.calls).toEqual([]);
+    expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("auth login namespace with a token that cannot list instances names the permission", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({
+      error: { code: "permission_denied", message: "denied" },
+    }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token"],
+      {
+        input: `${TOKEN}\n`,
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "This Namespace token lacks permission for ComputeService.ListInstances. Use a token that can manage instances.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("auth login namespace --region mars names the known regions", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token", "--region", "mars"],
+      {
+        input: `${TOKEN}\n`,
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      'Unknown region "mars" for namespace: use one of: us, eu\n',
+    );
+    expect(result.exitCode).toBe(125);
+    expect(ns.calls).toEqual([]);
+  });
+
+  it("auth login fake --region eu says fake has no regions", async () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
     // When
-    const result = await runCli(env, ["auth", "login", "namespace"], {
-      set: { HOME: home },
-    });
+    const result = await runCli(
+      env,
+      ["auth", "login", "fake", "--token", "--region", "eu"],
+      { input: "t0k\n", set: { HOME: home } },
+    );
     // Then
     expect(result.stderr).toBe(
-      "namespace logs in with nsc for now. Run: nsc login\n",
+      "fake has no regions. Log in without --region.\n",
     );
     expect(result.exitCode).toBe(125);
+  });
+
+  it("auth status shows the Namespace env login with its tenant and region", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+        PROOFBOX_NAMESPACE_REGION: "eu",
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.stdout).toContain(
+      "namespace  logged in as tnt_test, region eu, expires 3000-01-01T00:00:00Z, env token PROOFBOX_NAMESPACE_TOKEN\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls.map((call) => call.region)).toEqual(["eu"]);
+  });
+
+  it("auth status shows the saved Namespace login with its region", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_EU);
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.stdout).toContain(
+      "namespace  logged in as tnt_test, region eu, expires 3000-01-01T00:00:00Z, saved login\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls).toEqual([]);
+  });
+
+  it("auth login namespace when Namespace cannot be reached says to check the network", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token"],
+      {
+        input: `${TOKEN}\n`,
+        set: { HOME: home },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Could not reach Namespace. Check your network and try again.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(loginsFile(home))).toBe(false);
   });
 
   it("a second login replaces the first and names the old account", async () => {
@@ -266,7 +502,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  not logged in\n",
     );
     expect(result.exitCode).toBe(0);
@@ -288,7 +524,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  logged in as ada, expires 2999-01-01T00:00:00Z, saved login\n",
     );
     expect(result.exitCode).toBe(0);
@@ -310,7 +546,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  logged in as ada, expires 2999-01-01T00:00:00Z, env token PROOFBOX_FAKE_TOKEN\n",
     );
     expect(result.exitCode).toBe(0);
@@ -327,7 +563,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  PROOFBOX_FAKE_TOKEN is set, but fake did not accept it\n",
     );
     expect(result.exitCode).toBe(0);
@@ -344,7 +580,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  logged in as ada, expires 2999-01-01T00:00:00Z, env token PROOFBOX_FAKE_TOKEN\n",
     );
     expect(result.exitCode).toBe(0);
@@ -441,7 +677,7 @@ describe("auth", () => {
     // Then
     expect(result.stdout).toBe(
       "docker  no login needed\n" +
-        "namespace  logs in with nsc for now\n" +
+        "namespace  not logged in\n" +
         "fake  expired 2000-01-01T00:00:00Z. Run: proofbox auth login fake\n",
     );
     expect(result.exitCode).toBe(0);

@@ -15,11 +15,18 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
+import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+
+// Stand-in Compute API until the API fakes land in the next slices.
+const fakeApi: NamespaceApi = {
+  list: () => Effect.succeed([]),
+  checkToken: () => Effect.die("unused"),
+};
 
 const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
   checkLogin: Ref.update(calls, (all) => [...all, "checkLogin"]),
@@ -171,6 +178,8 @@ const makeProvider = (
   run: Link["run"] = tenantRun,
 ) =>
   makeNamespaceProvider({
+    api: fakeApi,
+    login: Effect.die("unused"),
     nsc: fakeNsc(calls),
     openLink: () =>
       Effect.succeed<Link>({
@@ -201,6 +210,8 @@ describe("Namespace Provider", () => {
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
         const provider = makeNamespaceProvider({
+          api: fakeApi,
+          login: Effect.die("unused"),
           nsc: fakeNsc(yield* Ref.make<ReadonlyArray<string>>([])),
           openLink: () => Effect.succeed(link),
           dockerFor: () => {

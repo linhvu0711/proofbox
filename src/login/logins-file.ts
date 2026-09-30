@@ -17,6 +17,7 @@ export const SavedLogin = Schema.Struct({
   token: Schema.Redacted(Schema.String),
   account: Schema.String,
   expiresAt: Schema.Date,
+  region: Schema.optional(Schema.String),
 });
 export type SavedLogin = typeof SavedLogin.Type;
 

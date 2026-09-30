@@ -371,7 +371,15 @@ export class BadSandboxIdError extends Data.TaggedError("BadSandboxIdError")<{
   readonly id: string;
 }> {
   get message() {
-    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example ns:abc123`;
+    return `Bad Sandbox id "${this.id}": use the form <provider>:<name>, for example ns:us:abc123`;
+  }
+}
+
+export class NoRegionError extends Data.TaggedError("NoRegionError")<{
+  readonly id: string;
+}> {
+  get message() {
+    return `Sandbox id "${this.id}" has no region: use the form ns:<region>:<name>, for example ns:us:abc123`;
   }
 }
 
@@ -380,6 +388,20 @@ export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
 }> {
   get message() {
     return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
+export class TokenPermissionError extends Data.TaggedError(
+  "TokenPermissionError",
+)<{
+  readonly provider: string;
+  readonly call: string;
+}> {
+  get message() {
+    return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can manage instances.`;
   }
   get reason() {
     return this.message;
@@ -453,15 +475,6 @@ export class NoLoginWayError extends Data.TaggedError("NoLoginWayError")<{
   }
 }
 
-export class ExternalLoginError extends Data.TaggedError("ExternalLoginError")<{
-  readonly provider: string;
-  readonly tool: string;
-}> {
-  get message() {
-    return `${this.provider} logs in with ${this.tool} for now. Run: ${this.tool} login`;
-  }
-}
-
 export class NoTokenError extends Data.TaggedError("NoTokenError")<{
   readonly provider: string;
 }> {
@@ -486,5 +499,31 @@ export class UnknownProviderError extends Data.TaggedError(
     return `Unknown Provider "${this.provider}": use one of: ${this.known.join(
       ", ",
     )}`;
+  }
+}
+
+export class UnknownRegionError extends Data.TaggedError("UnknownRegionError")<{
+  readonly provider: string;
+  readonly region: string;
+  readonly known: ReadonlyArray<string>;
+  readonly id?: string;
+}> {
+  get message() {
+    if (this.id !== undefined) {
+      return `Unknown region "${this.region}" in Sandbox id "${this.id}": use one of: ${this.known.join(
+        ", ",
+      )}`;
+    }
+    return `Unknown region "${this.region}" for ${this.provider}: use one of: ${this.known.join(
+      ", ",
+    )}`;
+  }
+}
+
+export class NoRegionsError extends Data.TaggedError("NoRegionsError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `${this.provider} has no regions. Log in without --region.`;
   }
 }

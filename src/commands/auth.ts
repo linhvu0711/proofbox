@@ -2,16 +2,21 @@ import { text } from "node:stream/consumers";
 import { Clock, Effect, Either, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
-  ExternalLoginError,
   NoLoginNeededError,
   NoLoginWayError,
+  NoRegionsError,
   NoSuchProviderError,
   NoTokenError,
   ProviderError,
+  UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { changeLogins, readLogins } from "../login/logins-file.ts";
-import { envToken, envTokenName } from "../login/provider-login.ts";
+import {
+  changeLogins,
+  readLogins,
+  type SavedLogin,
+} from "../login/logins-file.ts";
+import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
 import { type LoginWay, Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -29,18 +34,13 @@ const loginPartFor = (name: string) =>
     if (part._tag === "None") {
       return yield* new NoLoginNeededError({ provider: provider.name });
     }
-    if (part._tag === "External") {
-      return yield* new ExternalLoginError({
-        provider: provider.name,
-        tool: part.tool,
-      });
-    }
     return { provider, part } as const;
   });
 
 export const loginToProvider = (options: {
   readonly provider: string;
   readonly token: boolean;
+  readonly region: Option.Option<string>;
 }) =>
   Effect.gen(function* () {
     const { provider, part } = yield* loginPartFor(options.provider);
@@ -49,6 +49,20 @@ export const loginToProvider = (options: {
     const way: LoginWay = options.token ? "token" : "browser";
     if (!part.ways.has(way)) {
       return yield* new NoLoginWayError({ provider: provider.name, way });
+    }
+    // A region only makes sense where the Provider names regions; both
+    // checks run before the token is read from stdin.
+    if (Option.isSome(options.region)) {
+      if (provider.regions === undefined) {
+        return yield* new NoRegionsError({ provider: provider.name });
+      }
+      if (!provider.regions.known.includes(options.region.value)) {
+        return yield* new UnknownRegionError({
+          provider: provider.name,
+          region: options.region.value,
+          known: provider.regions.known,
+        });
+      }
     }
     const raw = yield* Effect.tryPromise({
       try: () => text(process.stdin),
@@ -62,7 +76,10 @@ export const loginToProvider = (options: {
     if (token === "") {
       return yield* new NoTokenError({ provider: provider.name });
     }
-    const account = yield* part.checkToken(Redacted.make(token));
+    const account = yield* part.checkToken(
+      Redacted.make(token),
+      options.region,
+    );
     const before = yield* changeLogins((logins) => ({
       ...logins,
       [provider.name]: {
@@ -70,6 +87,9 @@ export const loginToProvider = (options: {
         token: Redacted.make(token),
         account: account.account,
         expiresAt: account.expiresAt,
+        ...(Option.isSome(options.region)
+          ? { region: options.region.value }
+          : {}),
       },
     }));
     const previous = before[provider.name];
@@ -91,15 +111,21 @@ export const showAuthStatus = Effect.gen(function* () {
     let line: string;
     if (part._tag === "None") {
       line = "no login needed";
-    } else if (part._tag === "External") {
-      line = `logs in with ${part.tool} for now`;
     } else {
+      // A regional Provider names the login's region, or its fallback
+      // when the login carries none.
+      const regions = provider.regions;
+      const regionOf = (region: Option.Option<string>) =>
+        regions === undefined
+          ? ""
+          : `, region ${Option.getOrElse(region, () => regions.fallback)}`;
       const env = yield* envToken(provider.name);
       if (Option.isSome(env)) {
-        line = yield* part.checkToken(env.value).pipe(
+        const region = yield* envRegion(provider.name);
+        line = yield* part.checkToken(env.value, region).pipe(
           Effect.map(
             (account) =>
-              `logged in as ${account.account}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`,
+              `logged in as ${account.account}${regionOf(region)}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`,
           ),
           Effect.catchTag("TokenRejectedError", () =>
             Effect.succeed(
@@ -108,13 +134,16 @@ export const showAuthStatus = Effect.gen(function* () {
           ),
         );
       } else {
-        const saved = (yield* logins)[provider.name];
+        // A logins file that cannot be read counts as no saved login.
+        const saved = (yield* logins.pipe(
+          Effect.catchAll(() => Effect.succeed<Record<string, SavedLogin>>({})),
+        ))[provider.name];
         if (saved === undefined) {
           line = "not logged in";
         } else if (saved.expiresAt.getTime() <= now) {
           line = `expired ${formatTime(saved.expiresAt)}. Run: proofbox auth login ${provider.name}`;
         } else {
-          line = `logged in as ${saved.account}, expires ${formatTime(saved.expiresAt)}, saved login`;
+          line = `logged in as ${saved.account}${regionOf(Option.fromNullable(saved.region))}, expires ${formatTime(saved.expiresAt)}, saved login`;
         }
       }
     }

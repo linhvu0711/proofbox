@@ -280,8 +280,9 @@ const authLogin = Command.make(
   {
     provider: Args.text({ name: "provider" }),
     token: Options.boolean("token"),
+    region: Options.text("region").pipe(Options.optional),
   },
-  ({ provider, token }) => loginToProvider({ provider, token }),
+  ({ provider, token, region }) => loginToProvider({ provider, token, region }),
 );
 
 const authStatus = Command.make("status", {}, () => showAuthStatus);

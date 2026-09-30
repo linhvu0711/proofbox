@@ -29,7 +29,12 @@ import {
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import { type Os, type Provider, SandboxInfo } from "../provider.ts";
+import {
+  type Os,
+  type Provider,
+  type ProviderLogin,
+  SandboxInfo,
+} from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
@@ -42,7 +47,9 @@ import {
   readMemoryKills,
   writeMacDeadline,
 } from "./mac-host.ts";
+import type { NamespaceApi } from "./namespace-api.ts";
 import type { NscClient } from "./nsc-client.ts";
+import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import {
   pullSnapshot,
   pushSnapshot,
@@ -80,6 +87,8 @@ const describe = (cause: unknown) =>
 const exec = promisify(execFile);
 
 export const makeNamespaceProvider = (deps: {
+  readonly api: NamespaceApi;
+  readonly login: ProviderLogin;
   readonly nsc: NscClient;
   readonly openLink: OpenLink;
   readonly dockerFor: (link: Link) => DockerClient;
@@ -90,6 +99,7 @@ export const makeNamespaceProvider = (deps: {
   ) => Effect.Effect<void, ProviderError>;
 }): Provider => {
   const nsc = deps.nsc;
+  const api = deps.api;
   const fail = (reason: string) =>
     new ProviderError({ provider: "namespace", reason });
   const gone = (name: string) => new SandboxGoneError({ id: `ns:${name}` });
@@ -808,7 +818,12 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
-    login: { _tag: "External", tool: "nsc" },
+    login: {
+      _tag: "Ways",
+      ways: new Set(["token"]),
+      checkToken: api.checkToken,
+    },
+    regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },
     offers: {
       linux: {
         sizes: LINUX_SIZES,

@@ -11,7 +11,15 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Clock, Duration, Effect, Redacted, Schema, Stream } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  type Option,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -73,8 +81,12 @@ export const makeFakeProvider = (options: {
   const gone = (name: string) => new SandboxGoneError({ id: `fake:${name}` });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
-  // A fixed offline table stands in for a Provider's token check.
-  const checkToken = (token: Redacted.Redacted<string>) =>
+  // A fixed offline table stands in for a Provider's token check. The
+  // fake has no regions; the region argument goes unused.
+  const checkToken = (
+    token: Redacted.Redacted<string>,
+    _region: Option.Option<string>,
+  ) =>
     Effect.gen(function* () {
       const known: Record<string, ProviderAccount> = {
         t0k: {
@@ -273,11 +285,11 @@ export const makeFakeProvider = (options: {
     readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
-      const token = yield* options.login ?? Effect.void;
+      const login = yield* options.login ?? Effect.void;
       // The fake stands in for a real Provider, which rejects a bad
       // token at its API — a rejected login makes no Sandbox.
-      if (Redacted.isRedacted(token)) {
-        yield* checkToken(token);
+      if (login !== undefined) {
+        yield* checkToken(login.token, login.region);
       }
       return yield* Effect.flatMap(Progress, (progress) =>
         progress.step("creating fake Sandbox", createWork(req)),
