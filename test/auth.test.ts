@@ -753,6 +753,43 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("auth logout names the Sandboxes of every region and the region it could not check", async () => {
+    // Given: a fake login, two Sandboxes, and a fake region that does not answer
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home, PROOFBOX_FAKE_UNREACHED: "eu" };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    const first = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    const second = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. 2 Sandboxes still run. They stop at their Deadline.\n" +
+        "Could not check fake region eu: fake region eu did not answer\n",
+    );
+    expect(new Set(result.stdout.trim().split("\n"))).toEqual(
+      new Set([first.stdout.trim(), second.stdout.trim()]),
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
   it("auth logout with no Sandboxes only logs out", async () => {
     // Given
     const env = makeEnv();
@@ -983,7 +1020,7 @@ describe("auth", () => {
                 ...makeFakeProvider({ root, watch: "none" }),
                 list: Deferred.succeed(listing, undefined).pipe(
                   Effect.zipRight(Deferred.await(release)),
-                  Effect.as([]),
+                  Effect.as({ infos: [], unreached: [] }),
                 ),
               },
             ],

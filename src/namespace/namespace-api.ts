@@ -95,7 +95,7 @@ export interface NamespaceApi {
 const UNREACHABLE =
   "Could not reach Namespace. Check your network and try again.";
 
-const unreachable = () =>
+export const unreachable = () =>
   new ProviderUnavailableError({
     provider: "namespace",
     reason: UNREACHABLE,

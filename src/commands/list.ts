@@ -11,16 +11,24 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
       [...providers.entries()],
       ([, provider]) =>
         provider.list.pipe(
-          Effect.map((infos) =>
-            infos.map((info) => ({
+          Effect.map((result) => ({
+            unreached: result.unreached,
+            sandboxes: result.infos.map((info) => ({
               id: `${provider.idPrefix}:${info.name}`,
               info,
             })),
-          ),
+          })),
         ),
     );
+    for (const { unreached } of found) {
+      for (const miss of unreached) {
+        yield* output.err(
+          `Could not list Sandboxes in ${miss.where}: ${miss.reason}\n`,
+        );
+      }
+    }
     const sandboxes = found
-      .flat()
+      .flatMap((entry) => entry.sandboxes)
       .sort((a, b) => a.info.createdAt.getTime() - b.info.createdAt.getTime());
     if (options.json) {
       yield* output.out(

@@ -194,7 +194,8 @@ describe("Namespace errors", () => {
     // 16 CPU 32768 MB host
     const created = ns.calls.find((call) => call.method === "CreateInstance");
     expect(created?.region).toBe("us");
-    expect(created?.body?.shape).toMatchObject({
+    const body = created?.body as { shape?: unknown } | undefined;
+    expect(body?.shape).toMatchObject({
       os: "linux",
       machineArch: "amd64",
       virtualCpu: 16,

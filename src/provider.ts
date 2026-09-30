@@ -194,7 +194,7 @@ export interface Provider {
     SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
   readonly list: Effect.Effect<
-    ReadonlyArray<SandboxInfo>,
+    ListResult,
     | ProviderError
     | ProviderLimitError
     | ProviderUnavailableError
@@ -233,6 +233,16 @@ export interface Provider {
     number,
     SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
+}
+
+// What a Provider's list gives: the Sandboxes it reached, and each place
+// it could not reach — a `list` still shows the Sandboxes it got.
+export interface ListResult {
+  readonly infos: ReadonlyArray<SandboxInfo>;
+  readonly unreached: ReadonlyArray<{
+    readonly where: string;
+    readonly reason: string;
+  }>;
 }
 
 export class Providers extends Context.Tag("proofbox/Providers")<

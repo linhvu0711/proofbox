@@ -16,7 +16,10 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
+import { NotLoggedInError, ProviderUnavailableError } from "../src/errors.ts";
 import type {
+  ApiError,
+  ApiLoginError,
   InstanceListed,
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
@@ -30,7 +33,15 @@ import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 // `<method> <region> <instanceId?>`; `create` answers the id below.
 const fakeApi = (
   calls: Ref.Ref<ReadonlyArray<string>>,
-  instances: ReadonlyArray<InstanceListed> = [],
+  options?: {
+    readonly instances?: ReadonlyArray<
+      InstanceListed & { readonly region?: string }
+    >;
+    // An error that makes a region's `list` fail before any call is made.
+    readonly listError?: (
+      region: string,
+    ) => ApiError | ApiLoginError | undefined;
+  },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
   return {
@@ -39,16 +50,23 @@ const fakeApi = (
     wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
     destroy: (region, instanceId) => note(`destroy ${region} ${instanceId}`),
     extend: (region, instanceId) => note(`extend ${region} ${instanceId}`),
-    list: (region, labels) =>
-      note(`list ${region}`).pipe(
+    list: (region, labels) => {
+      const error = options?.listError?.(region);
+      if (error !== undefined) {
+        return Effect.fail(error);
+      }
+      return note(`list ${region}`).pipe(
         Effect.as(
-          instances.filter((instance) =>
-            labels.every(
-              (label) => instance.labels[label.name] === label.value,
-            ),
+          (options?.instances ?? []).filter(
+            (instance) =>
+              (instance.region === undefined || instance.region === region) &&
+              labels.every(
+                (label) => instance.labels[label.name] === label.value,
+              ),
           ),
         ),
-      ),
+      );
+    },
     checkToken: () => Effect.die("unused"),
   };
 };
@@ -170,6 +188,27 @@ const tenantRun = (commandLine: string) =>
     done(commandLine.includes("metadata.json") ? "tenant_x\n" : ""),
   );
 
+// A link that answers the `docker inspect` `list` runs on each host:
+// the container's labels name it by its six-letter host id, and the
+// Deadline file reads as far future.
+const listRun = (commandLine: string) => {
+  if (commandLine.includes("docker inspect")) {
+    const short = /proofbox-([a-z0-9]+)/.exec(commandLine)?.[1] ?? "";
+    return Effect.succeed(
+      done(
+        `${JSON.stringify({
+          "proofbox.name": short,
+          "proofbox.os": "linux",
+          "proofbox.created-at": "2026-01-01T00:00:00Z",
+          "proofbox.idle-seconds": "300",
+          "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+        })}|true\n9999999999\n`,
+      ),
+    );
+  }
+  return tenantRun(commandLine);
+};
+
 // A link that answers the Snapshot's docker commands; `ran` collects
 // every command line it got.
 const snapshotRun =
@@ -199,12 +238,17 @@ const makeProvider = (
   docker: DockerClient,
   run: Link["run"] = tenantRun,
   options?: {
-    readonly instances?: ReadonlyArray<InstanceListed>;
+    readonly instances?: ReadonlyArray<
+      InstanceListed & { readonly region?: string }
+    >;
+    readonly listError?: (
+      region: string,
+    ) => ApiError | ApiLoginError | undefined;
     readonly region?: string;
   },
 ) =>
   makeNamespaceProvider({
-    api: fakeApi(calls, options?.instances ?? []),
+    api: fakeApi(calls, options),
     login: Effect.succeed({
       token: Redacted.make("token"),
       region: Option.fromNullable(options?.region),
@@ -583,5 +627,121 @@ describe("Namespace Provider", () => {
           "destroy us abc123def4567",
         ]);
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "list asks every known region and names each Sandbox with its region",
+    () =>
+      Effect.gen(function* () {
+        // Given: one Linux Sandbox in us and one in eu
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+          instances: [
+            {
+              id: "abc123def4567",
+              labels: { "proofbox.os": "linux" },
+              region: "us",
+            },
+            {
+              id: "eu0000000000a",
+              labels: { "proofbox.os": "linux" },
+              region: "eu",
+            },
+          ],
+        });
+        // When
+        const listed = yield* provider.list;
+        // Then: each Sandbox's name names its region
+        expect([...listed.infos.map((info) => info.name)].sort()).toEqual([
+          "eu:eu0000000000a",
+          "us:abc123def4567",
+        ]);
+        expect(listed.unreached).toEqual([]);
+        expect([...(yield* Ref.get(calls))].sort()).toEqual([
+          "list eu",
+          "list eu",
+          "list us",
+          "list us",
+        ]);
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "list keeps the regions that answer and names the one that did not",
+    () =>
+      Effect.gen(function* () {
+        // Given: eu cannot be reached
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+          instances: [
+            {
+              id: "abc123def4567",
+              labels: { "proofbox.os": "linux" },
+              region: "us",
+            },
+          ],
+          listError: (region) =>
+            region === "eu"
+              ? new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason:
+                    "Could not reach Namespace. Check your network and try again.",
+                })
+              : undefined,
+        });
+        // When
+        const listed = yield* provider.list;
+        // Then
+        expect(listed.infos.map((info) => info.name)).toEqual([
+          "us:abc123def4567",
+        ]);
+        expect(listed.unreached).toEqual([
+          {
+            where: "Namespace region eu",
+            reason:
+              "Could not reach Namespace. Check your network and try again.",
+          },
+        ]);
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list with every region down fails with the Namespace error", () =>
+    Effect.gen(function* () {
+      // Given: neither region answers
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        listError: () =>
+          new ProviderUnavailableError({
+            provider: "namespace",
+            reason:
+              "Could not reach Namespace. Check your network and try again.",
+          }),
+      });
+      // When
+      const error = yield* Effect.flip(provider.list);
+      // Then
+      expect({
+        tag: error._tag,
+        message: error.message,
+      }).toEqual({
+        tag: "ProviderUnavailableError",
+        message: "Could not reach Namespace. Check your network and try again.",
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list with no Namespace login lists nothing", () =>
+    Effect.gen(function* () {
+      // Given: the login itself is missing
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        listError: () => new NotLoggedInError({ provider: "namespace" }),
+      });
+      // When
+      const listed = yield* provider.list;
+      // Then: no api call was ever made
+      expect(listed).toEqual({ infos: [], unreached: [] });
+      expect(yield* Ref.get(calls)).toEqual([]);
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 });

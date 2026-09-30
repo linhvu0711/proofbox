@@ -44,12 +44,16 @@ export const ProvidersLive = Layer.effect(
       const snapshotFail = yield* Config.option(
         Config.literal("push", "pull")("PROOFBOX_FAKE_SNAPSHOT_FAIL"),
       );
+      const unreached = yield* Config.option(
+        Config.string("PROOFBOX_FAKE_UNREACHED"),
+      );
       providers.set(
         "fake",
         fake.makeFakeProvider({
           root: fakeRoot.value,
           watch: "process",
           login: loginFor("fake"),
+          unreached: Option.getOrUndefined(unreached),
           snapshots: Option.isSome(snapshotsRoot)
             ? {
                 root: snapshotsRoot.value,

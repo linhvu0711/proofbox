@@ -178,7 +178,7 @@ export const logoutOfProvider = (name: string) =>
       );
       return;
     }
-    const infos = listed.right;
+    const infos = listed.right.infos;
     const note =
       infos.length === 0
         ? ""
@@ -186,6 +186,9 @@ export const logoutOfProvider = (name: string) =>
           ? " 1 Sandbox still runs. It stops at its Deadline."
           : ` ${infos.length} Sandboxes still run. They stop at their Deadline.`;
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
+    for (const miss of listed.right.unreached) {
+      yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
+    }
     for (const info of infos) {
       yield* output.out(`${provider.idPrefix}:${info.name}\n`);
     }

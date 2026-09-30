@@ -15,6 +15,7 @@ import {
   Config,
   Duration,
   Effect,
+  Either,
   Option,
   Schedule,
   Stream,
@@ -41,6 +42,7 @@ import {
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import {
+  type ListResult,
   type Os,
   type Provider,
   type ProviderLogin,
@@ -58,7 +60,8 @@ import {
   readMemoryKills,
   writeMacDeadline,
 } from "./mac-host.ts";
-import type { NamespaceApi } from "./namespace-api.ts";
+import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import { unreachable } from "./namespace-api.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
   DEFAULT_REGION,
@@ -339,15 +342,31 @@ export const makeNamespaceProvider = (deps: {
       ];
     });
 
-  const listHosts = Effect.gen(function* () {
-    const byRegion = yield* Effect.forEach(KNOWN_REGIONS, listHostsFor, {
-      concurrency: 2,
-    });
-    return byRegion.flat();
-  });
-
   const list = Effect.gen(function* () {
-    const hosts = yield* listHosts;
+    // A region that cannot be reached is named in `unreached`; when
+    // nothing answered at all the list fails with the first error.
+    const perRegion = yield* Effect.forEach(
+      KNOWN_REGIONS,
+      (region) => listHostsFor(region).pipe(Effect.either),
+      { concurrency: 2 },
+    );
+    const unreached: Array<{ where: string; reason: string }> = [];
+    const failures: Array<ApiError | ApiLoginError> = [];
+    const hosts = perRegion.flatMap((entry, index) => {
+      if (Either.isLeft(entry)) {
+        failures.push(entry.left);
+        unreached.push({
+          where: `Namespace region ${KNOWN_REGIONS[index] ?? ""}`,
+          reason: entry.left.message,
+        });
+        return [];
+      }
+      return entry.right;
+    });
+    if (failures.length === KNOWN_REGIONS.length) {
+      const first = failures[0];
+      return yield* first ?? fail("no Namespace region could be reached");
+    }
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
     const alive = new Set(
@@ -392,13 +411,15 @@ export const makeNamespaceProvider = (deps: {
         ),
       { discard: false },
     );
-    return infos.filter((info) => info !== undefined);
+    return {
+      infos: infos.filter((info) => info !== undefined),
+      unreached,
+    } satisfies ListResult;
   }).pipe(
-    // A Provider that cannot list (Namespace down, not logged in) reports
-    // none rather than breaking `list` for every other Provider.
-    Effect.catchTag("ProviderUnavailableError", () => Effect.succeed([])),
-    Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
-    Effect.catchTag("NotLoggedInError", () => Effect.succeed([])),
+    Effect.catchTag("SandboxGoneError", () => Effect.fail(unreachable())),
+    Effect.catchTag("NotLoggedInError", () =>
+      Effect.succeed({ infos: [], unreached: [] } satisfies ListResult),
+    ),
   );
 
   const del = (name: string) =>

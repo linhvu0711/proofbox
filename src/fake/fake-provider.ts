@@ -74,6 +74,8 @@ export const makeFakeProvider = (options: {
         readonly fail?: "push" | "pull" | undefined;
       }
     | undefined;
+  // A pretend region that never answers, named in `list`'s unreached.
+  readonly unreached?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -311,7 +313,7 @@ export const makeFakeProvider = (options: {
     const names = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-    return yield* Effect.forEach(
+    const infos = yield* Effect.forEach(
       names,
       (name) =>
         readFileInfo(name).pipe(
@@ -319,6 +321,16 @@ export const makeFakeProvider = (options: {
         ),
       { discard: false },
     ).pipe(Effect.map((infos) => infos.filter((info) => info !== undefined)));
+    const unreached =
+      options.unreached === undefined
+        ? []
+        : [
+            {
+              where: `fake region ${options.unreached}`,
+              reason: `fake region ${options.unreached} did not answer`,
+            },
+          ];
+    return { infos, unreached };
   });
 
   const del = (name: string) =>
