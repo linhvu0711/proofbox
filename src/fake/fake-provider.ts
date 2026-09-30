@@ -23,6 +23,7 @@ import {
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenRejectedError,
 } from "../errors.ts";
@@ -76,6 +77,8 @@ export const makeFakeProvider = (options: {
     | undefined;
   // A pretend region that never answers, named in `list`'s unreached.
   readonly unreached?: string | undefined;
+  // When set, `list` itself fails unreachable — the reason it gives.
+  readonly listDown?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -301,6 +304,12 @@ export const makeFakeProvider = (options: {
   const get = (name: string) => readFileInfo(name);
 
   const list = Effect.gen(function* () {
+    if (options.listDown !== undefined) {
+      return yield* new ProviderUnavailableError({
+        provider: "fake",
+        reason: options.listDown,
+      });
+    }
     const entries = yield* Effect.tryPromise({
       try: () =>
         readdir(root, { withFileTypes: true }).catch((cause) =>

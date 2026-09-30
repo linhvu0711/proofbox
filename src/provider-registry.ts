@@ -49,6 +49,9 @@ export const ProvidersLive = Layer.effect(
       const unreached = yield* Config.option(
         Config.string("PROOFBOX_FAKE_UNREACHED"),
       );
+      const listDown = yield* Config.option(
+        Config.string("PROOFBOX_FAKE_LIST_DOWN"),
+      );
       providers.set(
         "fake",
         fake.makeFakeProvider({
@@ -56,6 +59,7 @@ export const ProvidersLive = Layer.effect(
           watch: "process",
           login: loginFor("fake"),
           unreached: Option.getOrUndefined(unreached),
+          listDown: Option.getOrUndefined(listDown),
           snapshots: Option.isSome(snapshotsRoot)
             ? {
                 root: snapshotsRoot.value,
