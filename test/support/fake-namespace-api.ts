@@ -235,8 +235,8 @@ export const startFakeNamespace = (
         calls.push(call);
         void Promise.resolve(
           match !== null &&
-          match[2] === "nsl.signin.SigninService" &&
-          signin !== undefined
+            match[2] === "nsl.signin.SigninService" &&
+            signin !== undefined
             ? signin.answer(call, `http://127.0.0.1:${bound}`)
             : answer(call),
         ).then((reply) => {

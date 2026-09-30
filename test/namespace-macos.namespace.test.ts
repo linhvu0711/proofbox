@@ -8,39 +8,12 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
+import { destroyHost, liveInstances } from "./support/namespace-live.ts";
 
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
-
-const destroy = (id: string): Promise<void> =>
-  new Promise((resolve) => {
-    execFile("nsc", ["destroy", id, "--force"], () => resolve());
-  });
-
-const nsc = (args: ReadonlyArray<string>): Promise<string> =>
-  new Promise((resolve, reject) => {
-    execFile("nsc", args, (error, stdout, stderr) => {
-      if (error === null) {
-        resolve(stdout);
-      } else {
-        reject(new Error(stderr.trim() || stdout.trim() || error.message));
-      }
-    });
-  });
-
-const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
-  const out = await nsc(["list", "-o", "json"]);
-  const parsed: unknown = JSON.parse(out);
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-  return parsed.filter(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === "object" && entry !== null,
-  );
-};
 
 const createMac = async (env: CliEnv, extra: ReadonlyArray<string> = []) => {
   const result = await runCli(env, [
@@ -68,7 +41,7 @@ describe("Namespace macOS Provider", () => {
   afterAll(async () => {
     if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.split(":").at(-1) ?? "");
+      await destroyHost(id.split(":").at(-2) ?? "", id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -244,7 +217,7 @@ describe("Namespace macOS Provider", () => {
         );
       });
       // When
-      const entry = (await liveList()).find((item) => item.cluster_id === host);
+      const entry = (await liveInstances()).find((item) => item.id === host);
       const net = await runCli(env, ["exec", id, "--", "ifconfig"]);
       const addresses = [...net.stdout.matchAll(/inet (\d+\.\d+\.\d+\.\d+)/g)]
         .map((match) => match[1] as string)
@@ -430,7 +403,7 @@ describe("Namespace macOS Recording", () => {
   afterAll(async () => {
     if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.split(":").at(-1) ?? "");
+      await destroyHost(id.split(":").at(-2) ?? "", id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -788,7 +761,7 @@ describe("Namespace macOS Secrets", () => {
   afterAll(async () => {
     if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.split(":").at(-1) ?? "");
+      await destroyHost(id.split(":").at(-2) ?? "", id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -875,7 +848,10 @@ describe("Namespace macOS Provider at 6x14", () => {
       } finally {
         if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
           await runCli(env, ["delete", id]);
-          await destroy(id.split(":").at(-1) ?? "");
+          await destroyHost(
+            id.split(":").at(-2) ?? "",
+            id.split(":").at(-1) ?? "",
+          );
         }
       }
     } finally {
