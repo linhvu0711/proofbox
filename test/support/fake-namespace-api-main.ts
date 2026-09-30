@@ -2,8 +2,8 @@
 // fake-namespace-api-main.ts <mode> <port>`. A mode answers every call
 // one way: "capacity" refuses a create on capacity, "denied" refuses
 // every call on permission, "rejected" rejects every token, "login"
-// plays the sign-in calls and the login page and answers `{}` to
-// every Compute call.
+// plays the sign-in calls and the login page, answers a robot token to
+// CreateRevokableToken, and answers `{}` to every Compute call.
 import {
   type FakeNamespaceAnswer,
   type FakeNamespaceCall,
@@ -28,6 +28,9 @@ const answer = (call: FakeNamespaceCall): FakeNamespaceAnswer => {
   }
   if (mode === "rejected") {
     return { error: { code: "unauthenticated", message: "bad token" } };
+  }
+  if (mode === "login" && call.method === "CreateRevokableToken") {
+    return { json: { bearerToken: "nsrt_fake_ci_token" } };
   }
   return { json: {} };
 };

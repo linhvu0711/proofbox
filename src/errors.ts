@@ -495,6 +495,14 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
   }
 }
 
+export class NoTokenMakingError extends Data.TaggedError("NoTokenMakingError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `${this.provider} cannot make tokens.`;
+  }
+}
+
 export class UnknownProviderError extends Data.TaggedError(
   "UnknownProviderError",
 )<{

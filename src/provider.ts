@@ -57,9 +57,17 @@ export interface ProviderAccount {
   readonly expiresAt?: Date;
 }
 
+// What `auth token` asks the Provider's token-maker for: the token's
+// name and when it ends.
+export interface TokenRequest {
+  readonly name: string;
+  readonly expiresAt: Date;
+}
+
 // A Provider with a browser login: `start` opens the wait and names the
 // login page's URL, `complete` holds until the page was clicked and
-// hands the Provider login it made.
+// hands the Provider login it made. A Provider that can mint CI tokens
+// from the saved login's session names `makeToken`.
 export interface BrowserWay {
   readonly start: Effect.Effect<
     { readonly loginId: string; readonly url: string },
@@ -72,6 +80,13 @@ export interface BrowserWay {
       readonly expiresAt: Date;
     },
     ProviderUnavailableError | ProviderError
+  >;
+  readonly makeToken?: (
+    session: Redacted.Redacted<string>,
+    request: TokenRequest,
+  ) => Effect.Effect<
+    Redacted.Redacted<string>,
+    LoginExpiredError | ProviderUnavailableError | ProviderError
   >;
 }
 

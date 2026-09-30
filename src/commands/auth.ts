@@ -1,16 +1,27 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { text } from "node:stream/consumers";
-import { Clock, Config, Effect, Either, Option, Redacted } from "effect";
-import { CliOutput } from "../cli-output.ts";
-import { parseSpan } from "../deadline.ts";
 import {
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Either,
+  Option,
+  Redacted,
+} from "effect";
+import { CliOutput } from "../cli-output.ts";
+import { parseSpan, TOKEN_SPAN } from "../deadline.ts";
+import {
+  LoginExpiredError,
   LoginTimeoutError,
   NoLoginNeededError,
   NoLoginWayError,
   NoRegionsError,
   NoSuchProviderError,
   NoTokenError,
+  NoTokenMakingError,
+  NotLoggedInError,
   ProviderError,
   UnknownRegionError,
 } from "../errors.ts";
@@ -172,6 +183,49 @@ export const loginToProvider = (options: {
       previous === undefined ? "" : ` (replaced ${nameOf(previous)})`;
     yield* output.err(
       `Logged in to ${provider.name} as ${done.account}${replaced}.\n`,
+    );
+  });
+
+// A CI token for the Provider, minted from the saved browser login and
+// printed once on stdout. The env token is never read: it cannot make
+// tokens.
+export const makeRobotToken = (options: {
+  readonly provider: string;
+  readonly name: Option.Option<string>;
+  readonly expires: Option.Option<string>;
+}) =>
+  Effect.gen(function* () {
+    const { provider, part } = yield* loginPartFor(options.provider);
+    const makeToken = part.browser?.makeToken;
+    if (makeToken === undefined) {
+      return yield* new NoTokenMakingError({ provider: provider.name });
+    }
+    const name = Option.getOrElse(options.name, () => "");
+    const span = yield* parseSpan(
+      "expires",
+      Option.getOrElse(options.expires, () => ""),
+      TOKEN_SPAN,
+    );
+    const logins = yield* readLogins.pipe(
+      Effect.catchTag(
+        "ConfigError",
+        () => new NotLoggedInError({ provider: provider.name }),
+      ),
+    );
+    const saved = logins[provider.name];
+    if (saved === undefined || saved.way !== "browser") {
+      return yield* new NotLoggedInError({ provider: provider.name });
+    }
+    const now = yield* Clock.currentTimeMillis;
+    if (saved.expiresAt.getTime() <= now) {
+      return yield* new LoginExpiredError({ provider: provider.name });
+    }
+    const expiresAt = new Date(now + Duration.toMillis(span));
+    const token = yield* makeToken(saved.session, { name, expiresAt });
+    const output = yield* CliOutput;
+    yield* output.out(`${Redacted.value(token)}\n`);
+    yield* output.err(
+      `Made ${provider.name} token "${name}". It is shown only this once: store it now.\n`,
     );
   });
 

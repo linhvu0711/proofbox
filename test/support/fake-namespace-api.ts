@@ -29,9 +29,10 @@ const STATUS = new Map([
 ]);
 
 // <region>/namespace.cloud.compute.v1beta.ComputeService/<method>, or the
-// sign-in service's own /<service>/<method> (the call's region is "").
+// sign-in service's and the token service's /<service>/<method> (those
+// calls' region is "").
 const PATH =
-  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|nsl\.signin\.SigninService)\/([^/]+)$/;
+  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|(nsl\.signin\.SigninService|namespace\.cloud\.iam\.v1beta\.TokenService))\/([^/]+)$/;
 
 const LOGIN_PAGE = /^\/login\/([^/]+)$/;
 
@@ -227,13 +228,15 @@ export const startFakeNamespace = (
       req.on("end", () => {
         const call: FakeNamespaceCall = {
           region: match?.[1] ?? "",
-          method: match?.[2] ?? "",
+          method: match?.[3] ?? "",
           body: JSON.parse(text === "" ? "{}" : text) as unknown,
           authorization: req.headers.authorization,
         };
         calls.push(call);
         void Promise.resolve(
-          match !== null && match[1] === undefined && signin !== undefined
+          match !== null &&
+            match[2] === "nsl.signin.SigninService" &&
+            signin !== undefined
             ? signin.answer(call, `http://127.0.0.1:${bound}`)
             : answer(call),
         ).then((reply) => {

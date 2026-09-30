@@ -33,7 +33,7 @@ const alive = (token: string, now: number, margin: number) => {
   return typeof exp === "number" && exp * 1000 - now > margin;
 };
 
-const tenantTokenFor = (session: Redacted.Redacted<string>) =>
+export const tenantTokenFor = (session: Redacted.Redacted<string>) =>
   Effect.gen(function* () {
     const fail = (reason: string) =>
       new ProviderError({ provider: "namespace", reason });

@@ -19,7 +19,7 @@ export const idleDefault = (os: Os): Duration.Duration =>
 export const MAX_LIFE_DEFAULT = Duration.hours(3);
 
 export interface SpanSpec {
-  readonly units: ReadonlyArray<"ms" | "s" | "m" | "h">;
+  readonly units: ReadonlyArray<"ms" | "s" | "m" | "h" | "d" | "y">;
   readonly zero: boolean;
   readonly example: string;
 }
@@ -34,6 +34,22 @@ export const PACE_SPAN: SpanSpec = {
   units: ["ms", "s"],
   zero: true,
   example: "400ms",
+};
+
+export const TOKEN_SPAN: SpanSpec = {
+  units: ["h", "d", "y"],
+  zero: false,
+  example: "30d",
+};
+
+// A `y` is 365 days.
+const UNIT_MILLIS: Record<SpanSpec["units"][number], number> = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+  d: 86_400_000,
+  y: 31_536_000_000,
 };
 
 const spanPattern = (spec: SpanSpec): RegExp => {
@@ -60,15 +76,8 @@ export const parseSpan = (
     );
   }
   const count = Number(match[1]);
-  const unit =
-    match[2] === "ms"
-      ? 1
-      : match[2] === "s"
-        ? 1_000
-        : match[2] === "m"
-          ? 60_000
-          : 3_600_000;
-  const millis = count * unit;
+  // The match proves match[2] is one of the spec's units.
+  const millis = count * UNIT_MILLIS[match[2] as keyof typeof UNIT_MILLIS];
   if (
     !Number.isFinite(millis) ||
     Number.isNaN(new Date(Date.now() + millis).getTime())
