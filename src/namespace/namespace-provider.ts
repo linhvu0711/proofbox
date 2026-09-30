@@ -20,7 +20,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { PACE_SPAN, parseSpan } from "../deadline.ts";
+import { parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -608,7 +608,11 @@ export const makeNamespaceProvider = (deps: {
           yield* limitWait.pipe(
             Effect.mapError((error) => fail(error.message)),
           ),
-          PACE_SPAN,
+          {
+            units: ["ms", "s", "m"],
+            zero: true,
+            example: "45s",
+          },
         ).pipe(Effect.mapError((error) => fail(error.message)));
         const instanceId = yield* Effect.timeoutOption(
           Effect.gen(function* () {
@@ -717,12 +721,22 @@ export const makeNamespaceProvider = (deps: {
         ]);
         // Provisioning can outlast the create duration (a cold image build):
         // keep the host's own Deadline ahead until the Sandbox takes over,
-        // but never past the Max life.
+        // but never past the Max life. The recorded Deadline moves with it —
+        // otherwise the host-expiry destroys a host that is still being
+        // prepared once its initial allowance runs out.
         yield* Effect.forkScoped(
           Effect.repeat(
             Effect.gen(function* () {
               const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
               if (left > 0) {
+                const pushedAt =
+                  Math.floor(Date.now() / 1000) +
+                  Math.min(durationSeconds, left);
+                yield* Effect.promise(() =>
+                  writeFile(hostPaths.deadline, String(pushedAt), {
+                    mode: 0o600,
+                  }).catch(() => {}),
+                );
                 yield* api
                   .extend(region, instanceId, Math.min(durationSeconds, left))
                   .pipe(Effect.ignore);

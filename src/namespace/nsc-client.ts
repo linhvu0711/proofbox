@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Config, Effect, Redacted, Stream } from "effect";
 import {
@@ -118,6 +118,23 @@ export const makeNscClient = (
       });
       written.add(path);
     }
+    // A replaced login's token file would sit in the runtime dir until the
+    // next logout otherwise; keep only the live login's.
+    yield* Effect.promise(() =>
+      readdir(dir)
+        .then((entries) =>
+          Promise.all(
+            entries
+              .filter(
+                (entry) =>
+                  /^ns-token-[0-9a-f]{16}\.json$/.test(entry) &&
+                  entry !== basename(path),
+              )
+              .map((entry) => rm(join(dir, entry), { force: true })),
+          ),
+        )
+        .catch(() => {}),
+    );
     return path;
   });
 

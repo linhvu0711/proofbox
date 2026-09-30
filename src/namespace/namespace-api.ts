@@ -7,7 +7,7 @@ import {
 } from "@namespacelabs/sdk/api";
 import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
 import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
-import { Config, Effect, Option, Redacted } from "effect";
+import { Config, Effect, Option, Redacted, Schema } from "effect";
 import {
   type BadLoginsFileError,
   type LoginExpiredError,
@@ -59,6 +59,21 @@ export interface SshConfig {
   readonly privateKey: Uint8Array;
   readonly hostKeys: ReadonlyArray<string>;
 }
+
+// GetSSHConfig's Connect-JSON answer: strings and a non-empty host-key
+// list (each entry base64 as it arrives).
+const SshConfigBody = Schema.Struct({
+  username: Schema.String,
+  endpoint: Schema.String,
+  sshPrivateKey: Schema.String,
+  sshHostKeys: Schema.NonEmptyArray(Schema.String),
+});
+
+// A Connect error body; both fields may be absent on a bare HTTP error.
+const ConnectErrorBody = Schema.Struct({
+  code: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+});
 
 // What a create asks the Compute API for; proofbox shapes it.
 export interface CreateReq {
@@ -173,7 +188,12 @@ export const fromConnect =
 export const httpError = (
   call: string,
   status: number,
-  body: { readonly code?: string; readonly message?: string } | undefined,
+  body:
+    | {
+        readonly code?: string | undefined;
+        readonly message?: string | undefined;
+      }
+    | undefined,
   host?: { readonly region: string; readonly instanceId: string },
 ): ApiError => {
   const code = body?.code;
@@ -413,34 +433,25 @@ export const makeNamespaceApi = (deps: {
         },
         catch: () => unreachable(),
       });
-      const body = response.body as
-        | {
-            readonly code?: string;
-            readonly message?: string;
-            readonly username?: string;
-            readonly endpoint?: string;
-            readonly sshPrivateKey?: string;
-            readonly sshHostKeys?: ReadonlyArray<string>;
-          }
-        | undefined;
-      if (response.status !== 200 || body === undefined) {
-        return yield* httpError("GetSSHConfig", response.status, body, {
+      const decoded = yield* Schema.decodeUnknown(SshConfigBody)(
+        response.body,
+      ).pipe(Effect.option);
+      if (response.status !== 200) {
+        const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
+          response.body,
+        ).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+        return yield* httpError("GetSSHConfig", response.status, errorBody, {
           region,
           instanceId,
         });
       }
-      if (
-        typeof body.username !== "string" ||
-        typeof body.endpoint !== "string" ||
-        typeof body.sshPrivateKey !== "string" ||
-        !Array.isArray(body.sshHostKeys) ||
-        body.sshHostKeys.length === 0
-      ) {
+      if (Option.isNone(decoded)) {
         return yield* new ProviderError({
           provider: "namespace",
           reason: "ComputeService.GetSSHConfig gave an incomplete answer",
         });
       }
+      const body = decoded.value;
       return {
         username: body.username,
         endpoint: body.endpoint,

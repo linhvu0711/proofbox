@@ -18,6 +18,16 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
               info,
             })),
           })),
+          // A Provider that cannot be reached at all must not hide the
+          // Sandboxes of the rest: it is named like an unreached region
+          // and the others still list. Any other failure (auth, a corrupt
+          // file) still fails the command.
+          Effect.catchTag("ProviderUnavailableError", (error) =>
+            Effect.succeed({
+              unreached: [{ where: provider.name, reason: error.message }],
+              sandboxes: [],
+            }),
+          ),
         ),
     );
     for (const { unreached } of found) {
