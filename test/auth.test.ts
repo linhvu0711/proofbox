@@ -105,6 +105,25 @@ const fakeNamespaceSignin = async (
 // The fake's IAM base: its url without the `/{region}` tail.
 const iamUrl = (server: FakeNamespace) => server.url.replace("/{region}", "");
 
+// Waits for the held CompleteTenantLogin, then clicks the fake login
+// page's button like a person would.
+const clickWhenWaiting = async (
+  server: FakeNamespace,
+  loginId = "L1",
+): Promise<void> => {
+  const deadline = Date.now() + 30_000;
+  while (!server.calls.some((call) => call.method === "CompleteTenantLogin")) {
+    if (Date.now() > deadline) {
+      throw new Error("CompleteTenantLogin never arrived");
+    }
+    await pause(50);
+  }
+  const res = await fetch(`${iamUrl(server)}/login/${loginId}`, {
+    method: "POST",
+  });
+  await res.text();
+};
+
 describe("auth", () => {
   afterEach(async () => {
     cleanupEnvs();
@@ -1304,6 +1323,49 @@ describe("auth", () => {
     expect(() =>
       statSync(join(home, ".config", "proofbox", "logins.json")),
     ).toThrow();
+  });
+
+  it("a browser login with no browser prints the link and keeps waiting", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const run = runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_OPEN: makeFakeOpen("exit 1"),
+      },
+    });
+    await clickWhenWaiting(ns);
+    const result = await run;
+    // Then
+    expect(result.stderr).toBe(
+      `Could not open a browser. Open this link on any device: ${iamUrl(ns)}/login/L1\nWaiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-1.\n`,
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("a browser login with no opener installed prints the link", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const run = runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      },
+    });
+    await clickWhenWaiting(ns);
+    const result = await run;
+    // Then
+    expect(result.stderr).toBe(
+      `Could not open a browser. Open this link on any device: ${iamUrl(ns)}/login/L1\nWaiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-1.\n`,
+    );
+    expect(result.exitCode).toBe(0);
   });
 
   it("a browser login nobody finishes gives up at the login wait", async () => {

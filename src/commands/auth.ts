@@ -131,7 +131,12 @@ export const loginToProvider = (options: {
       });
     }
     const started = yield* browser.start;
-    yield* openBrowser(started.url);
+    const opened = yield* openBrowser(started.url);
+    if (!opened) {
+      yield* output.err(
+        `Could not open a browser. Open this link on any device: ${started.url}\n`,
+      );
+    }
     yield* output.err(
       "Waiting for you to log in in the browser... (Ctrl+C to stop)\n",
     );
