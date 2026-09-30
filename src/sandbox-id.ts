@@ -1,6 +1,11 @@
 import { randomInt } from "node:crypto";
 import { Effect } from "effect";
-import { BadSandboxIdError, UnknownProviderError } from "./errors.ts";
+import {
+  BadSandboxIdError,
+  NoRegionError,
+  UnknownProviderError,
+  UnknownRegionError,
+} from "./errors.ts";
 import type { Provider } from "./provider.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -8,14 +13,21 @@ const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 export const makeSandboxName = (length = 6) =>
   Array.from({ length }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
 
-const ID_PATTERN = /^([a-z][a-z0-9-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$/;
+// <provider>:<name>, with an optional <region> between for a Provider
+// whose names are regional.
+const ID_PATTERN =
+  /^([a-z][a-z0-9-]*):(?:([a-z][a-z0-9-]*):)?([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
 export interface SandboxId {
   readonly provider: string;
+  readonly region: string | undefined;
   readonly name: string;
 }
 
-export const formatSandboxId = (id: SandboxId) => `${id.provider}:${id.name}`;
+export const formatSandboxId = (id: SandboxId) =>
+  id.region === undefined
+    ? `${id.provider}:${id.name}`
+    : `${id.provider}:${id.region}:${id.name}`;
 
 export const parseSandboxId = (
   raw: string,
@@ -27,7 +39,8 @@ export const parseSandboxId = (
       return yield* new BadSandboxIdError({ id: raw });
     }
     const provider = match[1] as string;
-    const name = match[2] as string;
+    const region = match[2];
+    const name = match[3] as string;
     if (!known.includes(provider)) {
       return yield* new UnknownProviderError({
         provider,
@@ -35,7 +48,7 @@ export const parseSandboxId = (
         known,
       });
     }
-    return { provider, name };
+    return { provider, region, name };
   });
 
 export interface ResolvedSandboxId {
@@ -47,7 +60,10 @@ export interface ResolvedSandboxId {
 export const resolveSandboxId = (
   raw: string,
   providers: ReadonlyMap<string, Provider>,
-): Effect.Effect<ResolvedSandboxId, BadSandboxIdError | UnknownProviderError> =>
+): Effect.Effect<
+  ResolvedSandboxId,
+  BadSandboxIdError | NoRegionError | UnknownProviderError | UnknownRegionError
+> =>
   Effect.gen(function* () {
     const parsed = yield* parseSandboxId(
       raw,
@@ -61,5 +77,27 @@ export const resolveSandboxId = (
         new Error(`prefix ${parsed.provider} parsed but maps to no Provider`),
       );
     }
-    return { provider, prefix: parsed.provider, name: parsed.name };
+    if (provider.regions === undefined) {
+      if (parsed.region !== undefined) {
+        return yield* new BadSandboxIdError({ id: raw });
+      }
+      return { provider, prefix: parsed.provider, name: parsed.name };
+    }
+    if (parsed.region === undefined) {
+      return yield* new NoRegionError({ id: raw });
+    }
+    if (!provider.regions.known.includes(parsed.region)) {
+      return yield* new UnknownRegionError({
+        provider: provider.name,
+        region: parsed.region,
+        known: provider.regions.known,
+        id: raw,
+      });
+    }
+    // The region stays in the name so `${prefix}:${name}` is the full id.
+    return {
+      provider,
+      prefix: parsed.provider,
+      name: `${parsed.region}:${parsed.name}`,
+    };
   });

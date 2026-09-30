@@ -52,7 +52,7 @@ const exec = Command.make(
   "exec",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
     command: Args.text({ name: "command" }).pipe(Args.atLeast(1)),
   },
@@ -227,7 +227,7 @@ const del = Command.make(
   "delete",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
   },
   ({ id }) => deleteSandbox(id),
@@ -320,7 +320,7 @@ const live = Command.make(
   "live",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
   },
   ({ id }) => openLive(id),
