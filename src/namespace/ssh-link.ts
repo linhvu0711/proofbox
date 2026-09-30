@@ -404,10 +404,9 @@ export const makeOpenLink = (
 };
 
 // The Live view's local port: `ssh -L` through the same GetSSHConfig
-// gateway the links use. nsc's `instance port-forward` cannot carry it —
-// its per-connection dial rides the same websocket the token's grant does
-// not cover, and it dies with `websocket: bad handshake` (verified live
-// 2026-09-30). Scoped: the forward lives until the scope closes; `gone`
+// gateway the links use. GetVNCConfig answers a WebSocket behind an
+// ingress auth header that no VNC app sends (docs/test-decisions.md 14).
+// Scoped: the forward lives until the scope closes; `gone`
 // resolves with the failure if the ssh process exits after the port is
 // up. `ref` names the Sandbox the forward serves.
 export type SshForward = (

@@ -35,7 +35,7 @@ No file means `namespace` for both. `create --provider <name>` overrides it for 
 
 ## Install
 
-Needs Node 24 or later and pnpm. The `namespace` Provider needs a Namespace login: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. `nsc` on PATH is still needed for SSH and Live view. The `docker` Provider needs Docker.
+Needs Node 24 or later and pnpm.
 
 ```sh
 git clone https://github.com/linhvu0711/proofbox.git
@@ -44,6 +44,8 @@ pnpm install
 pnpm build
 pnpm link --global
 ```
+
+Then, for the `namespace` Provider, log in first: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. The `docker` Provider needs Docker.
 
 ## Example
 
@@ -110,7 +112,7 @@ Windows, mobile, the accessibility tree, and an MCP server.
 ```sh
 pnpm test             # fake Provider, no cloud
 pnpm test:docker      # needs Docker
-pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN and nsc on PATH; uses real Namespace minutes
+pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN; uses real Namespace minutes
 pnpm lint && pnpm typecheck
 ```
 

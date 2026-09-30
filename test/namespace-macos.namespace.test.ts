@@ -14,16 +14,14 @@ import { openEventsPage, readEvents } from "./support/events.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
-const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
-
 const destroy = (id: string): Promise<void> =>
   new Promise((resolve) => {
-    execFile(nscBin(), ["destroy", id, "--force"], () => resolve());
+    execFile("nsc", ["destroy", id, "--force"], () => resolve());
   });
 
 const nsc = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(nscBin(), args, (error, stdout, stderr) => {
+    execFile("nsc", args, (error, stdout, stderr) => {
       if (error === null) {
         resolve(stdout);
       } else {

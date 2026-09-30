@@ -258,9 +258,9 @@ export const logoutOfProvider = (name: string) =>
       return;
     }
     if (provider.name === "namespace") {
-      // The nsc stand-in keeps a bearer-token file per token, and the
-      // session trade a tenant-token file per session, in the runtime
-      // dir; those die with the login.
+      // Older versions kept a bearer-token file per token, and the session
+      // trade keeps a tenant-token file per session, in the runtime dir;
+      // those die with the login.
       const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" }))
         .dir;
       yield* Effect.tryPromise({

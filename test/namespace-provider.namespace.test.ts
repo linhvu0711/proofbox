@@ -22,11 +22,9 @@ import {
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
-const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
-
 const nsc = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(nscBin(), args, (error, stdout, stderr) => {
+    execFile("nsc", args, (error, stdout, stderr) => {
       if (error === null) {
         resolve(stdout);
       } else {

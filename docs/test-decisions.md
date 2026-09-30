@@ -44,3 +44,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 ## Tokens without claims
 
 13. Real revocable tokens are opaque (`nsrt_…`; `tokens_pb.ts` `CreateRevokableToken`), and no public IAM call introspects one with an instance-only grant — so rejecting tokens with no readable claims would refuse the tokens users actually mint. Decided 2026-09-30: a token with no readable claims is checked with the one `ListInstances` call and saved; account and expiry stay unknown, and the login and status lines say `token …<last4>` and `expiry not known`. A claims-bearing token (`nsct_` and friends) still shows its `tenant_id` and `exp`.
+
+## No nsc on the Caller
+
+14. Decided 2026-09-30: `nsc` leaves the Caller. Snapshot expiry calls `ContainerRegistryService.UpdateImageLifetime` with `ensureMinimumRemaining` 336h, the same only-extend rule as `--ensure-minimum`. The Live view stays on the `ssh -L` gateway forward of 12: `GetVNCConfig` answers a WebSocket endpoint that needs an `x-nsc-ingress-auth` header, which no VNC app sends, and the SDK documents it for Macs only.
