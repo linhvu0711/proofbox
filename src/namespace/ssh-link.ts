@@ -60,7 +60,16 @@ const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
     "utf8",
   );
 
-const lastLine = (text: string) => text.trim().split("\n").pop() ?? "";
+// Verbose ssh writes debug lines past the real error, so the last
+// non-debug line is the one that says what failed.
+const lastLine = (text: string) => {
+  const lines = text.trim().split("\n");
+  return (
+    lines.filter((line) => !line.startsWith("debug")).pop() ??
+    lines.pop() ??
+    ""
+  );
+};
 
 // A dead SSH gateway gets this long to come back before an exec or a
 // connect fails; 0s makes a test's first failure the final answer.
