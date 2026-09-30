@@ -25,7 +25,8 @@ import { DEFAULT_REGION, hostName } from "./regions.ts";
 export type ApiLoginError =
   | NotLoggedInError
   | LoginExpiredError
-  | BadLoginsFileError;
+  | BadLoginsFileError
+  | ProviderUnavailableError;
 
 export type ApiError =
   | ProviderError

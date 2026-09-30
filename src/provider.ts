@@ -100,7 +100,11 @@ export interface LoginInHand {
 
 export type ProviderLogin = Effect.Effect<
   LoginInHand,
-  NotLoggedInError | LoginExpiredError | BadLoginsFileError
+  | NotLoggedInError
+  | LoginExpiredError
+  | BadLoginsFileError
+  | ProviderUnavailableError
+  | ProviderError
 >;
 
 export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({

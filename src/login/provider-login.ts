@@ -1,5 +1,10 @@
-import { Clock, Config, Effect, Option } from "effect";
-import { LoginExpiredError, NotLoggedInError } from "../errors.ts";
+import { Clock, Config, Effect, Option, type Redacted } from "effect";
+import {
+  LoginExpiredError,
+  NotLoggedInError,
+  type ProviderError,
+  type ProviderUnavailableError,
+} from "../errors.ts";
 import type { ProviderLogin } from "../provider.ts";
 import { readLogins } from "./logins-file.ts";
 
@@ -16,8 +21,17 @@ export const envRegion = (provider: string) =>
   Config.option(Config.string(envRegionName(provider)));
 
 // The env token wins over the saved login; a saved login past its
-// expiresAt is an expired one.
-export const loginFor = (provider: string): ProviderLogin =>
+// expiresAt is an expired one. A browser login holds a session, which
+// `trade` turns into the token commands act with.
+export const loginFor = (
+  provider: string,
+  trade?: (
+    session: Redacted.Redacted<string>,
+  ) => Effect.Effect<
+    Redacted.Redacted<string>,
+    ProviderError | ProviderUnavailableError | LoginExpiredError
+  >,
+): ProviderLogin =>
   Effect.gen(function* () {
     // A redacted string can never fail to load, so `option` yields None
     // for a missing variable and anything else is a defect.
@@ -38,10 +52,15 @@ export const loginFor = (provider: string): ProviderLogin =>
     if (saved.expiresAt !== undefined && saved.expiresAt.getTime() <= now) {
       return yield* new LoginExpiredError({ provider });
     }
-    // A browser login holds no token to hand over yet; the trade lands
-    // in #49's later slice.
     if (saved.way === "browser") {
-      return yield* new NotLoggedInError({ provider });
+      // A browser slot is no token yet; without a trade it logs in nowhere.
+      if (trade === undefined) {
+        return yield* new NotLoggedInError({ provider });
+      }
+      return {
+        token: yield* trade(saved.session),
+        region: Option.fromNullable(saved.region),
+      };
     }
     return { token: saved.token, region: Option.fromNullable(saved.region) };
   });

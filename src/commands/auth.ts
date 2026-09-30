@@ -257,14 +257,15 @@ export const logoutOfProvider = (name: string) =>
       return;
     }
     if (provider.name === "namespace") {
-      // The nsc stand-in keeps a bearer-token file per token in the runtime
+      // The nsc stand-in keeps a bearer-token file per token, and the
+      // session trade a tenant-token file per session, in the runtime
       // dir; those die with the login.
       const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" }))
         .dir;
       yield* Effect.tryPromise({
         try: async () => {
           for (const file of await readdir(dir)) {
-            if (/^ns-token-[0-9a-f]{16}\.json$/.test(file)) {
+            if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
               await rm(join(dir, file), { force: true });
             }
           }

@@ -1,6 +1,6 @@
 import { extractClaims } from "@namespacelabs/sdk/auth";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
-import { ProviderError } from "../errors.ts";
+import { LoginExpiredError, ProviderError } from "../errors.ts";
 import { unreachable } from "./namespace-api.ts";
 
 // The one file that names nsl.signin.SigninService, so a change on
@@ -99,6 +99,18 @@ const LoginIdBody = Schema.Struct({
   ),
 });
 
+const TenantTokenBody = Schema.Struct({
+  tokenDurationSecs: Schema.propertySignature(Schema.NonNegativeInt).pipe(
+    Schema.fromKey("token_duration_secs"),
+  ),
+});
+
+const IssuedToken = Schema.Struct({
+  tenantToken: Schema.propertySignature(Schema.String).pipe(
+    Schema.fromKey("tenant_token"),
+  ),
+});
+
 const StartedLogin = Schema.Struct({
   loginId: Schema.propertySignature(Schema.String).pipe(
     Schema.fromKey("login_id"),
@@ -177,4 +189,33 @@ export const completeLogin = (loginId: string) =>
       account: row.tenantName,
       expiresAt: new Date(exp * 1000),
     };
+  });
+
+// A session trades for a one-hour tenant token: the Bearer every
+// Compute call then uses, and one that works in every region.
+export const issueTenantToken = (session: string) =>
+  Effect.gen(function* () {
+    const answer = yield* post(
+      "IssueTenantTokenFromSession",
+      Schema.encodeSync(TenantTokenBody)({ tokenDurationSecs: 3600 }),
+      session,
+    );
+    const error = decodeErrorBody(answer.body);
+    if (answer.status === 401 || error?.code === "unauthenticated") {
+      return yield* new LoginExpiredError({ provider: "namespace" });
+    }
+    if (answer.status !== 200) {
+      return yield* signinError(
+        "IssueTenantTokenFromSession",
+        answer.status,
+        answer.body,
+      );
+    }
+    const decoded = yield* Schema.decodeUnknown(IssuedToken)(answer.body).pipe(
+      Effect.option,
+    );
+    if (Option.isNone(decoded)) {
+      return yield* badAnswer("IssueTenantTokenFromSession");
+    }
+    return decoded.value.tenantToken;
   });

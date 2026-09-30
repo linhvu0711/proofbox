@@ -40,6 +40,7 @@ import {
   SESSION_1,
   SESSION_2,
   startFakeNamespace,
+  TENANT_1,
   toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
 import { makeFakeOpen } from "./support/fake-open.ts";
@@ -79,6 +80,20 @@ const BOTH =
   '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"},"other":{"way":"token","token":"o1k","account":"eve","expiresAt":"2999-01-01T00:00:00.000Z"}}';
 const NS_EU =
   '{"namespace":{"way":"token","token":"nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"eu"}}';
+const NS_BROWSER = `{"namespace":{"way":"browser","session":"${SESSION_1}","account":"team-1","expiresAt":"3000-01-01T00:00:00.000Z"}}`;
+const NS_BROWSER_EU = `{"namespace":{"way":"browser","session":"${SESSION_1}","account":"team-1","expiresAt":"3000-01-01T00:00:00.000Z","region":"eu"}}`;
+const NS_BROWSER_EXPIRED = `{"namespace":{"way":"browser","session":"${SESSION_1}","account":"team-1","expiresAt":"2000-01-01T00:00:00.000Z"}}`;
+
+// A tenant token JWT for tnt_team1 that ends in `seconds`.
+const tenantTokenEndingIn = (seconds: number) =>
+  `nsct_${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(
+    JSON.stringify(
+      toSnakeKeys({
+        tenantId: "tnt_team1",
+        exp: Math.floor(Date.now() / 1000) + seconds,
+      }),
+    ),
+  ).toString("base64url")}.sig`;
 
 const namespaces: FakeNamespace[] = [];
 const fakeNamespace = async (
@@ -1424,6 +1439,135 @@ describe("auth", () => {
     expect(
       ns.calls.filter((call) => call.method === "CompleteTenantLogin"),
     ).toHaveLength(2);
+  });
+
+  it("a second command reuses the tenant token", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin();
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+    };
+    // When
+    const first = await runCli(env, ["list"], { set });
+    const second = await runCli(env, ["list"], { set });
+    // Then
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(
+      ns.calls.filter((call) => call.method === "IssueTenantTokenFromSession"),
+    ).toHaveLength(1);
+    const listed = ns.calls.filter((call) => call.method === "ListInstances");
+    expect(listed).toHaveLength(8);
+    for (const call of listed) {
+      expect(call.authorization).toBe(`Bearer ${TENANT_1}`);
+    }
+    const files = readdirSync(env.runtime).filter((name) =>
+      /^ns-tenant-[0-9a-f]{16}\.json$/.test(name),
+    );
+    expect(files).toHaveLength(1);
+    const tenantFile = files.at(0);
+    if (tenantFile === undefined) {
+      expect.unreachable("no tenant token file");
+    }
+    expect(statSync(join(env.runtime, tenantFile)).mode & 0o777).toBe(0o600);
+  });
+
+  it("a tenant token near its end is traded again", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(
+      fakeSignin({ tenantToken: tenantTokenEndingIn(60) }),
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+    };
+    // When
+    const first = await runCli(env, ["list"], { set });
+    const second = await runCli(env, ["list"], { set });
+    // Then
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(
+      ns.calls.filter((call) => call.method === "IssueTenantTokenFromSession"),
+    ).toHaveLength(2);
+  });
+
+  it("auth status shows the browser login with its region and expiry", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER_EU);
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.stdout).toContain(
+      "namespace  logged in as team-1, region eu, expires 3000-01-01T00:00:00Z, saved login\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls).toEqual([]);
+  });
+
+  it("create after the browser login expired says to log in again", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER_EXPIRED);
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "namespace"],
+      {
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Your Provider login for namespace expired. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(ns.calls).toEqual([]);
+  });
+
+  it("auth logout namespace removes the cached tenant tokens", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin();
+    const tenantFile = join(env.runtime, "ns-tenant-0123456789abcdef.json");
+    writeFileSync(tenantFile, TENANT_1, { mode: 0o600 });
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(
+      readdirSync(env.runtime).filter((name) =>
+        /^ns-tenant-[0-9a-f]{16}\.json$/.test(name),
+      ),
+    ).toEqual([]);
+    expect(readSaved(home)).toEqual({});
   });
 
   effectIt.effect("the browser login waits 10 minutes by default", () =>

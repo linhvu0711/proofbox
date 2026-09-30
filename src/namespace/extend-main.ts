@@ -3,8 +3,8 @@ import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
-import { loginFor } from "../login/provider-login.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
+import { namespaceLogin } from "./namespace-login.ts";
 import { splitHostName } from "./regions.ts";
 
 const id = process.argv[2];
@@ -13,7 +13,7 @@ const seconds = Number(process.argv[3]);
 (id === undefined || !Number.isFinite(seconds) || seconds <= 0
   ? Effect.void
   : Effect.gen(function* () {
-      const api = makeNamespaceApi({ login: loginFor("namespace") });
+      const api = makeNamespaceApi({ login: namespaceLogin });
       const capFile = (yield* keeperPaths({ provider: "ns", name: id }))
         .maxLife;
       const { region, instanceId } = splitHostName(id);
