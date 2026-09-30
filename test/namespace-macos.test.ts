@@ -69,12 +69,7 @@ const makeMac = (
       checkToken: () => Effect.die("unused"),
     };
     const nsc: NscClient = {
-      checkLogin: Effect.die("unused"),
-      create: () => Effect.die("unused"),
-      destroy: () => Effect.die("unused"),
-      extend: () => Effect.die("unused"),
       ensureImageExpiry: () => Effect.void,
-      list: () => Effect.die("unused"),
       portForward: (id, port) =>
         note(calls, `portForward ${id} ${port}`).pipe(
           Effect.zipRight(portForward(id, port)),

@@ -790,6 +790,27 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("auth logout namespace removes the nsc token files", async () => {
+    // Given: a saved namespace login, an nsc token file, and a reachable
+    // Namespace that lists no Sandboxes
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const tokenFile = join(env.runtime, "ns-token-0123456789abcdef.json");
+    writeFileSync(tokenFile, `{"bearer_token":"${TOKEN}"}\n`);
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: { HOME: home, PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of namespace.\n");
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
   it("auth logout with no Sandboxes only logs out", async () => {
     // Given
     const env = makeEnv();

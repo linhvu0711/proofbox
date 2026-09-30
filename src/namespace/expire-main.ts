@@ -1,26 +1,27 @@
 import { access } from "node:fs/promises";
-import { CommandExecutor } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
-import { makeNscClient } from "./nsc-client.ts";
+import { loginFor } from "../login/provider-login.ts";
+import { makeNamespaceApi } from "./namespace-api.ts";
+import { splitHostName } from "./regions.ts";
 
 const id = process.argv[2];
 const at = Number(process.argv[3]);
 
-// The host's own Deadline starts when nsc finishes creating it, so it can
-// sit later than the Sandbox's Max life; this detached process destroys the
-// host at that absolute instant. `extend --ensure_minimum` can only push a
+// The host's own Deadline starts when the Compute API finishes creating it,
+// so it can sit later than the Sandbox's Max life; this detached process
+// destroys the host at that absolute instant. `extend` can only push a
 // Deadline later, never earlier, so there is no way to shorten the initial
 // lifetime — destroy is the only floor.
 (id === undefined || !Number.isFinite(at) || at <= 0
   ? Effect.void
   : Effect.gen(function* () {
-      const executor = yield* CommandExecutor.CommandExecutor;
-      const nsc = makeNscClient(executor);
+      const api = makeNamespaceApi({ login: loginFor("namespace") });
       const capFile = (yield* keeperPaths({ provider: "ns", name: id }))
         .maxLife;
+      const { region, instanceId } = splitHostName(id);
       // Sleep until the Max life, waking each minute to exit early when the
       // Sandbox was deleted: its cap file is gone, so the timer is no longer
       // needed.
@@ -43,7 +44,7 @@ const at = Number(process.argv[3]);
       // A failed destroy at the Max life must not leave the host running:
       // keep retrying until the host is gone (or the request is hopeless
       // for long enough that the host's own Deadline is the backstop).
-      yield* nsc.destroy(id).pipe(
+      yield* api.destroy(region, instanceId).pipe(
         Effect.retry(
           Schedule.spaced(Duration.seconds(15)).pipe(
             Schedule.upTo(Duration.minutes(30)),

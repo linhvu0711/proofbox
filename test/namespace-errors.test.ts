@@ -203,15 +203,37 @@ describe("Namespace errors", () => {
     });
   });
 
+  it("create with no nsc deletes the new host and says to install nsc", async () => {
+    // Given: Namespace answers create and wait; nsc is a missing path
+    const ns = await fakeNamespace((call) =>
+      call.method === "CreateInstance"
+        ? { json: { metadata: { instanceId: "abc123def4567" } } }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE, { set: nsEnv(ns) });
+    // Then: the new host was deleted before the failure surfaced
+    expect(result.stderr).toBe(
+      "nsc is not installed; install the Namespace CLI, then try again\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(
+      ns.calls.find(
+        (call) => call.method === "DestroyInstance" && call.region === "us",
+      )?.body,
+    ).toEqual({ instanceId: "abc123def4567" });
+  });
+
   it("exec with no ssh on PATH says to install an OpenSSH client", async () => {
     // Given: a PATH with no ssh and an nsc stub that answers port-forward
     // with a Listening line, then waits on stdin
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
-    const fake = makeFakeNsc(`case "$1 $2" in
+    const fake = makeFakeNsc(`case "$3 $4" in
 "instance port-forward")
   printf 'Listening on 127.0.0.1:4321\\n'
-  read -r _ ;;
+  sleep 60 ;;
 esac`);
     const env = makeEnv();
     // When
@@ -220,7 +242,11 @@ esac`);
       env,
       ["exec", "ns:us:abc123def4567", "--", "true"],
       {
-        set: { PATH: binDir, PROOFBOX_NSC: fake.path },
+        set: {
+          PATH: binDir,
+          PROOFBOX_NSC: fake.path,
+          PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+        },
       },
     );
     const millis = performance.now() - start;

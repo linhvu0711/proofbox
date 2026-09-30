@@ -158,7 +158,12 @@ export interface Provider {
     deadline: Date,
   ) => Effect.Effect<
     void,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError
   >;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
@@ -168,10 +173,20 @@ export interface Provider {
       readonly password: string;
       readonly gone: Effect.Effect<
         never,
-        SandboxGoneError | ProviderError | ProviderUnavailableError
+        | BadLoginsFileError
+        | LoginExpiredError
+        | NotLoggedInError
+        | SandboxGoneError
+        | ProviderError
+        | ProviderUnavailableError
       >;
     },
-    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError,
     Scope.Scope
   >;
   // Only where an OS offer has the "snapshot" feature. `save` stores the
@@ -183,7 +198,12 @@ export interface Provider {
       fingerprint: string,
     ) => Effect.Effect<
       void,
-      ProviderError | ProviderUnavailableError | SandboxGoneError,
+      | BadLoginsFileError
+      | LoginExpiredError
+      | NotLoggedInError
+      | ProviderError
+      | ProviderUnavailableError
+      | SandboxGoneError,
       Progress
     >;
   };
@@ -191,7 +211,12 @@ export interface Provider {
     name: string,
   ) => Effect.Effect<
     SandboxInfo,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError
   >;
   readonly list: Effect.Effect<
     ListResult,
@@ -224,14 +249,24 @@ export interface Provider {
     name: string,
   ) => Effect.Effect<
     Connection,
-    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
   readonly memoryKills: (
     name: string,
   ) => Effect.Effect<
     number,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError
   >;
 }
 

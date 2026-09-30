@@ -13,6 +13,9 @@ import {
 } from "effect";
 import { commandEvents } from "../command-events.ts";
 import {
+  type BadLoginsFileError,
+  type LoginExpiredError,
+  type NotLoggedInError,
   ProviderError,
   ProviderUnavailableError,
   type SandboxGoneError,
@@ -50,7 +53,12 @@ export type OpenLink = (
   owner: LinkOwner,
 ) => Effect.Effect<
   Link,
-  ProviderError | ProviderUnavailableError | SandboxGoneError,
+  | BadLoginsFileError
+  | LoginExpiredError
+  | NotLoggedInError
+  | ProviderError
+  | ProviderUnavailableError
+  | SandboxGoneError,
   Scope.Scope
 >;
 

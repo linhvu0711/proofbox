@@ -160,7 +160,11 @@ export const makeNamespaceProvider = (deps: {
     use: (link: Link) => Effect.Effect<A, E>,
   ): Effect.Effect<
     A,
-    E | ProviderError | ProviderUnavailableError | SandboxGoneError
+    | ApiLoginError
+    | E
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
   > =>
     Effect.scoped(
       Effect.gen(function* () {

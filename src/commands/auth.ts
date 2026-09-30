@@ -1,3 +1,5 @@
+import { readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { text } from "node:stream/consumers";
 import { Clock, Effect, Either, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
@@ -11,6 +13,7 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
+import { keeperPaths } from "../keeper/paths.ts";
 import {
   changeLogins,
   readLogins,
@@ -171,6 +174,26 @@ export const logoutOfProvider = (name: string) =>
     if (before[provider.name] === undefined) {
       yield* output.err(`No saved login for ${provider.name}.\n`);
       return;
+    }
+    if (provider.name === "namespace") {
+      // The nsc stand-in keeps a bearer-token file per token in the runtime
+      // dir; those die with the login.
+      const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" }))
+        .dir;
+      yield* Effect.tryPromise({
+        try: async () => {
+          for (const file of await readdir(dir)) {
+            if (/^ns-token-[0-9a-f]{16}\.json$/.test(file)) {
+              await rm(join(dir, file), { force: true });
+            }
+          }
+        },
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: String(cause),
+          }),
+      });
     }
     if (Either.isLeft(listed)) {
       yield* output.err(

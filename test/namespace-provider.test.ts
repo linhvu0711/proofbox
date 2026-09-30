@@ -72,13 +72,8 @@ const fakeApi = (
 };
 
 const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
-  checkLogin: Effect.die("unused"),
-  create: () => Effect.die("unused"),
-  destroy: () => Effect.die("unused"),
-  extend: () => Effect.die("unused"),
   ensureImageExpiry: (image, hours) =>
     Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
-  list: () => Effect.die("unused"),
   portForward: () => Effect.die("unused"),
 });
 

@@ -15,8 +15,8 @@ export const ProvidersLive = Layer.effect(
   Providers,
   Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
-    const nsc = makeNscClient(executor);
     const namespaceLogin = loginFor("namespace");
+    const nsc = makeNscClient(executor, namespaceLogin);
     const providers = new Map<string, Provider>([
       ["docker", makeDockerProvider({ client: makeDockerClient(executor) })],
       [
