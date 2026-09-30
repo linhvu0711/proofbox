@@ -1,14 +1,32 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { it as effectIt } from "@effect/vitest";
+import {
+  Chunk,
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Redacted,
+  Ref,
+} from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { logoutOfProvider } from "../src/commands/auth.ts";
+import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { changeLogins } from "../src/login/logins-file.ts";
+import { type Provider, Providers } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 
 const makeHome = (logins?: string): string => {
@@ -21,6 +39,24 @@ const makeHome = (logins?: string): string => {
   }
   return home;
 };
+
+const lockDir = (home: string) =>
+  join(home, ".config", "proofbox", "logins.lock");
+
+const loginsFile = (home: string) =>
+  join(home, ".config", "proofbox", "logins.json");
+
+const readSaved = (home: string) =>
+  JSON.parse(readFileSync(loginsFile(home), "utf8")) as unknown;
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const ADA =
+  '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}';
+const EVE =
+  '{"other":{"way":"token","token":"o1k","account":"eve","expiresAt":"2999-01-01T00:00:00.000Z"}}';
+const BOTH =
+  '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"},"other":{"way":"token","token":"o1k","account":"eve","expiresAt":"2999-01-01T00:00:00.000Z"}}';
 
 describe("auth", () => {
   afterEach(cleanupEnvs);
@@ -537,6 +573,223 @@ describe("auth", () => {
     expect(result.stderr).toBe("No saved login for fake.\n");
     expect(result.exitCode).toBe(0);
   });
+
+  it("a login waiting on the logins lock keeps a slot saved meanwhile", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome("{}");
+    mkdirSync(lockDir(home));
+    // When
+    const run = runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    await pause(1500);
+    writeFileSync(loginsFile(home), EVE);
+    rmSync(lockDir(home), { recursive: true });
+    const result = await run;
+    // Then
+    expect(result.stderr).toBe("Logged in to fake as ada.\n");
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({
+      other: {
+        way: "token",
+        token: "o1k",
+        account: "eve",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+      fake: {
+        way: "token",
+        token: "t0k",
+        account: "ada",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+    });
+    expect(existsSync(lockDir(home))).toBe(false);
+  });
+
+  it("a login waiting on the logins lock names the account saved meanwhile", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome("{}");
+    mkdirSync(lockDir(home));
+    // When
+    const run = runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t1k\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    await pause(1500);
+    writeFileSync(loginsFile(home), ADA);
+    rmSync(lockDir(home), { recursive: true });
+    const result = await run;
+    // Then
+    expect(result.stderr).toBe("Logged in to fake as bob (replaced ada).\n");
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({
+      fake: {
+        way: "token",
+        token: "t1k",
+        account: "bob",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  it("a login stops when the logins lock stays busy", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(ADA);
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t1k\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      `Another proofbox auth command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readFileSync(loginsFile(home), "utf8")).toBe(ADA);
+    expect(existsSync(lockDir(home))).toBe(true);
+  });
+
+  it("a login that fails inside the logins lock leaves no lock", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    mkdirSync(loginsFile(home), { recursive: true });
+    // When
+    const result = await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      `Bad logins file ${loginsFile(home)}: could not be read; delete it and log in again\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(lockDir(home))).toBe(false);
+  });
+
+  it("a logout waiting on the logins lock keeps a slot saved meanwhile", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(ADA);
+    mkdirSync(lockDir(home));
+    // When
+    const run = runCli(env, ["auth", "logout", "fake"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    await pause(1500);
+    writeFileSync(loginsFile(home), BOTH);
+    rmSync(lockDir(home), { recursive: true });
+    const result = await run;
+    // Then
+    expect(result.stderr).toBe("Logged out of fake.\n");
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({
+      other: {
+        way: "token",
+        token: "o1k",
+        account: "eve",
+        expiresAt: "2999-01-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  it("two logouts at once: one logs out, one finds no saved login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(ADA);
+    mkdirSync(lockDir(home));
+    // When
+    const options = {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    };
+    const one = runCli(env, ["auth", "logout", "fake"], options);
+    const two = runCli(env, ["auth", "logout", "fake"], options);
+    await pause(1500);
+    rmSync(lockDir(home), { recursive: true });
+    const [first, second] = await Promise.all([one, two]);
+    // Then
+    expect([first.stderr, second.stderr].sort()).toEqual([
+      "Logged out of fake.\n",
+      "No saved login for fake.\n",
+    ]);
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  effectIt.effect(
+    "logout lists Sandboxes before it takes the logins lock",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+        trackTempDir(root);
+        const home = makeHome(ADA);
+        const listing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const providers = Layer.succeed(
+          Providers,
+          new Map<string, Provider>([
+            [
+              "fake",
+              {
+                ...makeFakeProvider({ root, watch: "none" }),
+                list: Deferred.succeed(listing, undefined).pipe(
+                  Effect.zipRight(Deferred.await(release)),
+                  Effect.as([]),
+                ),
+              },
+            ],
+          ]),
+        );
+        yield* Effect.gen(function* () {
+          // When
+          const fiber = yield* Effect.fork(logoutOfProvider("fake"));
+          yield* Deferred.await(listing);
+          yield* changeLogins((logins) => ({
+            ...logins,
+            other: {
+              way: "token",
+              token: Redacted.make("o1k"),
+              account: "eve",
+              expiresAt: new Date("2999-01-01T00:00:00.000Z"),
+            },
+          }));
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(fiber);
+          // Then
+          const output = yield* CliOutput;
+          const stderr = Chunk.toReadonlyArray(
+            yield* Ref.get(output.captured.err),
+          ).join("");
+          expect(stderr).toBe("Logged out of fake.\n");
+          expect(readSaved(home)).toEqual({
+            other: {
+              way: "token",
+              token: "o1k",
+              account: "eve",
+              expiresAt: "2999-01-01T00:00:00.000Z",
+            },
+          });
+        }).pipe(
+          Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+          Effect.withConfigProvider(
+            ConfigProvider.fromMap(new Map([["HOME", home]])),
+          ),
+        );
+      }),
+  );
 
   it("auth login --token with nothing on stdin saves nothing", async () => {
     // Given

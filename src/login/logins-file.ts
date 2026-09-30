@@ -8,8 +8,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { Config, Effect, Schema } from "effect";
-import { BadLoginsFileError } from "../errors.ts";
+import { Config, Duration, Effect, Schema } from "effect";
+import { BadLoginsFileError, LoginsBusyError } from "../errors.ts";
+import { withFileLock } from "../file-lock.ts";
 
 export const SavedLogin = Schema.Struct({
   way: Schema.Literal("token"),
@@ -62,16 +63,12 @@ export const readLogins = Effect.gen(function* () {
 // Write a unique temp file and rename it over logins.json, so a crash
 // never leaves half a file; the dir and file stay readable by the owner
 // only.
-export const saveLogins = (logins: LoginsFile) =>
+const saveLogins = (logins: LoginsFile) =>
   Effect.gen(function* () {
     const path = yield* loginsPath;
-    const dir = dirname(path);
     const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     yield* Effect.tryPromise({
       try: async () => {
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        // mkdir's mode only applies to a new dir, so chmod always.
-        await chmod(dir, 0o700);
         try {
           await writeFile(
             temp,
@@ -88,4 +85,36 @@ export const saveLogins = (logins: LoginsFile) =>
       catch: () =>
         new BadLoginsFileError({ path, reason: "could not be written" }),
     });
+  });
+
+// Each auth command reads, changes one slot, and writes; the lock keeps
+// an overlapping command's slot from being dropped by the last write.
+// Returns the logins as read under the lock.
+export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
+  Effect.gen(function* () {
+    const path = yield* loginsPath;
+    const dir = dirname(path);
+    yield* Effect.tryPromise({
+      try: async () => {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        // mkdir's mode only applies to a new dir, so chmod always.
+        await chmod(dir, 0o700);
+      },
+      catch: () =>
+        new BadLoginsFileError({ path, reason: "could not be written" }),
+    });
+    const lockDir = join(dir, "logins.lock");
+    return yield* withFileLock<LoginsBusyError | BadLoginsFileError>({
+      dir: lockDir,
+      wait: Duration.seconds(5),
+      busy: () => new LoginsBusyError({ lockDir }),
+      failed: () =>
+        new BadLoginsFileError({ path, reason: "could not be written" }),
+    })(
+      Effect.gen(function* () {
+        const logins = yield* readLogins;
+        yield* saveLogins(change(logins));
+        return logins;
+      }),
+    );
   });

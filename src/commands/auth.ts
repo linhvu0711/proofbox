@@ -10,7 +10,7 @@ import {
   ProviderError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { readLogins, saveLogins } from "../login/logins-file.ts";
+import { changeLogins, readLogins } from "../login/logins-file.ts";
 import { envToken, envTokenName } from "../login/provider-login.ts";
 import { type LoginWay, Providers } from "../provider.ts";
 
@@ -63,9 +63,7 @@ export const loginToProvider = (options: {
       return yield* new NoTokenError({ provider: provider.name });
     }
     const account = yield* part.checkToken(Redacted.make(token));
-    const logins = yield* readLogins;
-    const previous = logins[provider.name];
-    yield* saveLogins({
+    const before = yield* changeLogins((logins) => ({
       ...logins,
       [provider.name]: {
         way: "token",
@@ -73,7 +71,8 @@ export const loginToProvider = (options: {
         account: account.account,
         expiresAt: account.expiresAt,
       },
-    });
+    }));
+    const previous = before[provider.name];
     const output = yield* CliOutput;
     yield* output.err(
       previous === undefined
@@ -135,9 +134,15 @@ export const logoutOfProvider = (name: string) =>
       return;
     }
     const listed = yield* Effect.either(provider.list);
-    const rest = { ...logins };
-    delete rest[provider.name];
-    yield* saveLogins(rest);
+    const before = yield* changeLogins((saved) => {
+      const rest = { ...saved };
+      delete rest[provider.name];
+      return rest;
+    });
+    if (before[provider.name] === undefined) {
+      yield* output.err(`No saved login for ${provider.name}.\n`);
+      return;
+    }
     if (Either.isLeft(listed)) {
       yield* output.err(
         `Logged out of ${provider.name}. Could not check for running Sandboxes. Any left stop at their Deadline.\n`,

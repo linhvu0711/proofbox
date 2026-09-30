@@ -1,6 +1,5 @@
-import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { Duration, Effect, Schedule, Schema, Stream } from "effect";
+import { Duration, Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
 import {
@@ -9,6 +8,7 @@ import {
   type WorkFileGrewError,
   WorkFolderTooBigError,
 } from "../errors.ts";
+import { withFileLock } from "../file-lock.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
@@ -34,12 +34,6 @@ export const readWorkFolder = (folder: string, maxSize: number) =>
     return files;
   });
 
-const hasCode = (cause: unknown, code: string) =>
-  typeof cause === "object" &&
-  cause !== null &&
-  "code" in cause &&
-  cause.code === code;
-
 // A saved list lives in the Sandbox; check paths before they reach rm
 // and tar so a tampered one cannot point the sync outside the Work
 // folder.
@@ -60,43 +54,16 @@ const withUploadLock = <A, E, R>(
     const paths = yield* keeperPaths({ provider, name });
     const lockDir = join(paths.dir, `upload-${name}.lock`);
     const reason = `another upload to ${name} is in flight; delete ${lockDir} if it is stale`;
-    const take = Effect.tryPromise({
-      try: async () => {
-        try {
-          await mkdir(lockDir);
-          return true;
-        } catch (cause) {
-          if (hasCode(cause, "EEXIST")) {
-            return false;
-          }
-          throw cause;
-        }
-      },
-      catch: (cause) =>
+    return yield* withFileLock({
+      dir: lockDir,
+      wait: Duration.minutes(1),
+      busy: () => new ProviderError({ provider, reason }),
+      failed: (cause) =>
         new ProviderError({
           provider,
           reason: cause instanceof Error ? cause.message : String(cause),
         }),
-    }).pipe(
-      Effect.filterOrFail(
-        (held) => held,
-        () => new ProviderError({ provider, reason }),
-      ),
-    );
-    return yield* Effect.acquireUseRelease(
-      Effect.retry(take, {
-        while: (error) =>
-          error instanceof ProviderError && error.reason === reason,
-        schedule: Schedule.spaced(Duration.millis(100)).pipe(
-          Schedule.upTo(Duration.minutes(1)),
-        ),
-      }),
-      () => effect,
-      () =>
-        Effect.promise(() =>
-          rm(lockDir, { recursive: true, force: true }).catch(() => {}),
-        ),
-    );
+    })(effect);
   });
 
 const runInSandbox = (
