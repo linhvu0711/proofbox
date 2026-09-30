@@ -194,8 +194,9 @@ export const makeOpenLink = (
       const { region, instanceId } = splitHostName(id);
       const cfg = yield* api.sshConfig(region, instanceId);
       const target = `${cfg.username}@${cfg.endpoint}`;
+      const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
-        const ssh = sshBase(paths.control, paths.key, paths.knownHosts, target);
+        const ssh = sshBase(paths.control, keeperKey, paths.knownHosts, target);
         return {
           ssh,
           run: runWith(ssh),
@@ -207,10 +208,12 @@ export const makeOpenLink = (
           ? paths.control
           : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
       // The gateway key is written once per open, next to the control socket
-      // it belongs to, and removed when the link's scope closes. The host
-      // keys go to the per-Sandbox known_hosts file every open refreshes.
-      const key =
-        owner === "keeper" ? paths.key : `${ctl.replace(/\.ctl$/, "")}.key`;
+      // it belongs to, and removed when the link's scope closes. It cannot
+      // share paths.key: ssh checks a <key>.pub next to the identity file,
+      // and the .pub there belongs to the local keypair create made. The
+      // host keys go to the per-Sandbox known_hosts file every open
+      // refreshes.
+      const key = `${ctl.replace(/\.ctl$/, "")}.sshkey`;
       yield* Effect.tryPromise({
         try: () =>
           writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>

@@ -390,11 +390,19 @@ export const makeNamespaceProvider = (deps: {
           .map(async (name) => {
             if (!(await stale(`ns-${name}.key`))) return;
             await Promise.all(
-              [".key", ".key.pub", ".max-life", ".os", ".ctl", ".sock"].map(
-                (suffix) =>
-                  rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
-                    () => {},
-                  ),
+              [
+                ".key",
+                ".key.pub",
+                ".max-life",
+                ".os",
+                ".ctl",
+                ".sock",
+                ".sshkey",
+                ".known-hosts",
+              ].map((suffix) =>
+                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
+                  () => {},
+                ),
               ),
             );
           }),
@@ -441,6 +449,10 @@ export const makeNamespaceProvider = (deps: {
           rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
           rm(dir.maxLife, { force: true }).catch(() => {}),
           rm(dir.os, { force: true }).catch(() => {}),
+          rm(dir.knownHosts, { force: true }).catch(() => {}),
+          rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
+            force: true,
+          }).catch(() => {}),
         ]).then(() => {}),
       );
       return present ? ("deleted" as const) : ("gone" as const);

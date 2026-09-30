@@ -77,6 +77,10 @@ describe("ssh link", () => {
           provider: "ns",
           name: "us:abc123def4567",
         });
+        // The gateway key lives next to the control socket under a name
+        // with no .pub sibling — ssh would compare the ephemeral key to
+        // the create-time local public key otherwise.
+        const sshKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
         // When
         const link = yield* makeOpenLink(api, executor)(
           "us:abc123def4567",
@@ -88,14 +92,14 @@ describe("ssh link", () => {
         // ... and the ssh argv holds the key, the pinned host keys, and the
         // endpoint target
         expect(link.ssh).toContain("-i");
-        expect(link.ssh).toContain(paths.key);
+        expect(link.ssh).toContain(sshKey);
         expect(link.ssh).toContain("abc123def4567@ssh.iad4.namespace.so");
         expect(link.ssh).toContain("StrictHostKeyChecking=yes");
         expect(link.ssh).toContain(`UserKnownHostsFile=${paths.knownHosts}`);
         expect(link.ssh).not.toContain("StrictHostKeyChecking=no");
         // The key file holds the returned key, owner-only
-        expect(readFileSync(paths.key, "utf8")).toBe(PEM.toString("utf8"));
-        expect(statSync(paths.key).mode & 0o777).toBe(0o600);
+        expect(readFileSync(sshKey, "utf8")).toBe(PEM.toString("utf8"));
+        expect(statSync(sshKey).mode & 0o777).toBe(0o600);
         // ... and the known_hosts file pins the returned host keys
         expect(readFileSync(paths.knownHosts, "utf8")).toBe(
           `ssh.iad4.namespace.so ${HOST_KEY}\n`,
