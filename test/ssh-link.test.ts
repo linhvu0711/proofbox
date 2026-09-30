@@ -137,6 +137,9 @@ describe("ssh link", () => {
       const fake = fakeSshForward(log);
       process.env.PATH = `${fake.binDir}:${originalPath}`;
       return Effect.gen(function* () {
+        const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
+          [],
+        );
         const api: NamespaceApi = {
           create: () => Effect.die("unused"),
           wait: () => Effect.die("unused"),
@@ -144,13 +147,18 @@ describe("ssh link", () => {
           extend: () => Effect.die("unused"),
           list: () => Effect.die("unused"),
           checkToken: () => Effect.die("unused"),
-          sshConfig: () =>
-            Effect.succeed({
-              username: "abc123def4567",
-              endpoint: "ssh.iad4.namespace.so",
-              privateKey: new Uint8Array(PEM),
-              hostKeys: [HOST_KEY],
-            }),
+          sshConfig: (region, instanceId) =>
+            Ref.update(asked, (all) => [
+              ...all,
+              [region, instanceId] as const,
+            ]).pipe(
+              Effect.as({
+                username: "abc123def4567",
+                endpoint: "ssh.iad4.namespace.so",
+                privateKey: new Uint8Array(PEM),
+                hostKeys: [HOST_KEY],
+              }),
+            ),
         };
         const executor = yield* CommandExecutor.CommandExecutor;
         // When
@@ -158,7 +166,9 @@ describe("ssh link", () => {
           "us:abc123def4567",
           5900,
         );
-        // Then: the reported port is the one ssh bound
+        // Then: GetSSHConfig was asked in the id's region for its instance
+        expect(yield* Ref.get(asked)).toEqual([["us", "abc123def4567"]]);
+        // ... and the reported port is the one ssh bound
         expect(forward.port).toBe(40022);
         // ... and ssh ran -N -L to the gateway with the key and pinned hosts
         const argv = readFileSync(log, "utf8");
