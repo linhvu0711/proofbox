@@ -408,6 +408,14 @@ export class TokenPermissionError extends Data.TaggedError(
   }
 }
 
+export class TokenDeniedError extends Data.TaggedError("TokenDeniedError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `Your ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} account cannot make tokens. Ask a workspace admin.`;
+  }
+}
+
 export class BadLoginsFileError extends Data.TaggedError("BadLoginsFileError")<{
   readonly path: string;
   readonly reason: string;

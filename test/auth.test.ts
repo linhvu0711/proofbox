@@ -2024,4 +2024,60 @@ describe("auth", () => {
     expect(result.stderr).toBe("docker needs no login.\n");
     expect(result.exitCode).toBe(125);
   });
+
+  it("auth token namespace without the right to make tokens says to ask an admin", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { error: { code: "permission_denied", message: "denied" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Your Namespace account cannot make tokens. Ask a workspace admin.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace with a session Namespace refuses says the login expired", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { error: { code: "unauthenticated", message: "bad token" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Your Provider login for namespace expired. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
 });

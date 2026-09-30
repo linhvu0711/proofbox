@@ -3,7 +3,9 @@
 // one way: "capacity" refuses a create on capacity, "denied" refuses
 // every call on permission, "rejected" rejects every token, "login"
 // plays the sign-in calls and the login page, answers a robot token to
-// CreateRevokableToken, and answers `{}` to every Compute call.
+// CreateRevokableToken, and answers `{}` to every Compute call;
+// "token-denied" plays the sign-in calls too but refuses
+// CreateRevokableToken on permission.
 import {
   type FakeNamespaceAnswer,
   type FakeNamespaceCall,
@@ -32,12 +34,15 @@ const answer = (call: FakeNamespaceCall): FakeNamespaceAnswer => {
   if (mode === "login" && call.method === "CreateRevokableToken") {
     return { json: { bearerToken: "nsrt_fake_ci_token" } };
   }
+  if (mode === "token-denied" && call.method === "CreateRevokableToken") {
+    return { error: { code: "permission_denied", message: "denied" } };
+  }
   return { json: {} };
 };
 
 const server = await startFakeNamespace(
   answer,
   port,
-  mode === "login" ? fakeSignin() : undefined,
+  mode === "login" || mode === "token-denied" ? fakeSignin() : undefined,
 );
 console.log(`fake-namespace-api ${mode} on ${server.url}`);

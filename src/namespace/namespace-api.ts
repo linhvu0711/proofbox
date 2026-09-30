@@ -12,12 +12,13 @@ import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespa
 import { Config, Effect, Option, Redacted, Schema } from "effect";
 import {
   type BadLoginsFileError,
-  type LoginExpiredError,
+  LoginExpiredError,
   type NotLoggedInError,
   ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
+  TokenDeniedError,
   TokenPermissionError,
   TokenRejectedError,
 } from "../errors.ts";
@@ -135,7 +136,10 @@ export interface NamespaceApi {
     request: TokenRequest,
   ) => Effect.Effect<
     Redacted.Redacted<string>,
-    ProviderUnavailableError | ProviderError
+    | TokenDeniedError
+    | LoginExpiredError
+    | ProviderUnavailableError
+    | ProviderError
   >;
 }
 
@@ -543,6 +547,12 @@ export const makeNamespaceApi = (deps: {
             cause.code === Code.DeadlineExceeded
           ) {
             return unreachable();
+          }
+          if (cause.code === Code.PermissionDenied) {
+            return new TokenDeniedError({ provider: "namespace" });
+          }
+          if (cause.code === Code.Unauthenticated) {
+            return new LoginExpiredError({ provider: "namespace" });
           }
           return new ProviderError({
             provider: "namespace",

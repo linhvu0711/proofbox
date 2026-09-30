@@ -19,6 +19,7 @@ import {
   type ProviderLimitError,
   type ProviderUnavailableError,
   type SandboxGoneError,
+  type TokenDeniedError,
   type TokenExposedError,
   type TokenPermissionError,
   type TokenRejectedError,
@@ -86,7 +87,10 @@ export interface BrowserWay {
     request: TokenRequest,
   ) => Effect.Effect<
     Redacted.Redacted<string>,
-    LoginExpiredError | ProviderUnavailableError | ProviderError
+    | LoginExpiredError
+    | TokenDeniedError
+    | ProviderUnavailableError
+    | ProviderError
   >;
 }
 
