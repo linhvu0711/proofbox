@@ -118,7 +118,7 @@ export const sendSecrets = (rawId: string, secrets: ReadonlyArray<Secret>) =>
     const providers = yield* Providers;
     const id = yield* resolveSandboxId(rawId, providers);
     const provider = id.provider;
-    const info = yield* provider.get(id.name);
+    const info = yield* provider.get(id);
     const progress = yield* Progress;
     const body = secrets
       .map(
@@ -130,7 +130,7 @@ export const sendSecrets = (rawId: string, secrets: ReadonlyArray<Secret>) =>
       `sending ${secrets.length} ${secrets.length === 1 ? "Secret" : "Secrets"}`,
       withDeadlinePush(
         provider,
-        id.name,
+        id,
         info,
       )(
         Effect.gen(function* () {

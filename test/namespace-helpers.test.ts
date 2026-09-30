@@ -13,7 +13,6 @@ const TOKEN =
   "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig";
 
 const INSTANCE = "abc123def4567";
-const HOST = `us:${INSTANCE}`;
 
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-helpers-"));
@@ -68,10 +67,10 @@ describe("Namespace helpers", () => {
     const ns = await startFakeNamespace(() => ({ json: {} }));
     const runtime = tempDir();
     const home = tempDir();
-    capFile(runtime, HOST, Math.floor(Date.now() / 1000) + 3600);
+    capFile(runtime, INSTANCE, Math.floor(Date.now() / 1000) + 3600);
     const result = await runHelper(
       "src/namespace/extend-main.ts",
-      [HOST, "60"],
+      ["us", INSTANCE, "60"],
       {
         PROOFBOX_RUNTIME_DIR: runtime,
         PROOFBOX_NAMESPACE_TOKEN: TOKEN,
@@ -109,10 +108,10 @@ describe("Namespace helpers", () => {
       })}\n`,
       { mode: 0o600 },
     );
-    capFile(runtime, HOST, Math.floor(Date.now() / 1000) + 3600);
+    capFile(runtime, INSTANCE, Math.floor(Date.now() / 1000) + 3600);
     const result = await runHelper(
       "src/namespace/expire-main.ts",
-      [HOST, `${Math.floor(Date.now() / 1000)}`],
+      ["us", INSTANCE, `${Math.floor(Date.now() / 1000)}`],
       {
         PROOFBOX_RUNTIME_DIR: runtime,
         PROOFBOX_NAMESPACE_TOKEN: undefined,

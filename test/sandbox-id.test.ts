@@ -1,8 +1,45 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
+import { afterEach, describe, expect } from "vitest";
+import type { Provider } from "../src/provider.ts";
+import { resolveSandboxId } from "../src/sandbox-id.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("Sandbox id", () => {
   afterEach(cleanupEnvs);
+
+  it.effect("a regional id hands its region over apart", () =>
+    Effect.gen(function* () {
+      // Given: a Providers map with the Namespace Provider shape
+      const namespaceLike: Provider = {
+        name: "namespace",
+        idPrefix: "ns",
+        login: { _tag: "None" },
+        regions: { known: ["us", "eu"], fallback: "us" },
+        offers: {},
+        create: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        get: () => Effect.die("unused"),
+        list: Effect.die("unused"),
+        delete: () => Effect.die("unused"),
+        stateDir: () => "",
+        secretsDir: () => "",
+        connect: () => Effect.die("unused"),
+        memoryKills: () => Effect.die("unused"),
+      };
+      // When
+      const resolved = yield* resolveSandboxId(
+        "ns:eu:abc123",
+        new Map([["namespace", namespaceLike]]),
+      );
+      // Then
+      expect({
+        prefix: resolved.prefix,
+        region: resolved.region,
+        name: resolved.name,
+      }).toEqual({ prefix: "ns", region: "eu", name: "abc123" });
+    }),
+  );
 
   it("a malformed id names the id and the form", async () => {
     // Given

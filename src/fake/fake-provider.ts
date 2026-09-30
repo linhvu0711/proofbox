@@ -37,6 +37,7 @@ import {
   type ProviderAccount,
   type ProviderLogin,
   SandboxInfo,
+  type SandboxRef,
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
@@ -300,7 +301,7 @@ export const makeFakeProvider = (options: {
       );
     });
 
-  const get = (name: string) => readFileInfo(name);
+  const get = (sandbox: SandboxRef) => readFileInfo(sandbox.name);
 
   const list = Effect.gen(function* () {
     if (options.listDown !== undefined) {
@@ -341,8 +342,9 @@ export const makeFakeProvider = (options: {
     return { infos, unreached };
   });
 
-  const del = (name: string) =>
+  const del = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
+      const name = sandbox.name;
       const alive = yield* readFileInfo(name).pipe(
         Effect.map(() => true),
         Effect.catchTag("SandboxGoneError", () => Effect.succeed(false)),
@@ -357,9 +359,9 @@ export const makeFakeProvider = (options: {
       return "deleted" as const;
     });
 
-  const extend = (name: string, deadline: Date) =>
+  const extend = (sandbox: SandboxRef, deadline: Date) =>
     Effect.gen(function* () {
-      const info = yield* readFileInfo(name);
+      const info = yield* readFileInfo(sandbox.name);
       const file = new SandboxFile({
         os: info.os,
         createdAt: info.createdAt,
@@ -369,13 +371,14 @@ export const makeFakeProvider = (options: {
         size: info.size,
         snapshot: info.snapshot,
       });
-      yield* writeFileInfo(name, file);
+      yield* writeFileInfo(sandbox.name, file);
     });
 
   // Copy into a temp entry and rename it over the old one, so a create
   // that starts from the Snapshot never sees a half-written one.
-  const saveSnapshot = (name: string, fingerprint: string) =>
+  const saveSnapshot = (sandbox: SandboxRef, fingerprint: string) =>
     Effect.gen(function* () {
+      const name = sandbox.name;
       const snapshots = options.snapshots;
       if (snapshots === undefined) {
         return yield* fail("this fake Provider keeps no Snapshots");
@@ -408,11 +411,11 @@ export const makeFakeProvider = (options: {
       );
     });
 
-  const connect = (name: string) =>
+  const connect = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
       const executor = yield* CommandExecutor.CommandExecutor;
-      const home = join(root, name, "home");
-      yield* get(name);
+      const home = join(root, sandbox.name, "home");
+      yield* get(sandbox);
       const connection: Connection = {
         exec: (argv, options) =>
           Stream.unwrapScoped(

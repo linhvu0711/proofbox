@@ -24,6 +24,7 @@ import {
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
 import { Providers } from "../provider.ts";
+import { formatSandboxId } from "../sandbox-id.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
 const loginPartFor = (name: string) =>
@@ -295,6 +296,8 @@ export const logoutOfProvider = (name: string) =>
       yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
     }
     for (const info of infos) {
-      yield* output.out(`${provider.idPrefix}:${info.name}\n`);
+      yield* output.out(
+        `${formatSandboxId({ provider: provider.idPrefix, region: info.region, name: info.name })}\n`,
+      );
     }
   });

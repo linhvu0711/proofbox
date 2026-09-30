@@ -5,18 +5,22 @@ import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
 import { namespaceLogin } from "./namespace-login.ts";
-import { splitHostName } from "./regions.ts";
 
-const id = process.argv[2];
-const seconds = Number(process.argv[3]);
+const region = process.argv[2];
+const instanceId = process.argv[3];
+const seconds = Number(process.argv[4]);
 
-(id === undefined || !Number.isFinite(seconds) || seconds <= 0
+(region === undefined ||
+instanceId === undefined ||
+!Number.isFinite(seconds) ||
+seconds <= 0
   ? Effect.void
   : Effect.gen(function* () {
       const api = makeNamespaceApi({ login: namespaceLogin });
-      const capFile = (yield* keeperPaths({ provider: "ns", name: id }))
-        .maxLife;
-      const { region, instanceId } = splitHostName(id);
+      const capFile = (yield* keeperPaths({
+        provider: "ns",
+        name: instanceId,
+      })).maxLife;
       // The push is fire-and-forget from the caller's side: retry until the
       // host accepts the Deadline or its own Deadline passes. Each attempt
       // reads the Max-life cap again and recomputes the remaining window so

@@ -6,7 +6,7 @@ import {
   UnknownProviderError,
   UnknownRegionError,
 } from "./errors.ts";
-import type { Provider } from "./provider.ts";
+import type { Provider, SandboxRef } from "./provider.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -51,10 +51,9 @@ export const parseSandboxId = (
     return { provider, region, name };
   });
 
-export interface ResolvedSandboxId {
+export interface ResolvedSandboxId extends SandboxRef {
   readonly provider: Provider;
   readonly prefix: string;
-  readonly name: string;
 }
 
 export const resolveSandboxId = (
@@ -81,7 +80,12 @@ export const resolveSandboxId = (
       if (parsed.region !== undefined) {
         return yield* new BadSandboxIdError({ id: raw });
       }
-      return { provider, prefix: parsed.provider, name: parsed.name };
+      return {
+        provider,
+        prefix: parsed.provider,
+        name: parsed.name,
+        region: undefined,
+      };
     }
     if (parsed.region === undefined) {
       return yield* new NoRegionError({ id: raw });
@@ -94,10 +98,10 @@ export const resolveSandboxId = (
         id: raw,
       });
     }
-    // The region stays in the name so `${prefix}:${name}` is the full id.
     return {
       provider,
       prefix: parsed.provider,
-      name: `${parsed.region}:${parsed.name}`,
+      name: parsed.name,
+      region: parsed.region,
     };
   });

@@ -312,7 +312,7 @@ describe("Namespace Provider", () => {
         yield* TestClock.setTime(new Date("1970-01-01T00:10:00Z").getTime());
         // When
         yield* provider.extend(
-          "us:abc123def4567",
+          { name: "abc123def4567", region: "us" },
           new Date("1970-01-01T00:25:00Z"),
         );
         // Then
@@ -321,8 +321,16 @@ describe("Namespace Provider", () => {
         expect(seen[0]).toContain("docker exec -u root proofbox-abc123");
         expect(seen[0]).toContain("900");
         expect(yield* Ref.get(spawned)).toEqual([
-          ["namespace", "namespace/extend-main", ["us:abc123def4567", "900"]],
-          ["namespace", "namespace/extend-main", ["us:abc123def4567", "120"]],
+          [
+            "namespace",
+            "namespace/extend-main",
+            ["us", "abc123def4567", "900"],
+          ],
+          [
+            "namespace",
+            "namespace/extend-main",
+            ["us", "abc123def4567", "120"],
+          ],
         ]);
       }),
   );
@@ -524,7 +532,10 @@ describe("Namespace Provider", () => {
           Effect.orDie,
         );
         // When
-        yield* snapshots.save("abc123def4567", "22d0cf15eb8e");
+        yield* snapshots.save(
+          { name: "abc123def4567", region: "us" },
+          "22d0cf15eb8e",
+        );
         // Then
         expect({
           pushed: ran.filter((line) => line.startsWith("docker commit")),
@@ -560,7 +571,7 @@ describe("Namespace Provider", () => {
       );
       // When
       const error = yield* Effect.flip(
-        snapshots.save("abc123def4567", "22d0cf15eb8e"),
+        snapshots.save({ name: "abc123def4567", region: "us" }, "22d0cf15eb8e"),
       );
       // Then
       expect({
@@ -588,7 +599,10 @@ describe("Namespace Provider", () => {
         maxLife: Duration.hours(3),
       });
       // Then
-      expect(info.name).toBe("us:abc123def4567");
+      expect({ name: info.name, region: info.region }).toEqual({
+        name: "abc123def4567",
+        region: "us",
+      });
       expect((yield* Ref.get(calls)).slice(0, 2)).toEqual([
         "create us",
         "wait us abc123def4567",
@@ -610,7 +624,10 @@ describe("Namespace Provider", () => {
         maxLife: Duration.hours(3),
       });
       // Then
-      expect(info.name).toBe("eu:abc123def4567");
+      expect({ name: info.name, region: info.region }).toEqual({
+        name: "abc123def4567",
+        region: "eu",
+      });
       expect((yield* Ref.get(calls)).slice(0, 2)).toEqual([
         "create eu",
         "wait eu abc123def4567",
@@ -631,7 +648,10 @@ describe("Namespace Provider", () => {
           ],
         });
         // When
-        const outcome = yield* provider.delete("us:abc123def4567");
+        const outcome = yield* provider.delete({
+          name: "abc123def4567",
+          region: "us",
+        });
         // Then: us was asked, never eu
         expect(outcome).toBe("deleted");
         expect(yield* Ref.get(calls)).toEqual([
@@ -666,7 +686,10 @@ describe("Namespace Provider", () => {
           maxLife: Duration.hours(3),
         });
         // Then
-        expect(info.name).toBe("us:abc123def4567");
+        expect({ name: info.name, region: info.region }).toEqual({
+          name: "abc123def4567",
+          region: "us",
+        });
         expect((yield* Ref.get(calls)).slice(0, 3)).toEqual([
           "create us",
           "create us",
@@ -697,10 +720,15 @@ describe("Namespace Provider", () => {
         });
         // When
         const listed = yield* provider.list;
-        // Then: each Sandbox's name names its region
-        expect([...listed.infos.map((info) => info.name)].sort()).toEqual([
-          "eu:eu0000000000a",
-          "us:abc123def4567",
+        // Then: each Sandbox's name and region
+        expect(
+          listed.infos.map((info) => ({
+            name: info.name,
+            region: info.region,
+          })),
+        ).toEqual([
+          { name: "abc123def4567", region: "us" },
+          { name: "eu0000000000a", region: "eu" },
         ]);
         expect(listed.unreached).toEqual([]);
         expect([...(yield* Ref.get(calls))].sort()).toEqual([
@@ -738,9 +766,12 @@ describe("Namespace Provider", () => {
         // When
         const listed = yield* provider.list;
         // Then
-        expect(listed.infos.map((info) => info.name)).toEqual([
-          "us:abc123def4567",
-        ]);
+        expect(
+          listed.infos.map((info) => ({
+            name: info.name,
+            region: info.region,
+          })),
+        ).toEqual([{ name: "abc123def4567", region: "us" }]);
         expect(listed.unreached).toEqual([
           {
             where: "Namespace region eu",

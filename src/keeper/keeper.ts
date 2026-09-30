@@ -62,7 +62,7 @@ export const runKeeper = (rawId: string) =>
 
     const serve = Effect.scoped(
       Effect.gen(function* () {
-        const connection = yield* provider.connect(id.name);
+        const connection = yield* provider.connect(id);
         const runtime =
           yield* Effect.runtime<CommandExecutor.CommandExecutor>();
         const handleClient = (socket: Socket) => {
@@ -276,7 +276,7 @@ export const runKeeper = (rawId: string) =>
     );
 
     const watchGone = Effect.repeat(
-      provider.get(id.name),
+      provider.get(id),
       Schedule.spaced("2 seconds"),
     ).pipe(Effect.asVoid);
 

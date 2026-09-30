@@ -15,11 +15,11 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
     const provider = id.provider;
     const output = yield* CliOutput;
     const [info, killsBefore] = yield* Effect.all(
-      [provider.get(id.name), provider.memoryKills(id.name)],
+      [provider.get(id), provider.memoryKills(id)],
       { concurrency: 2 },
     );
     const idle = Duration.seconds(info.idleSeconds);
-    const push = deadlinePush(provider, id.name, info);
+    const push = deadlinePush(provider, id, info);
     // A cold Keeper link bring-up can outlast a short host Deadline.
     yield* push;
     const keeper = yield* KeeperClient;
@@ -51,10 +51,9 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
         ),
       ),
     );
-    const [killsAfter] = yield* Effect.all(
-      [provider.memoryKills(id.name), push],
-      { concurrency: 2 },
-    );
+    const [killsAfter] = yield* Effect.all([provider.memoryKills(id), push], {
+      concurrency: 2,
+    });
     // On Linux the kill count is container-wide, so a new kill plus a clean
     // exit means the command hid an OOM child (e.g. an early pipeline
     // stage). On a Mac it is host-wide and takes in other apps, so only a

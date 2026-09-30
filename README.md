@@ -65,7 +65,7 @@ proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1
 proofbox delete "$id"
 ```
 
-A Sandbox id has its Provider as a prefix, for example `ns:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
+A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
 
 ## Commands
 

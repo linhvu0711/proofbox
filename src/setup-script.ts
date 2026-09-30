@@ -16,7 +16,7 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
     const providers = yield* Providers;
     const id = yield* resolveSandboxId(rawId, providers);
     const provider = id.provider;
-    const info = yield* provider.get(id.name);
+    const info = yield* provider.get(id);
     const progress = yield* Progress;
     const keeper = yield* KeeperClient;
     const setupPath = posix.join(provider.stateDir(id.name), "setup");
@@ -24,7 +24,7 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
       "running Setup script",
       withDeadlinePush(
         provider,
-        id.name,
+        id,
         info,
       )(
         Effect.gen(function* () {
@@ -90,7 +90,7 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
       for (const line of result.lines) {
         yield* output.err(line);
       }
-      yield* provider.delete(id.name);
+      yield* provider.delete(id);
       yield* keeper.stop(rawId);
       return yield* new SetupScriptFailedError({ code: result.code });
     }

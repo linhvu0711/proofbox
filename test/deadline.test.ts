@@ -127,7 +127,7 @@ describe("Deadline", () => {
       // When
       yield* createSandbox({ os: "linux", provider: "fake" });
       const name = yield* sandboxName;
-      const info = yield* (yield* fake).get(name);
+      const info = yield* (yield* fake).get({ name, region: undefined });
       // Then
       expect(info.deadline.toISOString()).toBe("1970-01-01T00:15:00.000Z");
       expect(info.maxLifeAt.toISOString()).toBe("1970-01-01T03:00:00.000Z");
@@ -142,7 +142,7 @@ describe("Deadline", () => {
       yield* TestClock.adjust("10 minutes");
       // When
       yield* execInSandbox(`fake:${name}`, ["true"]);
-      const info = yield* (yield* fake).get(name);
+      const info = yield* (yield* fake).get({ name, region: undefined });
       // Then
       expect(info.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
     }).pipe(Effect.provide(layers())),
@@ -161,7 +161,7 @@ describe("Deadline", () => {
       yield* TestClock.adjust("10 minutes");
       // When
       yield* execInSandbox(`fake:${name}`, ["true"]);
-      const info = yield* (yield* fake).get(name);
+      const info = yield* (yield* fake).get({ name, region: undefined });
       // Then
       expect(info.deadline.toISOString()).toBe("1970-01-01T00:20:00.000Z");
     }).pipe(Effect.provide(layers())),
@@ -172,7 +172,7 @@ describe("Deadline", () => {
       const waitForDeadline = (name: string, expected: string) =>
         Effect.gen(function* () {
           for (let i = 0; i < 100; i++) {
-            const info = yield* (yield* fake).get(name);
+            const info = yield* (yield* fake).get({ name, region: undefined });
             if (info.deadline.toISOString() === expected) {
               return;
             }
@@ -180,7 +180,7 @@ describe("Deadline", () => {
             // clock and it would see the virtual deadline as passed.
             yield* TestServices.provideLive(Effect.sleep("20 millis"));
           }
-          const last = yield* (yield* fake).get(name);
+          const last = yield* (yield* fake).get({ name, region: undefined });
           return yield* Effect.fail(
             new Error(
               `deadline not pushed yet; at ${last.deadline.toISOString()}`,
@@ -203,7 +203,7 @@ describe("Deadline", () => {
       yield* waitForDeadline(name, "1970-01-01T00:20:00.000Z");
       yield* TestClock.adjust("5 minutes");
       yield* waitForDeadline(name, "1970-01-01T00:25:00.000Z");
-      const running = yield* (yield* fake).get(name);
+      const running = yield* (yield* fake).get({ name, region: undefined });
       yield* TestClock.adjust("2 minutes");
       yield* Effect.sync(() =>
         writeFileSync(
@@ -212,7 +212,7 @@ describe("Deadline", () => {
         ),
       );
       yield* Fiber.join(fiber);
-      const done = yield* (yield* fake).get(name);
+      const done = yield* (yield* fake).get({ name, region: undefined });
       // Then
       expect(running.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
       expect(done.deadline.toISOString()).toBe("1970-01-01T00:27:00.000Z");

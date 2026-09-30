@@ -124,13 +124,13 @@ export const sendWorkFolder = (
     const progress = yield* Progress;
     const output = yield* CliOutput;
     const keeper = yield* KeeperClient;
-    const info = yield* provider.get(id.name);
+    const info = yield* provider.get(id);
     const listPath = hashListPath(provider.stateDir(id.name));
     const diff = yield* progress.step(
       "uploading Work folder",
       withDeadlinePush(
         provider,
-        id.name,
+        id,
         info,
       )(
         withUploadLock(

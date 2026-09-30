@@ -90,7 +90,7 @@ describe("ssh link", () => {
         const executor = yield* CommandExecutor.CommandExecutor;
         const paths = yield* keeperPaths({
           provider: "ns",
-          name: "us:abc123def4567",
+          name: "abc123def4567",
         });
         // The gateway key lives next to the control socket under a name
         // with no .pub sibling — ssh would compare the ephemeral key to
@@ -98,7 +98,7 @@ describe("ssh link", () => {
         const sshKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
         // When
         const link = yield* makeOpenLink(api, executor)(
-          "us:abc123def4567",
+          { name: "abc123def4567", region: "us" },
           paths,
           "keeper",
         );
@@ -163,7 +163,7 @@ describe("ssh link", () => {
         const executor = yield* CommandExecutor.CommandExecutor;
         // When
         const forward = yield* makeSshForward(api, executor)(
-          "us:abc123def4567",
+          { name: "abc123def4567", region: "us" },
           5900,
         );
         // Then: GetSSHConfig was asked in the id's region for its instance

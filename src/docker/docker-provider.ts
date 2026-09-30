@@ -11,6 +11,7 @@ import {
   Os,
   type Provider,
   SandboxInfo,
+  type SandboxRef,
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, parseSize, type Size } from "../size.ts";
@@ -55,6 +56,7 @@ export const sandboxInfoFromLabels = (
   name: string,
   rawLabels: unknown,
   deadlineSeconds: number,
+  region?: string,
 ): Effect.Effect<SandboxInfo, ProviderError | SandboxGoneError> =>
   Effect.gen(function* () {
     const fail = (reason: string) =>
@@ -78,6 +80,7 @@ export const sandboxInfoFromLabels = (
           );
     return new SandboxInfo({
       name,
+      region,
       os: labels["proofbox.os"],
       createdAt: labels["proofbox.created-at"],
       idleSeconds: labels["proofbox.idle-seconds"],
@@ -105,8 +108,9 @@ export const makeDockerProvider = (options: {
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
   const containerOf = (name: string) => `proofbox-${name}`;
 
-  const get = (name: string) =>
+  const get = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
+      const name = sandbox.name;
       if (!/^[a-z0-9]{6}$/.test(name)) {
         return yield* gone(name);
       }
@@ -133,9 +137,10 @@ export const makeDockerProvider = (options: {
       );
     });
 
-  const extend = (name: string, deadline: Date) =>
+  const extend = (sandbox: SandboxRef, deadline: Date) =>
     Effect.gen(function* () {
-      yield* get(name);
+      const name = sandbox.name;
+      yield* get(sandbox);
       const written = yield* client.execText(containerOf(name), "root", [
         "sh",
         "-c",
@@ -155,7 +160,7 @@ export const makeDockerProvider = (options: {
     const infos = yield* Effect.forEach(
       names,
       (name) =>
-        get(name).pipe(
+        get({ name, region: undefined }).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
         ),
       { discard: false },
@@ -168,8 +173,9 @@ export const makeDockerProvider = (options: {
     ),
   );
 
-  const del = (name: string) =>
+  const del = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
+      const name = sandbox.name;
       const found = yield* client.inspect(containerOf(name));
       if (Option.isNone(found)) {
         return "gone" as const;
@@ -314,10 +320,10 @@ export const makeDockerProvider = (options: {
         }
         const finished = yield* now;
         yield* extend(
-          name as string,
+          { name, region: undefined },
           nextDeadline({ now: finished, idle: req.idle, maxLifeAt }),
         );
-        return yield* get(name as string);
+        return yield* get({ name, region: undefined });
       }).pipe(
         Effect.catchTag("SandboxGoneError", () =>
           Effect.fail(fail("the container died during Sandbox creation")),
@@ -359,20 +365,20 @@ export const makeDockerProvider = (options: {
       );
     });
 
-  const connect = (name: string) =>
+  const connect = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
-      yield* get(name);
-      const container = containerOf(name);
+      yield* get(sandbox);
+      const container = containerOf(sandbox.name);
       return {
         exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
           client.execStream(container, argv, options),
       };
     });
 
-  const memoryKills = (name: string) =>
+  const memoryKills = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
-      yield* get(name);
-      const read = yield* client.execText(containerOf(name), "root", [
+      yield* get(sandbox);
+      const read = yield* client.execText(containerOf(sandbox.name), "root", [
         "sh",
         "-c",
         "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
