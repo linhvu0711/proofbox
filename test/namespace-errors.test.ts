@@ -350,4 +350,50 @@ describe("Namespace errors", () => {
     expect(millis).toBeLessThan(5000);
   });
 
+  it("exec when the Sandbox host key does not match refuses at once", async () => {
+    // Given: an ssh whose host key check fails, and the Compute API
+    // answers GetSSHConfig and ListInstances
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "GetSSHConfig") {
+        return {
+          json: {
+            username: "abc123def4567",
+            endpoint: "ssh.invalid",
+            sshPrivateKey: Buffer.from("key").toString("base64"),
+            sshHostKeys: [Buffer.from("host-key").toString("base64")],
+          },
+        };
+      }
+      return call.method === "ListInstances"
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} };
+    });
+    const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
+    trackTempDir(binDir);
+    writeFileSync(
+      join(binDir, "ssh"),
+      '#!/bin/sh\necho "Host key verification failed." >&2\nexit 255\n',
+      { mode: 0o755 },
+    );
+    const env = makeEnv();
+    // When
+    const start = performance.now();
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      {
+        set: {
+          PATH: binDir,
+          ...nsEnv(ns),
+        },
+      },
+    );
+    const millis = performance.now() - start;
+    // Then
+    expect(result.stderr).toBe(
+      "Refused to connect to Sandbox ns:us:abc123def4567: its SSH host key does not match the key Namespace gave. Run: proofbox delete ns:us:abc123def4567\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(millis).toBeLessThan(5000);
+  });
 });

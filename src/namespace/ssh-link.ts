@@ -77,6 +77,19 @@ const linkLost = (ref: SandboxRef, detail: string) =>
     reason: `Could not connect to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} over SSH (${detail}). Try again in a minute.`,
   });
 
+// A host key that does not match what GetSSHConfig gave is a wrong or
+// recycled host, not a dead link — refuse at once rather than retry.
+const hostKeyRefused = (ref: SandboxRef) => {
+  const id = formatSandboxId({
+    provider: "ns",
+    region: ref.region,
+    name: ref.name,
+  });
+  return new ProviderUnavailableError({
+    provider: "namespace",
+    reason: `Refused to connect to Sandbox ${id}: its SSH host key does not match the key Namespace gave. Run: proofbox delete ${id}`,
+  });
+};
 
 // Bring-up failures that mean "the link is not ready yet" — the SSH
 // gateway still coming up, a handshake that dropped. Only these are
@@ -176,7 +189,9 @@ export const makeOpenLink = (
             );
             const stderr = toText(errBytes);
             if (exitCode === 255) {
-              return yield* linkLost(ref, lastLine(stderr));
+              return stderr.includes("Host key verification failed")
+                ? yield* hostKeyRefused(ref)
+                : yield* linkLost(ref, lastLine(stderr));
             }
             return {
               exitCode,
@@ -361,7 +376,11 @@ export const makeOpenLink = (
               Effect.orElseSucceed(() => 255),
               Effect.zipRight(Ref.get(masterLog)),
               Effect.flatMap((text) =>
-                Effect.fail(down(lastLine(text === "" ? "ssh exited" : text))),
+                Effect.fail(
+                  text.includes("Host key verification failed")
+                    ? hostKeyRefused(ref)
+                    : down(lastLine(text === "" ? "ssh exited" : text)),
+                ),
               ),
             ),
           );
