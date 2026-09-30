@@ -290,6 +290,15 @@ export const makeNamespaceProvider = (deps: {
       const seconds = Math.ceil(
         (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
       );
+      // The detached host-expiry destroys the host at this instant: the
+      // record lands before the push so a link that is slow or dead cannot
+      // leave the host living past the Sandbox's Deadline.
+      const dir = yield* paths(name);
+      yield* Effect.promise(() =>
+        writeFile(dir.deadline, String(Math.ceil(deadline.getTime() / 1000)), {
+          mode: 0o600,
+        }).catch(() => {}),
+      );
       // The host side first and detached: the nsc call needs no link, and the
       // link write below can spend a while in bring-up.
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
@@ -394,10 +403,12 @@ export const makeNamespaceProvider = (deps: {
                 ".key",
                 ".key.pub",
                 ".max-life",
+                ".deadline",
                 ".os",
                 ".ctl",
                 ".sock",
                 ".sshkey",
+                ".sshtarget",
                 ".known-hosts",
               ].map((suffix) =>
                 rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
@@ -448,9 +459,13 @@ export const makeNamespaceProvider = (deps: {
           rm(dir.key, { force: true }).catch(() => {}),
           rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
           rm(dir.maxLife, { force: true }).catch(() => {}),
+          rm(dir.deadline, { force: true }).catch(() => {}),
           rm(dir.os, { force: true }).catch(() => {}),
           rm(dir.knownHosts, { force: true }).catch(() => {}),
           rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
+            force: true,
+          }).catch(() => {}),
+          rm(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
             force: true,
           }).catch(() => {}),
         ]).then(() => {}),
@@ -490,6 +505,7 @@ export const makeNamespaceProvider = (deps: {
       // nothing behind on a failed create.
       const createToken = makeSandboxName();
       let hostId: string | undefined;
+      let deadlineAt = 0;
       const cleanup = Effect.gen(function* () {
         yield* Effect.promise(() =>
           Promise.all([
@@ -556,6 +572,9 @@ export const makeNamespaceProvider = (deps: {
         const instanceId = yield* Effect.timeoutOption(
           Effect.gen(function* () {
             const nowMillis = yield* Clock.currentTimeMillis;
+            deadlineAt = Math.floor(
+              (nowMillis + durationSeconds * 1000) / 1000,
+            );
             const made = yield* api.create(region, {
               shape: {
                 os: req.os,
@@ -628,6 +647,9 @@ export const makeNamespaceProvider = (deps: {
             await rename(keyBase, hostPaths.key);
             await rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
             await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
+              mode: 0o600,
+            });
+            await writeFile(hostPaths.deadline, String(deadlineAt), {
               mode: 0o600,
             });
             await writeFile(hostPaths.os, req.os, { mode: 0o600 });

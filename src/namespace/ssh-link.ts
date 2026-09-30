@@ -1,4 +1,4 @@
-import { chmod, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
@@ -12,7 +12,11 @@ import {
   Stream,
 } from "effect";
 import { commandEvents } from "../command-events.ts";
-import { ProviderError, ProviderUnavailableError } from "../errors.ts";
+import {
+  ProviderError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+} from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
@@ -192,9 +196,32 @@ export const makeOpenLink = (
       // the one long-lived connection, so a warm exec never pays for a new
       // handshake.
       const { region, instanceId } = splitHostName(id);
+      const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
+      const targetFile = `${paths.control.replace(/\.ctl$/, "")}.sshtarget`;
+      // A warm open rides the Keeper's ControlMaster; the stored target
+      // saves the GetSSHConfig call a ride does not need.
+      if (owner === "cli") {
+        const stored = yield* Effect.promise(() =>
+          readFile(targetFile, "utf8")
+            .then((text) => text.trim())
+            .catch(() => ""),
+        );
+        if (stored !== "" && (yield* checkCtl(paths.control, stored))) {
+          const ssh = sshBase(
+            paths.control,
+            keeperKey,
+            paths.knownHosts,
+            stored,
+          );
+          return {
+            ssh,
+            run: runWith(ssh),
+            stream: streamWith(ssh),
+          } satisfies Link;
+        }
+      }
       const cfg = yield* api.sshConfig(region, instanceId);
       const target = `${cfg.username}@${cfg.endpoint}`;
-      const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
         const ssh = sshBase(paths.control, keeperKey, paths.knownHosts, target);
         return {
@@ -219,6 +246,14 @@ export const makeOpenLink = (
           writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
             chmod(key, 0o600),
           ),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
+      yield* Effect.tryPromise({
+        try: () => writeFile(targetFile, `${target}\n`, { mode: 0o600 }),
         catch: (cause) =>
           new ProviderError({
             provider: "namespace",
@@ -323,7 +358,27 @@ export const makeOpenLink = (
           ),
         );
       });
-      yield* Effect.retry(bringup, {
+      // A dead host drops the gateway link just like a cold one does; the
+      // list check between attempts names the Sandbox gone instead of
+      // burning the whole retry budget on a host that is already deleted.
+      const attempt = bringup.pipe(
+        Effect.catchTag(
+          "LinkDownError",
+          (error): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
+            api.list(region, []).pipe(
+              Effect.catchAll(() => Effect.fail(error)),
+              Effect.flatMap(
+                (
+                  instances,
+                ): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
+                  instances.some((instance) => instance.id === instanceId)
+                    ? Effect.fail(error)
+                    : Effect.fail(new SandboxGoneError({ id: `ns:${id}` })),
+              ),
+            ),
+        ),
+      );
+      yield* Effect.retry(attempt, {
         while: (error) => error instanceof LinkDownError,
         schedule: Schedule.spaced("1 second").pipe(
           Schedule.upTo("120 seconds"),

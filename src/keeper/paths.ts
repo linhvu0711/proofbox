@@ -13,6 +13,10 @@ export interface KeeperPaths {
   readonly knownHosts: string;
   readonly control: string;
   readonly maxLife: string;
+  // The Sandbox's own Deadline as the detached host-expiry reads it: the
+  // host dies at this instant even when use of it kept its own Deadline
+  // further out.
+  readonly deadline: string;
   // The OS of a host made by a Provider with more than one OS.
   readonly os: string;
 }
@@ -54,6 +58,7 @@ export const keeperPaths = (id: {
       knownHosts: join(dir, `${stem}.known-hosts`),
       control: join(dir, `${stem}.ctl`),
       maxLife: join(dir, `${stem}.max-life`),
+      deadline: join(dir, `${stem}.deadline`),
       os: join(dir, `${stem}.os`),
     };
   });
