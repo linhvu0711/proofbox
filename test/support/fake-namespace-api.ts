@@ -23,6 +23,7 @@ const STATUS = new Map([
   ["unauthenticated", 401],
   ["permission_denied", 403],
   ["not_found", 404],
+  ["failed_precondition", 400],
   ["resource_exhausted", 429],
   ["unavailable", 503],
   ["deadline_exceeded", 504],
