@@ -237,6 +237,7 @@ describe("Namespace errors", () => {
               username: "abc123def4567",
               endpoint: "127.0.0.1",
               sshPrivateKey: Buffer.from("key").toString("base64"),
+              sshHostKeys: [Buffer.from("host-key").toString("base64")],
             },
           }
         : { json: {} },

@@ -30,8 +30,8 @@ export interface NscExecResult {
   readonly stderr: string;
 }
 
-// nsc still runs the SSH port-forward and the Snapshot expiry; everything
-// else moved to the Compute API.
+// nsc still runs the Live-view port-forward and the Snapshot expiry;
+// everything else moved to the Compute API.
 export type NscError =
   | BadLoginsFileError
   | LoginExpiredError

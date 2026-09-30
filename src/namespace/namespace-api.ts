@@ -48,11 +48,13 @@ export interface LabelEntry {
 }
 
 // What GetSSHConfig hands back for one instance: the SSH gateway endpoint,
-// the username to dial it with, and a short-lived private key.
+// the username to dial it with, a short-lived private key, and the
+// gateway's host keys in OpenSSH format ("<type> <base64 key>").
 export interface SshConfig {
   readonly username: string;
   readonly endpoint: string;
   readonly privateKey: Uint8Array;
+  readonly hostKeys: ReadonlyArray<string>;
 }
 
 // What a create asks the Compute API for; proofbox shapes it.
@@ -161,6 +163,47 @@ export const fromConnect =
       reason: `ComputeService.${call} failed: ${cause.rawMessage}`,
     });
   };
+
+// The same mapping as fromConnect for a call made over raw Connect JSON:
+// `status` the HTTP code, `body` the decoded JSON (an error body holds
+// Connect's `code` and `message` strings).
+export const httpError = (
+  call: string,
+  status: number,
+  body: { readonly code?: string; readonly message?: string } | undefined,
+  host?: { readonly region: string; readonly instanceId: string },
+): ApiError => {
+  const code = body?.code;
+  const message = body?.message ?? `HTTP ${status}`;
+  if (code === "unauthenticated") {
+    return new TokenRejectedError({ provider: "namespace" });
+  }
+  if (code === "permission_denied") {
+    return new TokenPermissionError({
+      provider: "namespace",
+      call: `ComputeService.${call}`,
+    });
+  }
+  if (code === "resource_exhausted") {
+    const found = capacityClause.exec(message);
+    return new ProviderLimitError({
+      provider: "namespace",
+      limit: found === null ? message : found[0],
+    });
+  }
+  if (code === "not_found" && host !== undefined) {
+    return new SandboxGoneError({
+      id: `ns:${hostName(host.region, host.instanceId)}`,
+    });
+  }
+  if (code === "unavailable" || code === "deadline_exceeded" || status >= 500) {
+    return unreachable();
+  }
+  return new ProviderError({
+    provider: "namespace",
+    reason: `ComputeService.${call} failed: ${message}`,
+  });
+};
 
 // The Compute API base URL for a region; `{region}` in
 // PROOFBOX_NAMESPACE_COMPUTE_URL is replaced by the region.
@@ -336,17 +379,71 @@ export const makeNamespaceApi = (deps: {
       });
     });
 
+  // GetSSHConfig answers an `sshHostKeys` field the SDK's proto does not
+  // model yet, so this one call goes over Connect JSON itself: a POST to
+  // `/<service>/<method>` with a JSON body, errors in Connect's shape.
   const sshConfig = (region: string, instanceId: string) =>
     Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      const cfg = yield* Effect.tryPromise({
-        try: () => client.compute.getSSHConfig({ instanceId }),
-        catch: fromConnect("GetSSHConfig", { region, instanceId }),
+      const hand = yield* deps.login;
+      const base = (yield* template.pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      )).replaceAll("{region}", region);
+      const response = yield* Effect.tryPromise({
+        try: async () => {
+          const res = await fetch(
+            `${base}/namespace.cloud.compute.v1beta.ComputeService/GetSSHConfig`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${Redacted.value(hand.token)}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ instanceId }),
+            },
+          );
+          const body: unknown = await res.json().catch(() => undefined);
+          return { status: res.status, body };
+        },
+        catch: () => unreachable(),
       });
+      const body = response.body as
+        | {
+            readonly code?: string;
+            readonly message?: string;
+            readonly username?: string;
+            readonly endpoint?: string;
+            readonly sshPrivateKey?: string;
+            readonly sshHostKeys?: ReadonlyArray<string>;
+          }
+        | undefined;
+      if (response.status !== 200 || body === undefined) {
+        return yield* httpError("GetSSHConfig", response.status, body, {
+          region,
+          instanceId,
+        });
+      }
+      if (
+        typeof body.username !== "string" ||
+        typeof body.endpoint !== "string" ||
+        typeof body.sshPrivateKey !== "string" ||
+        !Array.isArray(body.sshHostKeys) ||
+        body.sshHostKeys.length === 0
+      ) {
+        return yield* new ProviderError({
+          provider: "namespace",
+          reason: "ComputeService.GetSSHConfig gave an incomplete answer",
+        });
+      }
       return {
-        username: cfg.username,
-        endpoint: cfg.endpoint,
-        privateKey: cfg.sshPrivateKey,
+        username: body.username,
+        endpoint: body.endpoint,
+        privateKey: new Uint8Array(Buffer.from(body.sshPrivateKey, "base64")),
+        hostKeys: body.sshHostKeys.map((key) =>
+          Buffer.from(key, "base64").toString("utf8"),
+        ),
       } satisfies SshConfig;
     });
 

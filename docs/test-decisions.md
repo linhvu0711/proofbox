@@ -36,3 +36,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
     - Sizes go up in this order: Linux 4x8, 8x16, 16x32; macOS 4x7, 6x14.
     - A command killed for lack of memory fails with its own exit code and a plain message that names the size and the next one up, for example `Sandbox ran out of memory (4x8). Try --size 8x16.` At the largest size, the message says so.
     - A bigger Mac uses more of the macOS quota, so fewer Macs run at once.
+
+## The SSH link
+
+12. Instances made through the Compute API run no sshd on port 22, so `nsc instance port-forward --target_port 22` cannot carry the link (verified live 2026-09-30: the forward answers with a reset, `nsc ssh` and `instance proxy -s ssh` fail the same way). Decided 2026-09-30: the link uses `ComputeService.GetSSHConfig` — an ephemeral key, the username, and the `ssh.<region>.namespace.so` gateway endpoint — with the returned host keys pinned in a per-Sandbox known_hosts file (`StrictHostKeyChecking=yes`). `nsc` stays only for the Live view (`port-forward` to 5900, where the Sandbox container publishes VNC) and Snapshot expiry (`registry update-image-expiration`). `GetSSHConfig`'s `sshHostKeys` field is ahead of the SDK's generated proto, so that one call goes over Connect JSON directly.

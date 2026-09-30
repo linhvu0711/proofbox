@@ -36,11 +36,11 @@ describe("nsc client", () => {
         const forward = yield* makeNscClient(
           executor,
           login(Option.some("eu")),
-        ).portForward("us:abc123def4567", 22);
+        ).portForward("us:abc123def4567", 5900);
         // Then: the id's region won, and nsc got the proofbox token file
         const [argv, file] = readFileSync(fake.log, "utf8").split("\n");
         expect(argv).toBe(
-          "--region us instance port-forward abc123def4567 --target_port 22",
+          "--region us instance port-forward abc123def4567 --target_port 5900",
         );
         expect(readFileSync(file ?? "", "utf8")).toBe(
           `{"bearer_token":"${TOKEN}"}\n`,

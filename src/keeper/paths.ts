@@ -9,6 +9,8 @@ export interface KeeperPaths {
   readonly socket: string;
   readonly pid: string;
   readonly key: string;
+  // The host keys the Namespace SSH gateway pinned for the host.
+  readonly knownHosts: string;
   readonly control: string;
   readonly maxLife: string;
   // The OS of a host made by a Provider with more than one OS.
@@ -49,6 +51,7 @@ export const keeperPaths = (id: {
       socket: join(dir, `${stem}.sock`),
       pid: join(dir, `${stem}.pid`),
       key: join(dir, `${stem}.key`),
+      knownHosts: join(dir, `${stem}.known-hosts`),
       control: join(dir, `${stem}.ctl`),
       maxLife: join(dir, `${stem}.max-life`),
       os: join(dir, `${stem}.os`),

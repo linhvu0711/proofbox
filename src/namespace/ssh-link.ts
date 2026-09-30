@@ -99,6 +99,7 @@ export const makeOpenLink = (
   const sshBase = (
     ctl: string,
     key: string,
+    hosts: string,
     target: string,
   ): ReadonlyArray<string> => [
     "-S",
@@ -108,9 +109,9 @@ export const makeOpenLink = (
     "-o",
     "BatchMode=yes",
     "-o",
-    "StrictHostKeyChecking=no",
+    "StrictHostKeyChecking=yes",
     "-o",
-    "UserKnownHostsFile=/dev/null",
+    `UserKnownHostsFile=${hosts}`,
     "-o",
     "LogLevel=ERROR",
     target,
@@ -194,7 +195,7 @@ export const makeOpenLink = (
       const cfg = yield* api.sshConfig(region, instanceId);
       const target = `${cfg.username}@${cfg.endpoint}`;
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
-        const ssh = sshBase(paths.control, paths.key, target);
+        const ssh = sshBase(paths.control, paths.key, paths.knownHosts, target);
         return {
           ssh,
           run: runWith(ssh),
@@ -206,7 +207,8 @@ export const makeOpenLink = (
           ? paths.control
           : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
       // The gateway key is written once per open, next to the control socket
-      // it belongs to, and removed when the link's scope closes.
+      // it belongs to, and removed when the link's scope closes. The host
+      // keys go to the per-Sandbox known_hosts file every open refreshes.
       const key =
         owner === "keeper" ? paths.key : `${ctl.replace(/\.ctl$/, "")}.key`;
       yield* Effect.tryPromise({
@@ -220,10 +222,23 @@ export const makeOpenLink = (
             reason: describe(cause),
           }),
       });
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(
+            paths.knownHosts,
+            `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
+            { mode: 0o600 },
+          ),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
       yield* Effect.addFinalizer(() =>
         Effect.promise(() => rm(key, { force: true }).catch(() => undefined)),
       );
-      const ssh = sshBase(ctl, key, target);
+      const ssh = sshBase(ctl, key, paths.knownHosts, target);
       const run = runWith(ssh);
       const stream = streamWith(ssh);
       if (yield* checkCtl(ctl, target)) {
