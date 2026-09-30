@@ -19,8 +19,9 @@ import {
   readLogins,
   type SavedLogin,
 } from "../login/logins-file.ts";
+import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
-import { type LoginWay, Providers } from "../provider.ts";
+import { Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
 const loginPartFor = (name: string) =>
@@ -40,6 +41,14 @@ const loginPartFor = (name: string) =>
     return { provider, part } as const;
   });
 
+// A saved login's name in the replaced note: its account, or the
+// token's last four when it has none.
+const nameOf = (login: SavedLogin) =>
+  login.account ??
+  (login.way === "token"
+    ? `token …${Redacted.value(login.token).slice(-4)}`
+    : "the old login");
+
 export const loginToProvider = (options: {
   readonly provider: string;
   readonly token: boolean;
@@ -47,14 +56,8 @@ export const loginToProvider = (options: {
 }) =>
   Effect.gen(function* () {
     const { provider, part } = yield* loginPartFor(options.provider);
-    // --token picks the token way; with no flag the browser way is the
-    // default (#49). A Provider that lacks the picked way refuses.
-    const way: LoginWay = options.token ? "token" : "browser";
-    if (!part.ways.has(way)) {
-      return yield* new NoLoginWayError({ provider: provider.name, way });
-    }
     // A region only makes sense where the Provider names regions; both
-    // checks run before the token is read from stdin.
+    // checks run first for both ways.
     if (Option.isSome(options.region)) {
       if (provider.regions === undefined) {
         return yield* new NoRegionsError({ provider: provider.name });
@@ -67,47 +70,83 @@ export const loginToProvider = (options: {
         });
       }
     }
-    const raw = yield* Effect.tryPromise({
-      try: () => text(process.stdin),
-      catch: (cause) =>
-        new ProviderError({
-          provider: "local",
-          reason: cause instanceof Error ? cause.message : String(cause),
-        }),
-    });
-    const token = raw.trim();
-    if (token === "") {
-      return yield* new NoTokenError({ provider: provider.name });
+    const output = yield* CliOutput;
+    if (options.token) {
+      const raw = yield* Effect.tryPromise({
+        try: () => text(process.stdin),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "local",
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      });
+      const token = raw.trim();
+      if (token === "") {
+        return yield* new NoTokenError({ provider: provider.name });
+      }
+      const account = yield* part.checkToken(
+        Redacted.make(token),
+        options.region,
+      );
+      const before = yield* changeLogins((logins) => ({
+        ...logins,
+        [provider.name]: {
+          way: "token",
+          token: Redacted.make(token),
+          ...(account.account !== undefined
+            ? { account: account.account }
+            : {}),
+          ...(account.expiresAt !== undefined
+            ? { expiresAt: account.expiresAt }
+            : {}),
+          ...(Option.isSome(options.region)
+            ? { region: options.region.value }
+            : {}),
+        },
+      }));
+      const previous = before[provider.name];
+      const who =
+        account.account !== undefined
+          ? `as ${account.account}`
+          : `with token …${token.slice(-4)}`;
+      const replaced =
+        previous === undefined ? "" : ` (replaced ${nameOf(previous)})`;
+      yield* output.err(`Logged in to ${provider.name} ${who}${replaced}.\n`);
+      return;
     }
-    const account = yield* part.checkToken(
-      Redacted.make(token),
-      options.region,
+    // With no --token the browser way is the default; a Provider that
+    // lacks it refuses.
+    const browser = part.browser;
+    if (browser === undefined) {
+      return yield* new NoLoginWayError({
+        provider: provider.name,
+        way: "browser",
+      });
+    }
+    const started = yield* browser.start;
+    yield* openBrowser(started.url);
+    yield* output.err(
+      "Waiting for you to log in in the browser... (Ctrl+C to stop)\n",
     );
+    const done = yield* browser.complete(started.loginId);
     const before = yield* changeLogins((logins) => ({
       ...logins,
       [provider.name]: {
-        way: "token",
-        token: Redacted.make(token),
-        ...(account.account !== undefined ? { account: account.account } : {}),
-        ...(account.expiresAt !== undefined
-          ? { expiresAt: account.expiresAt }
-          : {}),
+        way: "browser",
+        session: done.session,
+        account: done.account,
+        expiresAt: done.expiresAt,
         ...(Option.isSome(options.region)
           ? { region: options.region.value }
           : {}),
       },
     }));
     const previous = before[provider.name];
-    const output = yield* CliOutput;
-    const who =
-      account.account !== undefined
-        ? `as ${account.account}`
-        : `with token …${token.slice(-4)}`;
     const replaced =
-      previous === undefined
-        ? ""
-        : ` (replaced ${previous.account ?? `token …${Redacted.value(previous.token).slice(-4)}`})`;
-    yield* output.err(`Logged in to ${provider.name} ${who}${replaced}.\n`);
+      previous === undefined ? "" : ` (replaced ${nameOf(previous)})`;
+    yield* output.err(
+      `Logged in to ${provider.name} as ${done.account}${replaced}.\n`,
+    );
   });
 
 export const showAuthStatus = Effect.gen(function* () {
@@ -155,6 +194,8 @@ export const showAuthStatus = Effect.gen(function* () {
           saved.expiresAt.getTime() <= now
         ) {
           line = `expired ${formatTime(saved.expiresAt)}. Run: proofbox auth login ${provider.name}`;
+        } else if (saved.way === "browser") {
+          line = `logged in as ${saved.account}${regionOf(Option.fromNullable(saved.region))}, expires ${formatTime(saved.expiresAt)}, saved login`;
         } else if (
           saved.account !== undefined &&
           saved.expiresAt !== undefined

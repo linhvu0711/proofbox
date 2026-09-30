@@ -57,9 +57,27 @@ export interface ProviderAccount {
   readonly expiresAt?: Date;
 }
 
+// A Provider with a browser login: `start` opens the wait and names the
+// login page's URL, `complete` holds until the page was clicked and
+// hands the Provider login it made.
+export interface BrowserWay {
+  readonly start: Effect.Effect<
+    { readonly loginId: string; readonly url: string },
+    ProviderUnavailableError | ProviderError
+  >;
+  readonly complete: (loginId: string) => Effect.Effect<
+    {
+      readonly session: Redacted.Redacted<string>;
+      readonly account: string;
+      readonly expiresAt: Date;
+    },
+    ProviderUnavailableError | ProviderError
+  >;
+}
+
 export interface LoginWays {
   readonly _tag: "Ways";
-  readonly ways: ReadonlySet<LoginWay>;
+  readonly browser?: BrowserWay;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,

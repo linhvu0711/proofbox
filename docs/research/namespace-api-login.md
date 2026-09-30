@@ -30,6 +30,8 @@ For: Provider login grill (ADR 0014)
 - `IssueTenantTokenFromSession` and the `StartLogin` calls are not in the public IAM protos. Source: https://buf.build/namespace/cloud/docs/main:namespace.cloud.iam.v1beta.
 - `TokenService.CreateRevokableToken` is public: name, `expires_at` (up to 1 year), policies. The caller needs the `token/revokable` `create` permission. Source: same.
 - Revokable tokens are made with `nsc token create`; the dashboard API Tokens page lists and revokes them but has no create button (seen by the user on 2026-09-29). Source: https://namespace.so/changelog.
+- `StartLogin`, `CompleteTenantLogin`, and `IssueTenantTokenFromSession` are JSON POSTs to `https://private-api.global.namespaceapis.com/nsl.signin.SigninService/<Method>`; `CompleteTenantLogin` is one call that Namespace holds until the browser click and answers with a one-item JSON array (`nsc` makes one call and no loop). Source: foundation `internal/fnapi/signin.go:49-96`, `internal/cli/cmd/auth/login.go:43-57`.
+- Namespace gives no region at login: neither the `st_` session nor the `nsct_` tenant token has a region claim, and one tenant token works at both `us` and `eu` (probe 2026-09-30). `nsc` reads `workload_region`/`primary_region` claims when a token has them (foundation `internal/auth/tokens.go:95`).
 
 ### Devin and Cursor
 
@@ -38,7 +40,5 @@ For: Provider login grill (ADR 0014)
 
 ## Open
 
-- How `nsc` picks the Compute region for a workspace, and whether a revokable token alone reveals it. The public sources did not say; read the foundation source when building.
-- The exact wire behaviour of `CompleteTenantLogin` (poll or long-poll). Read the foundation source when building.
 - The exact Registry API method name for image expiry. The Buf page did not load; read the SDK's registry client.
 - Whether Namespace allows outside tools to use the private login calls. Not asked, by choice (ADR 0014).

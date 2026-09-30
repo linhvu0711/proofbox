@@ -62,6 +62,7 @@ import {
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
+import { completeLogin, startLogin } from "./namespace-signin.ts";
 import type { NscClient } from "./nsc-client.ts";
 import {
   DEFAULT_REGION,
@@ -1029,7 +1030,7 @@ export const makeNamespaceProvider = (deps: {
     idPrefix: "ns",
     login: {
       _tag: "Ways",
-      ways: new Set(["token"]),
+      browser: { start: startLogin(), complete: completeLogin },
       checkToken: api.checkToken,
     },
     regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },

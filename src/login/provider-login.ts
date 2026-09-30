@@ -38,5 +38,10 @@ export const loginFor = (provider: string): ProviderLogin =>
     if (saved.expiresAt !== undefined && saved.expiresAt.getTime() <= now) {
       return yield* new LoginExpiredError({ provider });
     }
+    // A browser login holds no token to hand over yet; the trade lands
+    // in #49's later slice.
+    if (saved.way === "browser") {
+      return yield* new NotLoggedInError({ provider });
+    }
     return { token: saved.token, region: Option.fromNullable(saved.region) };
   });

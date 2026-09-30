@@ -32,7 +32,6 @@ import {
   type Connection,
   type ExecEvent,
   IdleSeconds,
-  type LoginWay,
   Os,
   type Provider,
   type ProviderAccount,
@@ -473,7 +472,6 @@ export const makeFakeProvider = (options: {
     idPrefix: "fake",
     login: {
       _tag: "Ways",
-      ways: new Set<LoginWay>(["token"]),
       checkToken,
     },
     offers: {

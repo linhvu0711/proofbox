@@ -32,8 +32,14 @@ import {
   type FakeNamespace,
   type FakeNamespaceAnswer,
   type FakeNamespaceCall,
+  type FakeSignin,
+  fakeSignin,
+  SESSION_1,
+  SESSION_2,
   startFakeNamespace,
+  toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
+import { makeFakeOpen } from "./support/fake-open.ts";
 
 // A Namespace JWT the fake Compute API sees (tenant tnt_test, exp
 // 3000-01-01T00:00:00Z).
@@ -79,6 +85,22 @@ const fakeNamespace = async (
   namespaces.push(server);
   return server;
 };
+
+// A fake that plays IAM and Compute: the sign-in calls go to `signin`,
+// the Compute calls to `answer` (`{json:{}}` by default).
+const fakeNamespaceSignin = async (
+  signin?: FakeSignin,
+  answer: (call: FakeNamespaceCall) => FakeNamespaceAnswer = () => ({
+    json: {},
+  }),
+) => {
+  const server = await startFakeNamespace(answer, 0, signin ?? fakeSignin());
+  namespaces.push(server);
+  return server;
+};
+
+// The fake's IAM base: its url without the `/{region}` tail.
+const iamUrl = (server: FakeNamespace) => server.url.replace("/{region}", "");
 
 describe("auth", () => {
   afterEach(async () => {
@@ -1153,6 +1175,133 @@ describe("auth", () => {
         );
       }),
   );
+
+  it("auth login namespace opens the browser and saves the workspace login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_OPEN: makeFakeOpen('curl -fsS -X POST "$1" >/dev/null'),
+      },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Waiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-1.\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls).toEqual([
+      {
+        region: "",
+        method: "StartLogin",
+        body: toSnakeKeys({
+          supportedKinds: ["tenant"],
+          sessionDurationSecs: 2592000,
+        }),
+        authorization: undefined,
+      },
+      {
+        region: "",
+        method: "CompleteTenantLogin",
+        body: toSnakeKeys({ loginId: "L1" }),
+        authorization: undefined,
+      },
+    ]);
+    const path = join(home, ".config", "proofbox", "logins.json");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
+      namespace: {
+        way: "browser",
+        session: SESSION_1,
+        account: "team-1",
+        expiresAt: "3000-01-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  it("auth login namespace --region eu saves eu", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--region", "eu"],
+      {
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+          PROOFBOX_OPEN: makeFakeOpen('curl -fsS -X POST "$1" >/dev/null'),
+        },
+      },
+    );
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({
+      namespace: {
+        way: "browser",
+        session: SESSION_1,
+        account: "team-1",
+        expiresAt: "3000-01-01T00:00:00.000Z",
+        region: "eu",
+      },
+    });
+  });
+
+  it("a second browser login replaces the first and names the old workspace", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"browser","session":"${SESSION_1}","account":"team-1","expiresAt":"3000-01-01T00:00:00.000Z"}}`,
+    );
+    const ns = await fakeNamespaceSignin(
+      fakeSignin({ workspace: () => "team-2", session: () => SESSION_2 }),
+    );
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_OPEN: makeFakeOpen('curl -fsS -X POST "$1" >/dev/null'),
+      },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Waiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-2 (replaced team-1).\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({
+      namespace: {
+        way: "browser",
+        session: SESSION_2,
+        account: "team-2",
+        expiresAt: "3000-01-01T00:00:00.000Z",
+      },
+    });
+  });
+
+  it("a browser login when Namespace cannot be reached says to check the network", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Could not reach Namespace. Check your network and try again.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(() =>
+      statSync(join(home, ".config", "proofbox", "logins.json")),
+    ).toThrow();
+  });
 
   it("auth login --token with nothing on stdin saves nothing", async () => {
     // Given
