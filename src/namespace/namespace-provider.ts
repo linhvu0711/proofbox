@@ -326,7 +326,6 @@ export const makeNamespaceProvider = (deps: {
     });
 
   // Each OS is its own label, so a host is listed with the OS it runs.
-  // A region sees only its own hosts, so a list spans every known one.
   const listHostsFor = (region: string) =>
     Effect.gen(function* () {
       const [linux, macos] = yield* Effect.all(
@@ -351,6 +350,10 @@ export const makeNamespaceProvider = (deps: {
     });
 
   const list = Effect.gen(function* () {
+    // Each region's list is global today, so one answer would do. `list`
+    // still asks every known region: a second one is a spare when a
+    // region is down, and it keeps the list whole if a region ever lists
+    // only its own hosts.
     // A region that cannot be reached is named in `unreached`; when
     // nothing answered at all the list fails with the first error.
     const perRegion = yield* Effect.forEach(

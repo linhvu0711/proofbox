@@ -3,8 +3,9 @@
 export const KNOWN_REGIONS: ReadonlyArray<string> = ["us", "eu"];
 export const DEFAULT_REGION = "us";
 
-// A Namespace Sandbox name is `<region>:<instanceId>`: each region sees
-// only its own instances, so the name carries where to look.
+// A Namespace Sandbox name is `<region>:<instanceId>`: the name carries
+// the region the instance was made in, so later calls know which
+// regional endpoint to use.
 export const hostName = (region: string, instanceId: string) =>
   `${region}:${instanceId}`;
 
