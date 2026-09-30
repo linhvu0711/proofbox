@@ -374,9 +374,9 @@ export const makeNamespaceProvider = (deps: {
       return yield* first ?? fail("no Namespace region could be reached");
     }
     // Every endpoint's list is global: one host comes back once per
-    // region asked. Keep one entry per instance, labeled with the
-    // continent the instance reports, or the queried region when it
-    // reports none.
+    // region asked. Keep one entry per instance, named by the region it
+    // was made in — the `proofbox.region` label create stamps — or the
+    // continent the instance reports, or the queried region.
     const byId = new Map<
       string,
       {
@@ -389,7 +389,10 @@ export const makeNamespaceProvider = (deps: {
       if (!byId.has(host.instance.id)) {
         byId.set(host.instance.id, {
           os: host.os,
-          region: host.instance.region ?? host.region,
+          region:
+            host.instance.labels["proofbox.region"] ??
+            host.instance.region ??
+            host.region,
           instance: host.instance,
         });
       }
@@ -612,6 +615,7 @@ export const makeNamespaceProvider = (deps: {
               },
               labels: [
                 { name: "proofbox.os", value: req.os },
+                { name: "proofbox.region", value: region },
                 { name: "proofbox.size", value: formatSize(size) },
                 { name: "proofbox.create-token", value: createToken },
               ],
