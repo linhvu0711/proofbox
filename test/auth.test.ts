@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import {
   Chunk,
@@ -18,12 +19,14 @@ import {
   Effect,
   Fiber,
   Layer,
+  Option,
   Redacted,
   Ref,
+  TestClock,
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { logoutOfProvider } from "../src/commands/auth.ts";
+import { loginToProvider, logoutOfProvider } from "../src/commands/auth.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { changeLogins } from "../src/login/logins-file.ts";
 import { type Provider, Providers } from "../src/provider.ts";
@@ -1302,6 +1305,126 @@ describe("auth", () => {
       statSync(join(home, ".config", "proofbox", "logins.json")),
     ).toThrow();
   });
+
+  it("a browser login nobody finishes gives up at the login wait", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_OPEN: makeFakeOpen("true"),
+        PROOFBOX_LOGIN_WAIT: "1s",
+      },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Waiting for you to log in in the browser... (Ctrl+C to stop)\nThe browser login did not finish in 1s. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(() => statSync(loginsFile(home))).toThrow();
+  });
+
+  it("a login Namespace ends early is asked again", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const signin = fakeSignin();
+    let first = true;
+    const ns = await fakeNamespaceSignin({
+      ...signin,
+      answer: (call, base) => {
+        if (call.method === "CompleteTenantLogin" && first) {
+          first = false;
+          return {
+            error: { code: "deadline_exceeded", message: "timed out" },
+          };
+        }
+        return signin.answer(call, base);
+      },
+    });
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_OPEN: makeFakeOpen('curl -fsS -X POST "$1" >/dev/null'),
+      },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Waiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-1.\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(
+      ns.calls.filter((call) => call.method === "CompleteTenantLogin"),
+    ).toHaveLength(2);
+  });
+
+  effectIt.effect("the browser login waits 10 minutes by default", () =>
+    Effect.gen(function* () {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      trackTempDir(root);
+      const home = makeHome();
+      const providers = Layer.succeed(
+        Providers,
+        new Map<string, Provider>([
+          [
+            "slow",
+            {
+              ...makeFakeProvider({ root, watch: "none" }),
+              name: "slow",
+              login: {
+                _tag: "Ways",
+                checkToken: () => Effect.die("unused"),
+                browser: {
+                  start: Effect.succeed({
+                    loginId: "L1",
+                    url: "http://127.0.0.1:9/login/L1",
+                  }),
+                  complete: () => Effect.never,
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      yield* Effect.gen(function* () {
+        // When
+        const fiber = yield* Effect.fork(
+          loginToProvider({
+            provider: "slow",
+            token: false,
+            region: Option.none(),
+          }),
+        );
+        yield* TestClock.adjust("9 minutes");
+        // Then
+        const running = yield* Fiber.poll(fiber);
+        expect(Option.isNone(running)).toBe(true);
+        yield* TestClock.adjust("1 minute");
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+        expect(error.message).toBe(
+          "The browser login did not finish in 10m. Run: proofbox auth login slow",
+        );
+      }).pipe(
+        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(
+            new Map([
+              ["HOME", home],
+              ["PROOFBOX_OPEN", "true"],
+            ]),
+          ),
+        ),
+        Effect.provide(NodeContext.layer),
+      );
+    }),
+  );
 
   it("auth login --token with nothing on stdin saves nothing", async () => {
     // Given

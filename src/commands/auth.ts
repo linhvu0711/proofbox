@@ -1,9 +1,11 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { text } from "node:stream/consumers";
-import { Clock, Effect, Either, Option, Redacted } from "effect";
+import { Clock, Config, Effect, Either, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
+import { parseSpan } from "../deadline.ts";
 import {
+  LoginTimeoutError,
   NoLoginNeededError,
   NoLoginWayError,
   NoRegionsError,
@@ -40,6 +42,11 @@ const loginPartFor = (name: string) =>
     }
     return { provider, part } as const;
   });
+
+// How long a browser login waits for the click.
+const loginWait = Config.string("PROOFBOX_LOGIN_WAIT").pipe(
+  Config.withDefault("10m"),
+);
 
 // A saved login's name in the replaced note: its account, or the
 // token's last four when it has none.
@@ -128,7 +135,20 @@ export const loginToProvider = (options: {
     yield* output.err(
       "Waiting for you to log in in the browser... (Ctrl+C to stop)\n",
     );
-    const done = yield* browser.complete(started.loginId);
+    const waitText = yield* loginWait.pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderError({ provider: provider.name, reason: error.message }),
+      ),
+    );
+    const wait = yield* parseSpan("PROOFBOX_LOGIN_WAIT", waitText);
+    const done = yield* browser.complete(started.loginId).pipe(
+      Effect.timeoutFail({
+        duration: wait,
+        onTimeout: () =>
+          new LoginTimeoutError({ provider: provider.name, wait: waitText }),
+      }),
+    );
     const before = yield* changeLogins((logins) => ({
       ...logins,
       [provider.name]: {

@@ -36,6 +36,17 @@ const signinError = (method: string, status: number, body: unknown) => {
   });
 };
 
+// The held CompleteTenantLogin ends early on a Namespace-side
+// deadline; the Caller asks again with the same login id when it sees
+// one of these endings.
+const endedEarly = (answer: {
+  readonly status: number;
+  readonly body: unknown;
+}) =>
+  answer.status === 408 ||
+  answer.status === 504 ||
+  decodeErrorBody(answer.body)?.code === "deadline_exceeded";
+
 // A sign-in call answered oddly (a body that is not the expected JSON)
 // is a Provider error, not a bug.
 const badAnswer = (method: string) =>
@@ -138,10 +149,11 @@ export const startLogin = () =>
 
 export const completeLogin = (loginId: string) =>
   Effect.gen(function* () {
-    const answer = yield* post(
-      "CompleteTenantLogin",
-      Schema.encodeSync(LoginIdBody)({ loginId }),
-    );
+    const body = Schema.encodeSync(LoginIdBody)({ loginId });
+    let answer = yield* post("CompleteTenantLogin", body);
+    while (endedEarly(answer)) {
+      answer = yield* post("CompleteTenantLogin", body);
+    }
     if (answer.status !== 200) {
       return yield* signinError(
         "CompleteTenantLogin",
