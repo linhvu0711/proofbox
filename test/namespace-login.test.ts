@@ -2,18 +2,20 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
-import { ConfigProvider, Effect, Option, Redacted } from "effect";
+import { ConfigProvider, Effect, Option, Redacted, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { makeNamespaceApi } from "../src/namespace/namespace-api.ts";
 import { namespaceLogin } from "../src/namespace/namespace-login.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 import {
+  EXPIRED_TENANT_1,
   type FakeNamespace,
   type FakeSignin,
   fakeSignin,
   SESSION_1,
   startFakeNamespace,
   TENANT_1,
+  TENANT_2,
   toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
 
@@ -140,6 +142,40 @@ describe("Namespace login", () => {
       // Then
       expect(Redacted.value(hand.token)).toBe(TENANT_1);
       expect(Option.getOrNull(hand.region)).toBe("eu");
+    }),
+  );
+
+  it.effect("a tenant token past its expiry is traded again, not reused", () =>
+    Effect.gen(function* () {
+      // Given
+      const home = homeWithLogin();
+      const runtime = tempDir();
+      const signin = fakeSignin();
+      const tokens = [EXPIRED_TENANT_1, TENANT_2];
+      const ns = yield* Effect.promise(() =>
+        fakeNamespace({
+          ...signin,
+          answer: (call, base) =>
+            call.method === "IssueTenantTokenFromSession"
+              ? {
+                  json: toSnakeKeys({
+                    tenantToken: tokens.shift() ?? TENANT_2,
+                  }),
+                }
+              : signin.answer(call, base),
+        }),
+      );
+      // When
+      const first = yield* namespaceLogin.pipe(config(home, runtime, ns));
+      yield* TestClock.adjust("2 minutes");
+      const second = yield* namespaceLogin.pipe(config(home, runtime, ns));
+      // Then
+      expect(Redacted.value(first.token)).toBe(EXPIRED_TENANT_1);
+      expect(Redacted.value(second.token)).toBe(TENANT_2);
+      expect(ns.calls.map((call) => call.method)).toEqual([
+        "IssueTenantTokenFromSession",
+        "IssueTenantTokenFromSession",
+      ]);
     }),
   );
 

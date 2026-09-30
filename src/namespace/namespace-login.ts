@@ -25,6 +25,14 @@ const lockFor = (path: string) => {
   return made;
 };
 
+// A token counts while its `exp` claim is further out than `margin`: five
+// minutes for the copy another process left, the claim itself for the one
+// this process minted — a fresh mint is the newest there is.
+const alive = (token: string, now: number, margin: number) => {
+  const exp = extractClaims(token)?.exp;
+  return typeof exp === "number" && exp * 1000 - now > margin;
+};
+
 const tenantTokenFor = (session: Redacted.Redacted<string>) =>
   Effect.gen(function* () {
     const fail = (reason: string) =>
@@ -35,8 +43,9 @@ const tenantTokenFor = (session: Redacted.Redacted<string>) =>
     const path = join(dir, `ns-tenant-${hash}.json`);
     return yield* lockFor(path).withPermits(1)(
       Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
         const memoed = issued.get(path);
-        if (memoed !== undefined) {
+        if (memoed !== undefined && alive(memoed, now, 0)) {
           return Redacted.make(memoed);
         }
         const stored = yield* Effect.promise(() =>
@@ -45,13 +54,9 @@ const tenantTokenFor = (session: Redacted.Redacted<string>) =>
             () => undefined,
           ),
         );
-        if (stored !== undefined) {
-          const exp = extractClaims(stored)?.exp;
-          const now = yield* Clock.currentTimeMillis;
-          if (typeof exp === "number" && exp * 1000 - now > 5 * 60 * 1000) {
-            issued.set(path, stored);
-            return Redacted.make(stored);
-          }
+        if (stored !== undefined && alive(stored, now, 5 * 60 * 1000)) {
+          issued.set(path, stored);
+          return Redacted.make(stored);
         }
         const token = yield* issueTenantToken(text);
         yield* Effect.tryPromise({

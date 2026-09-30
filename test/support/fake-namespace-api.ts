@@ -60,6 +60,11 @@ export const SESSION_2 =
   "st_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVhbTIiLCJleHAiOjMyNTAzNjgwMDAwfQ.sig";
 export const TENANT_1 =
   "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVhbTEiLCJleHAiOjMyNTAzNjgwMDAwfQ.sig";
+export const TENANT_2 =
+  "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVhbTIiLCJleHAiOjMyNTAzNjgwMDAwfQ.sig";
+// A minted token already past its expiry (exp 1970-01-01T00:01:40Z).
+export const EXPIRED_TENANT_1 =
+  "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVhbTEiLCJleHAiOjEwMH0.sig";
 
 // The sign-in side of a fake: `answer` takes the calls to
 // nsl.signin.SigninService, `workspaceOf` names the workspace a login id
