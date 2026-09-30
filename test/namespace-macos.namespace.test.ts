@@ -68,9 +68,9 @@ describe("Namespace macOS Provider", () => {
   });
 
   afterAll(async () => {
-    if (/^ns:[a-z0-9]+$/.test(id)) {
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.slice("ns:".length));
+      await destroy(id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -86,7 +86,7 @@ describe("Namespace macOS Provider", () => {
       "-productVersion",
     ]);
     // Then
-    expect(created.result.stdout).toMatch(/^ns:[a-z0-9]+\n$/);
+    expect(created.result.stdout).toMatch(/^ns:[a-z0-9]+:[a-z0-9]+\n$/);
     expect(created.result.exitCode).toBe(0);
     expect(version.stdout).toMatch(/^26\./);
   });
@@ -223,7 +223,7 @@ describe("Namespace macOS Provider", () => {
 
   it("a Mac with live running has only a private address and no ingress", async () => {
     // Given: the Mac from beforeAll with `live` running
-    const host = id.slice("ns:".length);
+    const host = id.split(":").at(-1) ?? "";
     const child = spawn(
       process.execPath,
       ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
@@ -430,9 +430,9 @@ describe("Namespace macOS Recording", () => {
   });
 
   afterAll(async () => {
-    if (/^ns:[a-z0-9]+$/.test(id)) {
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.slice("ns:".length));
+      await destroy(id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -788,9 +788,9 @@ describe("Namespace macOS Secrets", () => {
   });
 
   afterAll(async () => {
-    if (/^ns:[a-z0-9]+$/.test(id)) {
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
       await runCli(env, ["delete", id]);
-      await destroy(id.slice("ns:".length));
+      await destroy(id.split(":").at(-1) ?? "");
     }
     cleanupEnvs();
   });
@@ -875,9 +875,9 @@ describe("Namespace macOS Provider at 6x14", () => {
         expect(result.exitCode).toBe(0);
         expect(cpus.stdout).toBe("6\n");
       } finally {
-        if (/^ns:[a-z0-9]+$/.test(id)) {
+        if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
           await runCli(env, ["delete", id]);
-          await destroy(id.slice("ns:".length));
+          await destroy(id.split(":").at(-1) ?? "");
         }
       }
     } finally {
