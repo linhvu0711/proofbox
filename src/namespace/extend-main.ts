@@ -3,6 +3,7 @@ import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
+import { fileStem } from "../sandbox-id.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
 import { namespaceLogin } from "./namespace-login.ts";
 
@@ -19,7 +20,7 @@ seconds <= 0
       const api = makeNamespaceApi({ login: namespaceLogin });
       const capFile = (yield* keeperPaths({
         provider: "ns",
-        name: instanceId,
+        name: fileStem({ name: instanceId, region }),
       })).maxLife;
       // The push is fire-and-forget from the caller's side: retry until the
       // host accepts the Deadline or its own Deadline passes. Each attempt

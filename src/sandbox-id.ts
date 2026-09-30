@@ -29,6 +29,14 @@ export const formatSandboxId = (id: SandboxId) =>
     ? `${id.provider}:${id.name}`
     : `${id.provider}:${id.region}:${id.name}`;
 
+// The stem a Sandbox's runtime files live under: `<region>:<name>`, like
+// the Sandbox id itself, so names that collide across regions keep their
+// own files.
+export const fileStem = (id: {
+  readonly name: string;
+  readonly region: string | undefined;
+}) => (id.region === undefined ? id.name : `${id.region}:${id.name}`);
+
 export const parseSandboxId = (
   raw: string,
   known: ReadonlyArray<string>,

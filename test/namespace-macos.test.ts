@@ -271,7 +271,7 @@ describe("Namespace macOS Provider", () => {
     "extend on a Mac writes the Deadline file and pushes the host",
     () => {
       const runtime = runtimeDir();
-      writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
       return Effect.gen(function* () {
         // Given
         const mac = yield* makeMac();
@@ -627,7 +627,7 @@ describe("Namespace macOS Provider", () => {
 
   it.effect("memoryKills on a Mac counts the watcher's log", () => {
     const runtime = runtimeDir();
-    writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+    writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
     return Effect.gen(function* () {
       // Given
       const mac = yield* makeMac((line) =>
@@ -649,7 +649,7 @@ describe("Namespace macOS Provider", () => {
     "memoryKills on a Mac starts the watcher again when it stopped",
     () => {
       const runtime = runtimeDir();
-      writeFileSync(join(runtime, "ns-abc123def4567.os"), "macos");
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
       return Effect.gen(function* () {
         // Given: the watcher's pid is not running
         const mac = yield* makeMac();

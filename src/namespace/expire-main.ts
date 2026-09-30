@@ -3,6 +3,7 @@ import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
+import { fileStem } from "../sandbox-id.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
 import { namespaceLogin } from "./namespace-login.ts";
 
@@ -26,7 +27,10 @@ at <= 0
   ? Effect.void
   : Effect.gen(function* () {
       const api = makeNamespaceApi({ login: namespaceLogin });
-      const paths = yield* keeperPaths({ provider: "ns", name: instanceId });
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: fileStem({ name: instanceId, region }),
+      });
       const capFile = paths.maxLife;
       const epoch = (file: string) =>
         Effect.promise(() =>

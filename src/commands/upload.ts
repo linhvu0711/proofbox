@@ -13,7 +13,7 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
-import { resolveSandboxId } from "../sandbox-id.ts";
+import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import {
   diffHashList,
   HashList,
@@ -135,7 +135,7 @@ export const sendWorkFolder = (
       )(
         withUploadLock(
           id.prefix,
-          id.name,
+          fileStem(id),
           Effect.gen(function* () {
             const old = yield* runInSandbox(keeper, rawId, [
               "cat",

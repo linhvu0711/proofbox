@@ -49,7 +49,7 @@ import {
   SandboxInfo,
   type SandboxRef,
 } from "../provider.ts";
-import { formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
+import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
@@ -129,13 +129,14 @@ export const makeNamespaceProvider = (deps: {
     id: () => sandboxId(ref),
   });
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
+  const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
   // The container takes the first six characters of the instance id.
   const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
   // The host's OS, written at create; a host made before macOS existed has
   // no file and is Linux.
-  const osOf = (name: string) =>
+  const osOf = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      const file = (yield* paths(name)).os;
+      const file = (yield* refPaths(ref)).os;
       const text = yield* Effect.promise(() =>
         readFile(file, "utf8").catch(() => "linux"),
       );
@@ -151,7 +152,7 @@ export const makeNamespaceProvider = (deps: {
         ref.name,
         "120",
       ]);
-      return yield* deps.openLink(ref, yield* paths(ref.name), owner);
+      return yield* deps.openLink(ref, yield* refPaths(ref), owner);
     });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
@@ -284,7 +285,7 @@ export const makeNamespaceProvider = (deps: {
 
   const get = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      return yield* getAs(yield* osOf(ref.name), ref);
+      return yield* getAs(yield* osOf(ref), ref);
     });
 
   const extend = (ref: SandboxRef, deadline: Date) =>
@@ -295,7 +296,7 @@ export const makeNamespaceProvider = (deps: {
       // The detached host-expiry destroys the host at this instant: the
       // record lands before the push so a link that is slow or dead cannot
       // leave the host living past the Sandbox's Deadline.
-      const dir = yield* paths(ref.name);
+      const dir = yield* refPaths(ref);
       yield* Effect.promise(() =>
         writeFile(dir.deadline, String(Math.ceil(deadline.getTime() / 1000)), {
           mode: 0o600,
@@ -308,7 +309,7 @@ export const makeNamespaceProvider = (deps: {
         ref.name,
         String(seconds),
       ]);
-      const os = yield* osOf(ref.name);
+      const os = yield* osOf(ref);
       const written = yield* withCliLink(ref, (link) =>
         os === "macos"
           ? writeMacDeadline(link, seconds)
@@ -406,7 +407,11 @@ export const makeNamespaceProvider = (deps: {
     const live = [...byId.values()];
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
-    const alive = new Set(live.map((host) => host.instance.id));
+    const alive = new Set(
+      live.map((host) =>
+        fileStem({ name: host.instance.id, region: host.region }),
+      ),
+    );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
       const entries = await readdir(dir).catch(() => [] as string[]);
@@ -483,7 +488,7 @@ export const makeNamespaceProvider = (deps: {
       // Hosts that expire on their own never reach destroy, so the local
       // keypair and Max-life cap are removed whether or not the host is
       // still listed.
-      const dir = yield* paths(ref.name);
+      const dir = yield* refPaths(ref);
       yield* Effect.promise(() =>
         Promise.all([
           rm(dir.key, { force: true }).catch(() => {}),
@@ -551,7 +556,7 @@ export const makeNamespaceProvider = (deps: {
           ]).then(() => {}),
         );
         if (hostRef !== undefined) {
-          const hostPaths = yield* paths(hostRef.name);
+          const hostPaths = yield* refPaths(hostRef);
           yield* Effect.promise(() =>
             Promise.all([
               rm(hostPaths.key, { force: true }).catch(() => {}),
@@ -698,7 +703,7 @@ export const makeNamespaceProvider = (deps: {
             "making the host took the whole Max life; try a larger --max-life",
           );
         }
-        const hostPaths = yield* paths(ref.name);
+        const hostPaths = yield* refPaths(ref);
         yield* Effect.tryPromise({
           try: async () => {
             await rename(keyBase, hostPaths.key);
@@ -847,7 +852,7 @@ export const makeNamespaceProvider = (deps: {
   const connect = (ref: SandboxRef) =>
     Effect.gen(function* () {
       const link = yield* openLink(ref, "keeper");
-      if ((yield* osOf(ref.name)) === "macos") {
+      if ((yield* osOf(ref)) === "macos") {
         yield* readMac(link, ref);
         return { exec: macExec(link) };
       }
@@ -864,7 +869,7 @@ export const makeNamespaceProvider = (deps: {
 
   const memoryKills = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      if ((yield* osOf(ref.name)) === "macos") {
+      if ((yield* osOf(ref)) === "macos") {
         return yield* withCliLink(ref, readMemoryKills);
       }
       yield* get(ref);
@@ -883,7 +888,7 @@ export const makeNamespaceProvider = (deps: {
 
   const liveView = (ref: SandboxRef) =>
     Effect.gen(function* () {
-      if ((yield* osOf(ref.name)) === "macos") {
+      if ((yield* osOf(ref)) === "macos") {
         const link = yield* openLink(ref, "cli");
         // The candidate goes on stdin, never the command line. As on
         // Linux, a lock serializes live-view starts, the stored password

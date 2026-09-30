@@ -67,7 +67,7 @@ describe("Namespace helpers", () => {
     const ns = await startFakeNamespace(() => ({ json: {} }));
     const runtime = tempDir();
     const home = tempDir();
-    capFile(runtime, INSTANCE, Math.floor(Date.now() / 1000) + 3600);
+    capFile(runtime, `us:${INSTANCE}`, Math.floor(Date.now() / 1000) + 3600);
     const result = await runHelper(
       "src/namespace/extend-main.ts",
       ["us", INSTANCE, "60"],
@@ -108,7 +108,7 @@ describe("Namespace helpers", () => {
       })}\n`,
       { mode: 0o600 },
     );
-    capFile(runtime, INSTANCE, Math.floor(Date.now() / 1000) + 3600);
+    capFile(runtime, `us:${INSTANCE}`, Math.floor(Date.now() / 1000) + 3600);
     const result = await runHelper(
       "src/namespace/expire-main.ts",
       ["us", INSTANCE, `${Math.floor(Date.now() / 1000)}`],

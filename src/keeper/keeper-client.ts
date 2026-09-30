@@ -17,7 +17,7 @@ import {
   Providers,
   type SandboxRef,
 } from "../provider.ts";
-import { formatSandboxId, resolveSandboxId } from "../sandbox-id.ts";
+import { fileStem, formatSandboxId, resolveSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeReply, encodeInput, encodeRequest } from "./protocol.ts";
@@ -127,7 +127,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         const id = yield* resolveSandboxId(rawId, providers);
         const paths = yield* keeperPaths({
           provider: id.prefix,
-          name: id.name,
+          name: fileStem(id),
         });
         yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
           formatSandboxId({
@@ -253,7 +253,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           const provider = id.provider;
           const paths = yield* keeperPaths({
             provider: id.prefix,
-            name: id.name,
+            name: fileStem(id),
           });
           const socket = yield* connectSocket(
             paths.socket,
@@ -339,7 +339,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         const id = yield* resolveSandboxId(rawId, providers);
         const paths = yield* keeperPaths({
           provider: id.prefix,
-          name: id.name,
+          name: fileStem(id),
         });
         const pidText = yield* Effect.promise(() =>
           readFile(paths.pid, "utf8").catch(() => ""),

@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import type { Provider } from "../src/provider.ts";
-import { resolveSandboxId } from "../src/sandbox-id.ts";
+import { fileStem, resolveSandboxId } from "../src/sandbox-id.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("Sandbox id", () => {
@@ -40,6 +40,11 @@ describe("Sandbox id", () => {
       }).toEqual({ prefix: "ns", region: "eu", name: "abc123" });
     }),
   );
+
+  it("a sandbox's file stem keeps the region inside", () => {
+    expect(fileStem({ name: "abc123", region: "eu" })).toBe("eu:abc123");
+    expect(fileStem({ name: "abc123", region: undefined })).toBe("abc123");
+  });
 
   it("a malformed id names the id and the form", async () => {
     // Given
