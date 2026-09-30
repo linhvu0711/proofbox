@@ -158,14 +158,7 @@ export const makeNamespaceProvider = (deps: {
   const withCliLink = <A, E>(
     name: string,
     use: (link: Link) => Effect.Effect<A, E>,
-  ): Effect.Effect<
-    A,
-    | ApiLoginError
-    | E
-    | ProviderError
-    | ProviderUnavailableError
-    | SandboxGoneError
-  > =>
+  ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
     Effect.scoped(
       Effect.gen(function* () {
         const link = yield* openLink(name, "cli");

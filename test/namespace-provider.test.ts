@@ -67,6 +67,7 @@ const fakeApi = (
         ),
       );
     },
+    sshConfig: () => Effect.die("unused"),
     checkToken: () => Effect.die("unused"),
   };
 };

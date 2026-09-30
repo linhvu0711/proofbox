@@ -163,7 +163,10 @@ export interface Provider {
     | NotLoggedInError
     | SandboxGoneError
     | ProviderError
+    | ProviderLimitError
     | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
@@ -186,7 +189,10 @@ export interface Provider {
     | NotLoggedInError
     | SandboxGoneError
     | ProviderError
-    | ProviderUnavailableError,
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError,
     Scope.Scope
   >;
   // Only where an OS offer has the "snapshot" feature. `save` stores the
@@ -202,8 +208,11 @@ export interface Provider {
       | LoginExpiredError
       | NotLoggedInError
       | ProviderError
+      | ProviderLimitError
       | ProviderUnavailableError
-      | SandboxGoneError,
+      | SandboxGoneError
+      | TokenRejectedError
+      | TokenPermissionError,
       Progress
     >;
   };
@@ -216,7 +225,10 @@ export interface Provider {
     | NotLoggedInError
     | SandboxGoneError
     | ProviderError
+    | ProviderLimitError
     | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
   readonly list: Effect.Effect<
     ListResult,
@@ -254,7 +266,10 @@ export interface Provider {
     | NotLoggedInError
     | SandboxGoneError
     | ProviderError
-    | ProviderUnavailableError,
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
   readonly memoryKills: (
@@ -266,7 +281,10 @@ export interface Provider {
     | NotLoggedInError
     | SandboxGoneError
     | ProviderError
+    | ProviderLimitError
     | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
 }
 

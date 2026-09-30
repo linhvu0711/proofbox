@@ -66,6 +66,7 @@ const makeMac = (
       extend: (region, instanceId) =>
         note(calls, `extend ${region} ${instanceId}`),
       list: (region) => note(calls, `list ${region}`).pipe(Effect.as([])),
+      sshConfig: () => Effect.die("unused"),
       checkToken: () => Effect.die("unused"),
     };
     const nsc: NscClient = {

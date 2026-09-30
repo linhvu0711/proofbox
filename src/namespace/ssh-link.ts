@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { chmod, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
@@ -12,17 +12,11 @@ import {
   Stream,
 } from "effect";
 import { commandEvents } from "../command-events.ts";
-import {
-  type BadLoginsFileError,
-  type LoginExpiredError,
-  type NotLoggedInError,
-  ProviderError,
-  ProviderUnavailableError,
-  type SandboxGoneError,
-} from "../errors.ts";
+import { ProviderError, ProviderUnavailableError } from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
-import type { NscClient } from "./nsc-client.ts";
+import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import { splitHostName } from "./regions.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -51,16 +45,7 @@ export type OpenLink = (
   id: string,
   paths: KeeperPaths,
   owner: LinkOwner,
-) => Effect.Effect<
-  Link,
-  | BadLoginsFileError
-  | LoginExpiredError
-  | NotLoggedInError
-  | ProviderError
-  | ProviderUnavailableError
-  | SandboxGoneError,
-  Scope.Scope
->;
+) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
 
 const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
   Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
@@ -79,17 +64,18 @@ const linkLost = (detail: string) =>
     reason: `lost the link to the Namespace host: ${detail}`,
   });
 
-// Bring-up failures that mean "the host is not ready yet" — sshd still
-// coming up, a tunnel that dropped. Only these are retried; a missing ssh
-// or nsc, or not being logged in, fails at once. After the retries give up
-// it is mapped to the linkLost ProviderUnavailableError.
+// Bring-up failures that mean "the link is not ready yet" — the SSH
+// gateway still coming up, a handshake that dropped. Only these are
+// retried; a missing ssh binary or not being logged in fails at once.
+// After the retries give up it is mapped to the linkLost
+// ProviderUnavailableError.
 class LinkDownError extends Data.TaggedError("LinkDownError")<{
   readonly detail: string;
 }> {}
 const down = (detail: string) => new LinkDownError({ detail });
 
 export const makeOpenLink = (
-  nsc: NscClient,
+  api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
 ): OpenLink => {
   const sshError = (error: {
@@ -110,7 +96,11 @@ export const makeOpenLink = (
   // a socket path at 103.
   let cliSeq = 0;
 
-  const sshBase = (ctl: string, key: string): ReadonlyArray<string> => [
+  const sshBase = (
+    ctl: string,
+    key: string,
+    target: string,
+  ): ReadonlyArray<string> => [
     "-S",
     ctl,
     "-i",
@@ -123,22 +113,20 @@ export const makeOpenLink = (
     "UserKnownHostsFile=/dev/null",
     "-o",
     "LogLevel=ERROR",
-    "root@127.0.0.1",
+    target,
   ];
 
-  const checkCtl = (ctl: string) =>
+  const checkCtl = (ctl: string, target: string) =>
     Command.exitCode(
-      Command.make("ssh", "-S", ctl, "-O", "check", "root@127.0.0.1"),
+      Command.make("ssh", "-S", ctl, "-O", "check", target),
     ).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.map((code) => code === 0),
       Effect.catchAll(() => Effect.succeed(false)),
     );
 
-  const exitCtl = (ctl: string) =>
-    Command.exitCode(
-      Command.make("ssh", "-S", ctl, "-O", "exit", "root@127.0.0.1"),
-    ).pipe(
+  const exitCtl = (ctl: string, target: string) =>
+    Command.exitCode(Command.make("ssh", "-S", ctl, "-O", "exit", target)).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.catchAll(() => Effect.succeed(0)),
       Effect.asVoid,
@@ -201,9 +189,12 @@ export const makeOpenLink = (
           );
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
-      // forward or handshake.
-      if (owner === "cli" && (yield* checkCtl(paths.control))) {
-        const ssh = sshBase(paths.control, paths.key);
+      // handshake.
+      const { region, instanceId } = splitHostName(id);
+      const cfg = yield* api.sshConfig(region, instanceId);
+      const target = `${cfg.username}@${cfg.endpoint}`;
+      if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
+        const ssh = sshBase(paths.control, paths.key, target);
         return {
           ssh,
           run: runWith(ssh),
@@ -214,27 +205,38 @@ export const makeOpenLink = (
         owner === "keeper"
           ? paths.control
           : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
-      const ssh = sshBase(ctl, paths.key);
+      // The gateway key is written once per open, next to the control socket
+      // it belongs to, and removed when the link's scope closes.
+      const key =
+        owner === "keeper" ? paths.key : `${ctl.replace(/\.ctl$/, "")}.key`;
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
+            chmod(key, 0o600),
+          ),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => rm(key, { force: true }).catch(() => undefined)),
+      );
+      const ssh = sshBase(ctl, key, target);
       const run = runWith(ssh);
       const stream = streamWith(ssh);
-      if (yield* checkCtl(ctl)) {
+      if (yield* checkCtl(ctl, target)) {
         return { ssh, run, stream } satisfies Link;
       }
-      // The host's sshd may still be starting when nsc reports the instance,
-      // and a port-forward whose first connection dies stops listening, so
-      // each attempt opens a fresh forward and master. An attempt's scope
-      // cleans up on failure; on success it is parked on the caller's scope.
+      // A master that died mid-attempt can leave its socket file; each
+      // attempt runs in its own scope so a failure drops the half-built
+      // master before the next try. On success the attempt's scope is
+      // parked on the caller's scope so the master lives until then.
       const outerScope = yield* Scope.Scope;
       const bringup = Effect.gen(function* () {
         const attemptScope = yield* Scope.make();
         return yield* Effect.gen(function* () {
-          const localPort = yield* nsc
-            .portForward(id, 22)
-            .pipe(Effect.map((forward) => forward.port));
-          // The forward binds its local port before the tunnel to the host
-          // is up; a connection that lands first is reset, which also drops
-          // the listener, so give the tunnel a beat before the master dials.
-          yield* Effect.sleep("1 second");
           // A dead master can leave its socket file behind; a later spawn
           // then refuses to multiplex ("ControlSocket already exists").
           yield* Effect.tryPromise({
@@ -249,14 +251,7 @@ export const makeOpenLink = (
           const master = yield* Effect.acquireRelease(
             Effect.gen(function* () {
               const process = yield* Command.start(
-                Command.make(
-                  "ssh",
-                  "-M",
-                  "-N",
-                  "-p",
-                  String(localPort),
-                  ...ssh,
-                ),
+                Command.make("ssh", "-M", "-N", ...ssh),
               ).pipe(
                 Effect.provideService(
                   CommandExecutor.CommandExecutor,
@@ -274,11 +269,11 @@ export const makeOpenLink = (
             }),
             (process) =>
               Effect.zipRight(
-                exitCtl(ctl),
+                exitCtl(ctl, target),
                 Effect.orElseSucceed(process.kill("SIGKILL"), () => undefined),
               ),
           );
-          const up = checkCtl(ctl).pipe(
+          const up = checkCtl(ctl, target).pipe(
             Effect.filterOrFail(
               (ok) => ok,
               () => down("ssh did not connect in 15 s"),

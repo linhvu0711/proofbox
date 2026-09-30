@@ -7,7 +7,6 @@ import {
   type FakeNamespace,
   startFakeNamespace,
 } from "./support/fake-namespace-api.ts";
-import { makeFakeNsc } from "./support/fake-nsc.ts";
 
 const TOKEN =
   "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig";
@@ -203,19 +202,23 @@ describe("Namespace errors", () => {
     });
   });
 
-  it("create with no nsc deletes the new host and says to install nsc", async () => {
-    // Given: Namespace answers create and wait; nsc is a missing path
-    const ns = await fakeNamespace((call) =>
-      call.method === "CreateInstance"
-        ? { json: { metadata: { instanceId: "abc123def4567" } } }
-        : { json: {} },
-    );
+  it("create when the SSH config call is denied deletes the new host", async () => {
+    // Given: Namespace answers create and wait but denies GetSSHConfig
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "GetSSHConfig") {
+        return { error: { code: "permission_denied", message: "denied" } };
+      }
+      return { json: {} };
+    });
     const env = makeEnv();
     // When
     const result = await runCli(env, CREATE, { set: nsEnv(ns) });
     // Then: the new host was deleted before the failure surfaced
     expect(result.stderr).toBe(
-      "nsc is not installed; install the Namespace CLI, then try again\n",
+      "This Namespace token lacks permission for ComputeService.GetSSHConfig. Use a token that can manage instances.\n",
     );
     expect(result.exitCode).toBe(125);
     expect(
@@ -226,15 +229,20 @@ describe("Namespace errors", () => {
   });
 
   it("exec with no ssh on PATH says to install an OpenSSH client", async () => {
-    // Given: a PATH with no ssh and an nsc stub that answers port-forward
-    // with a Listening line, then waits on stdin
+    // Given: a PATH with no ssh; the Compute API answers GetSSHConfig
+    const ns = await fakeNamespace((call) =>
+      call.method === "GetSSHConfig"
+        ? {
+            json: {
+              username: "abc123def4567",
+              endpoint: "127.0.0.1",
+              sshPrivateKey: Buffer.from("key").toString("base64"),
+            },
+          }
+        : { json: {} },
+    );
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
-    const fake = makeFakeNsc(`case "$3 $4" in
-"instance port-forward")
-  printf 'Listening on 127.0.0.1:4321\\n'
-  sleep 60 ;;
-esac`);
     const env = makeEnv();
     // When
     const start = performance.now();
@@ -244,8 +252,7 @@ esac`);
       {
         set: {
           PATH: binDir,
-          PROOFBOX_NSC: fake.path,
-          PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+          ...nsEnv(ns),
         },
       },
     );

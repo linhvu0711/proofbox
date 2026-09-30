@@ -17,15 +17,16 @@ export const ProvidersLive = Layer.effect(
     const executor = yield* CommandExecutor.CommandExecutor;
     const namespaceLogin = loginFor("namespace");
     const nsc = makeNscClient(executor, namespaceLogin);
+    const namespaceApi = makeNamespaceApi({ login: namespaceLogin });
     const providers = new Map<string, Provider>([
       ["docker", makeDockerProvider({ client: makeDockerClient(executor) })],
       [
         "namespace",
         makeNamespaceProvider({
-          api: makeNamespaceApi({ login: namespaceLogin }),
+          api: namespaceApi,
           login: namespaceLogin,
           nsc,
-          openLink: makeOpenLink(nsc, executor),
+          openLink: makeOpenLink(namespaceApi, executor),
           dockerFor: (link) => makeDockerClient(executor, { ssh: link.ssh }),
           spawnDetached,
         }),

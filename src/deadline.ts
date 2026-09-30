@@ -5,8 +5,11 @@ import {
   type LoginExpiredError,
   type NotLoggedInError,
   type ProviderError,
+  type ProviderLimitError,
   type ProviderUnavailableError,
   type SandboxGoneError,
+  type TokenPermissionError,
+  type TokenRejectedError,
 } from "./errors.ts";
 import type { Os, Provider, SandboxInfo } from "./provider.ts";
 
@@ -105,7 +108,10 @@ export const deadlinePush = (
   | NotLoggedInError
   | SandboxGoneError
   | ProviderError
+  | ProviderLimitError
   | ProviderUnavailableError
+  | TokenRejectedError
+  | TokenPermissionError
 > =>
   Effect.flatMap(Clock.currentTimeMillis, (millis) =>
     provider.extend(
@@ -129,8 +135,11 @@ export const withDeadlinePush =
     | LoginExpiredError
     | NotLoggedInError
     | ProviderError
+    | ProviderLimitError
     | ProviderUnavailableError
-    | SandboxGoneError,
+    | SandboxGoneError
+    | TokenPermissionError
+    | TokenRejectedError,
     R
   > =>
     Effect.gen(function* () {

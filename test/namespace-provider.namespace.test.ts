@@ -104,8 +104,8 @@ describe("Namespace Provider", () => {
       ...extra,
     ]);
     const id = result.stdout.trim();
-    if (/^ns:[a-z0-9]+$/.test(id)) {
-      hosts.push(id.slice("ns:".length));
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
+      hosts.push(id.split(":").at(-1) ?? "");
     }
     return result;
   };

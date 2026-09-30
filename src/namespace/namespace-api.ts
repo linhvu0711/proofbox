@@ -47,6 +47,14 @@ export interface LabelEntry {
   readonly value: string;
 }
 
+// What GetSSHConfig hands back for one instance: the SSH gateway endpoint,
+// the username to dial it with, and a short-lived private key.
+export interface SshConfig {
+  readonly username: string;
+  readonly endpoint: string;
+  readonly privateKey: Uint8Array;
+}
+
 // What a create asks the Compute API for; proofbox shapes it.
 export interface CreateReq {
   readonly shape: {
@@ -83,6 +91,10 @@ export interface NamespaceApi {
     region: string,
     labels: ReadonlyArray<LabelEntry>,
   ) => Effect.Effect<ReadonlyArray<InstanceListed>, ApiError | ApiLoginError>;
+  readonly sshConfig: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<SshConfig, ApiError | ApiLoginError>;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,
@@ -324,5 +336,19 @@ export const makeNamespaceApi = (deps: {
       });
     });
 
-  return { create, wait, destroy, extend, list, checkToken };
+  const sshConfig = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      const cfg = yield* Effect.tryPromise({
+        try: () => client.compute.getSSHConfig({ instanceId }),
+        catch: fromConnect("GetSSHConfig", { region, instanceId }),
+      });
+      return {
+        username: cfg.username,
+        endpoint: cfg.endpoint,
+        privateKey: cfg.sshPrivateKey,
+      } satisfies SshConfig;
+    });
+
+  return { create, wait, destroy, extend, list, sshConfig, checkToken };
 };
