@@ -35,7 +35,7 @@ export const loginFor = (provider: string): ProviderLogin =>
       return yield* new NotLoggedInError({ provider });
     }
     const now = yield* Clock.currentTimeMillis;
-    if (saved.expiresAt.getTime() <= now) {
+    if (saved.expiresAt !== undefined && saved.expiresAt.getTime() <= now) {
       return yield* new LoginExpiredError({ provider });
     }
     return { token: saved.token, region: Option.fromNullable(saved.region) };

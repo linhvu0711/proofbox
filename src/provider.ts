@@ -53,8 +53,8 @@ export const LoginWay = Schema.Literal("browser", "token");
 export type LoginWay = typeof LoginWay.Type;
 
 export interface ProviderAccount {
-  readonly account: string;
-  readonly expiresAt: Date;
+  readonly account?: string;
+  readonly expiresAt?: Date;
 }
 
 export interface LoginWays {

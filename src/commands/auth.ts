@@ -88,8 +88,10 @@ export const loginToProvider = (options: {
       [provider.name]: {
         way: "token",
         token: Redacted.make(token),
-        account: account.account,
-        expiresAt: account.expiresAt,
+        ...(account.account !== undefined ? { account: account.account } : {}),
+        ...(account.expiresAt !== undefined
+          ? { expiresAt: account.expiresAt }
+          : {}),
         ...(Option.isSome(options.region)
           ? { region: options.region.value }
           : {}),
@@ -97,11 +99,15 @@ export const loginToProvider = (options: {
     }));
     const previous = before[provider.name];
     const output = yield* CliOutput;
-    yield* output.err(
+    const who =
+      account.account !== undefined
+        ? `as ${account.account}`
+        : `with token …${token.slice(-4)}`;
+    const replaced =
       previous === undefined
-        ? `Logged in to ${provider.name} as ${account.account}.\n`
-        : `Logged in to ${provider.name} as ${account.account} (replaced ${previous.account}).\n`,
-    );
+        ? ""
+        : ` (replaced ${previous.account ?? `token …${Redacted.value(previous.token).slice(-4)}`})`;
+    yield* output.err(`Logged in to ${provider.name} ${who}${replaced}.\n`);
   });
 
 export const showAuthStatus = Effect.gen(function* () {
@@ -126,9 +132,10 @@ export const showAuthStatus = Effect.gen(function* () {
       if (Option.isSome(env)) {
         const region = yield* envRegion(provider.name);
         line = yield* part.checkToken(env.value, region).pipe(
-          Effect.map(
-            (account) =>
-              `logged in as ${account.account}${regionOf(region)}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`,
+          Effect.map((account) =>
+            account.account !== undefined && account.expiresAt !== undefined
+              ? `logged in as ${account.account}${regionOf(region)}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`
+              : `logged in with token …${Redacted.value(env.value).slice(-4)}${regionOf(region)}, expiry not known, env token ${envTokenName(provider.name)}`,
           ),
           Effect.catchTag("TokenRejectedError", () =>
             Effect.succeed(
@@ -143,10 +150,18 @@ export const showAuthStatus = Effect.gen(function* () {
         ))[provider.name];
         if (saved === undefined) {
           line = "not logged in";
-        } else if (saved.expiresAt.getTime() <= now) {
+        } else if (
+          saved.expiresAt !== undefined &&
+          saved.expiresAt.getTime() <= now
+        ) {
           line = `expired ${formatTime(saved.expiresAt)}. Run: proofbox auth login ${provider.name}`;
-        } else {
+        } else if (
+          saved.account !== undefined &&
+          saved.expiresAt !== undefined
+        ) {
           line = `logged in as ${saved.account}${regionOf(Option.fromNullable(saved.region))}, expires ${formatTime(saved.expiresAt)}, saved login`;
+        } else {
+          line = `logged in with token …${Redacted.value(saved.token).slice(-4)}${regionOf(Option.fromNullable(saved.region))}, expiry not known, saved login`;
         }
       }
     }

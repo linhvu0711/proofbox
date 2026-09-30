@@ -273,19 +273,14 @@ export const makeNamespaceApi = (deps: {
       }
     });
 
-  // A token proofbox does not even recognize as a Namespace token is
-  // rejected without a call; else one listInstances checks it.
+  // A claims-bearing token gives its tenant and expiry; an opaque one
+  // (real revocable tokens are `nsrt_`) is still checked with the one
+  // ListInstances call, and account and expiry stay unknown.
   const checkToken = (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,
   ) =>
     Effect.gen(function* () {
-      const claims = extractClaims(Redacted.value(token));
-      const tenantId = claims?.tenant_id;
-      const exp = claims?.exp;
-      if (typeof tenantId !== "string" || typeof exp !== "number") {
-        return yield* new TokenRejectedError({ provider: "namespace" });
-      }
       const client = yield* clientFor(
         Option.getOrElse(region, () => DEFAULT_REGION),
         token,
@@ -304,10 +299,12 @@ export const makeNamespaceApi = (deps: {
             : unreachable(),
         ),
       );
-      return {
-        account: tenantId,
-        expiresAt: new Date(exp * 1000),
-      } satisfies ProviderAccount;
+      const claims = extractClaims(Redacted.value(token));
+      const tenantId = claims?.tenant_id;
+      const exp = claims?.exp;
+      return typeof tenantId === "string" && typeof exp === "number"
+        ? { account: tenantId, expiresAt: new Date(exp * 1000) }
+        : ({} satisfies ProviderAccount);
     });
 
   const create = (region: string, req: CreateReq) =>

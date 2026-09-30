@@ -40,3 +40,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 ## The SSH link
 
 12. Instances made through the Compute API run no sshd on port 22, so `nsc instance port-forward --target_port 22` cannot carry the link (verified live 2026-09-30: the forward answers with a reset, `nsc ssh` and `instance proxy -s ssh` fail the same way). Decided 2026-09-30: the link uses `ComputeService.GetSSHConfig` — an ephemeral key, the username, and the `ssh.<region>.namespace.so` gateway endpoint — with the returned host keys pinned in a per-Sandbox known_hosts file (`StrictHostKeyChecking=yes`). `nsc` stays only for the Live view (`port-forward` to 5900, where the Sandbox container publishes VNC) and Snapshot expiry (`registry update-image-expiration`). `GetSSHConfig`'s `sshHostKeys` field is ahead of the SDK's generated proto, so that one call goes over Connect JSON directly.
+
+## Tokens without claims
+
+13. Real revocable tokens are opaque (`nsrt_…`; `tokens_pb.ts` `CreateRevokableToken`), and no public IAM call introspects one with an instance-only grant — so rejecting tokens with no readable claims would refuse the tokens users actually mint. Decided 2026-09-30: a token with no readable claims is checked with the one `ListInstances` call and saved; account and expiry stay unknown, and the login and status lines say `token …<last4>` and `expiry not known`. A claims-bearing token (`nsct_` and friends) still shows its `tenant_id` and `exp`.

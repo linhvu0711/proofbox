@@ -298,17 +298,19 @@ describe("auth", () => {
     expect(existsSync(loginsFile(home))).toBe(false);
   });
 
-  it("auth login namespace with a token that is not a Namespace token asks nothing", async () => {
+  it("auth login namespace with an opaque token Namespace rejects saves nothing", async () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
-    const ns = await fakeNamespace(() => ({ json: {} }));
+    const ns = await fakeNamespace(() => ({
+      error: { code: "unauthenticated", message: "bad token" },
+    }));
     // When
     const result = await runCli(
       env,
       ["auth", "login", "namespace", "--token"],
       {
-        input: "not-a-token\n",
+        input: "nsrt_opaque0000a1b2\n",
         set: {
           HOME: home,
           PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
@@ -320,8 +322,75 @@ describe("auth", () => {
       "Namespace did not accept this token. It may be wrong, revoked, or expired.\n",
     );
     expect(result.exitCode).toBe(125);
-    expect(ns.calls).toEqual([]);
+    expect(ns.calls).toEqual([
+      {
+        region: "us",
+        method: "ListInstances",
+        body: { maxEntries: "1" },
+        authorization: "Bearer nsrt_opaque0000a1b2",
+      },
+    ]);
     expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("auth login namespace --token accepts an opaque token", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "login", "namespace", "--token"],
+      {
+        input: "nsrt_opaque0000a1b2\n",
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe("Logged in to namespace with token …a1b2.\n");
+    expect(result.exitCode).toBe(0);
+    expect(ns.calls).toEqual([
+      {
+        region: "us",
+        method: "ListInstances",
+        body: { maxEntries: "1" },
+        authorization: "Bearer nsrt_opaque0000a1b2",
+      },
+    ]);
+    expect(readSaved(home)).toEqual({
+      namespace: {
+        way: "token",
+        token: "nsrt_opaque0000a1b2",
+      },
+    });
+  });
+
+  it("auth status shows an opaque saved Namespace token", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"namespace":{"way":"token","token":"nsrt_opaque0000a1b2","region":"us"}}',
+    );
+    const ns = await fakeNamespace(() => {
+      throw new Error("no calls wanted");
+    });
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      "namespace  logged in with token …a1b2, region us, expiry not known, saved login\n",
+    );
+    expect(ns.calls).toEqual([]);
   });
 
   it("auth login namespace with a token that cannot list instances names the permission", async () => {
