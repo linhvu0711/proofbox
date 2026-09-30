@@ -9,7 +9,17 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
+import {
+  Chunk,
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Option,
+  Schedule,
+  Stream,
+} from "effect";
+import { parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -23,9 +33,10 @@ import {
 import {
   ProviderError,
   ProviderLimitError,
-  type ProviderUnavailableError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
+  UnknownRegionError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
@@ -49,7 +60,12 @@ import {
 } from "./mac-host.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
 import type { NscClient } from "./nsc-client.ts";
-import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
+import {
+  DEFAULT_REGION,
+  hostName,
+  KNOWN_REGIONS,
+  splitHostName,
+} from "./regions.ts";
 import {
   pullSnapshot,
   pushSnapshot,
@@ -108,7 +124,10 @@ export const makeNamespaceProvider = (deps: {
     id: () => `ns:${name}`,
   });
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
-  const containerOf = (name: string) => `proofbox-${name.slice(0, 6)}`;
+  // A `:` is not legal in a container name, so the container takes only
+  // the instance part of `<region>:<instanceId>`.
+  const containerOf = (name: string) =>
+    `proofbox-${splitHostName(name).instanceId.slice(0, 6)}`;
   // The host's OS, written at create; a host made before macOS existed has
   // no file and is Linux.
   const osOf = (name: string) =>
@@ -240,7 +259,7 @@ export const makeNamespaceProvider = (deps: {
       });
       const info = yield* sandboxInfoFromLabels(
         brandFor(name),
-        name.slice(0, 6),
+        splitHostName(name).instanceId.slice(0, 6),
         labels,
         seconds,
       );
@@ -296,26 +315,44 @@ export const makeNamespaceProvider = (deps: {
     });
 
   // Each OS is its own label, so a host is listed with the OS it runs.
+  // A region sees only its own hosts, so a list spans every known one.
+  const listHostsFor = (region: string) =>
+    Effect.gen(function* () {
+      const [linux, macos] = yield* Effect.all(
+        [
+          api.list(region, [{ name: "proofbox.os", value: "linux" }]),
+          api.list(region, [{ name: "proofbox.os", value: "macos" }]),
+        ],
+        { concurrency: 2 },
+      );
+      return [
+        ...linux.map((instance) => ({
+          os: "linux" as const,
+          region,
+          instance,
+        })),
+        ...macos.map((instance) => ({
+          os: "macos" as const,
+          region,
+          instance,
+        })),
+      ];
+    });
+
   const listHosts = Effect.gen(function* () {
-    const [linux, macos] = yield* Effect.all(
-      [
-        nsc.list({ "proofbox.os": "linux" }),
-        nsc.list({ "proofbox.os": "macos" }),
-      ],
-      { concurrency: 2 },
-    );
-    return [
-      ...linux.map((instance) => ({ os: "linux" as const, instance })),
-      ...macos.map((instance) => ({ os: "macos" as const, instance })),
-    ];
+    const byRegion = yield* Effect.forEach(KNOWN_REGIONS, listHostsFor, {
+      concurrency: 2,
+    });
+    return byRegion.flat();
   });
 
   const list = Effect.gen(function* () {
     const hosts = yield* listHosts;
-    const instances = hosts.map((host) => host.instance);
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
-    const alive = new Set(instances.map((instance) => instance.clusterId));
+    const alive = new Set(
+      hosts.map((host) => hostName(host.region, host.instance.id)),
+    );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
       const entries = await readdir(dir).catch(() => [] as string[]);
@@ -349,29 +386,31 @@ export const makeNamespaceProvider = (deps: {
     });
     const infos = yield* Effect.forEach(
       hosts,
-      ({ os, instance }) =>
-        getAs(os, instance.clusterId).pipe(
+      ({ os, region, instance }) =>
+        getAs(os, hostName(region, instance.id)).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
         ),
       { discard: false },
     );
     return infos.filter((info) => info !== undefined);
   }).pipe(
-    // A Provider that cannot list (nsc missing, not logged in) reports
+    // A Provider that cannot list (Namespace down, not logged in) reports
     // none rather than breaking `list` for every other Provider.
     Effect.catchTag("ProviderUnavailableError", () => Effect.succeed([])),
     Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
+    Effect.catchTag("NotLoggedInError", () => Effect.succeed([])),
   );
 
   const del = (name: string) =>
     Effect.gen(function* () {
-      const hosts = yield* listHosts.pipe(
+      const { region, instanceId } = splitHostName(name);
+      const hosts = yield* listHostsFor(region).pipe(
         Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
       );
-      const present = hosts.some((host) => host.instance.clusterId === name);
+      const present = hosts.some((host) => host.instance.id === instanceId);
       if (present) {
-        yield* nsc
-          .destroy(name)
+        yield* api
+          .destroy(region, instanceId)
           .pipe(Effect.catchTag("SandboxGoneError", () => Effect.void));
       }
       // Hosts that expire on their own never reach destroy, so the local
@@ -389,6 +428,12 @@ export const makeNamespaceProvider = (deps: {
       return present ? ("deleted" as const) : ("gone" as const);
     });
 
+  // create+wait can hang; bound the wait, then sweep whatever it
+  // half-made.
+  const createTimeout = Config.string("PROOFBOX_NS_CREATE_TIMEOUT").pipe(
+    Config.withDefault("60s"),
+  );
+
   const create = (req: {
     readonly os: Parameters<Provider["create"]>[0]["os"];
     readonly idle: Duration.Duration;
@@ -398,16 +443,19 @@ export const makeNamespaceProvider = (deps: {
     readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
-      yield* nsc.checkLogin.pipe(
-        Effect.catchTag("SandboxGoneError", (error) =>
-          Effect.fail(fail(error.message)),
-        ),
-      );
+      const login = yield* deps.login;
+      const region = Option.getOrElse(login.region, () => DEFAULT_REGION);
+      if (!KNOWN_REGIONS.includes(region)) {
+        return yield* new UnknownRegionError({
+          provider: "namespace",
+          region,
+          known: KNOWN_REGIONS,
+        });
+      }
       const macos = req.os === "macos";
       const size = req.size ?? (macos ? DEFAULT_MACOS_SIZE : DEFAULT_SIZE);
       const staged = yield* paths(`new-${process.pid}`);
       const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
-      const cidfile = join(staged.dir, `ns-new-${process.pid}.cid`);
       // Whatever part of the make is left — key files, the host — leaves
       // nothing behind on a failed create.
       const createToken = makeSandboxName();
@@ -417,7 +465,6 @@ export const makeNamespaceProvider = (deps: {
           Promise.all([
             rm(keyBase, { force: true }).catch(() => {}),
             rm(`${keyBase}.pub`, { force: true }).catch(() => {}),
-            rm(cidfile, { force: true }).catch(() => {}),
           ]).then(() => {}),
         );
         if (hostId !== undefined) {
@@ -430,7 +477,10 @@ export const makeNamespaceProvider = (deps: {
               rm(hostPaths.os, { force: true }).catch(() => {}),
             ]).then(() => {}),
           );
-          yield* nsc.destroy(hostId).pipe(Effect.orElseSucceed(() => {}));
+          const host = splitHostName(hostId);
+          yield* api
+            .destroy(host.region, host.instanceId)
+            .pipe(Effect.orElseSucceed(() => {}));
         }
       });
       return yield* Effect.gen(function* () {
@@ -461,44 +511,82 @@ export const makeNamespaceProvider = (deps: {
         const maxLifeSeconds = Math.floor(
           (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
         );
-        const id = yield* nsc
-          .create({
-            machineType: macos
-              ? `macos/arm64:${formatSize(size)}`
-              : `linux/amd64:${formatSize(size)}`,
-            durationSeconds,
-            sshKeyFile: `${keyBase}.pub`,
-            selectors: macos ? MACOS_SELECTORS : undefined,
-            labels: {
-              "proofbox.os": req.os,
-              "proofbox.size": formatSize(size),
-              "proofbox.create-token": createToken,
-            },
-            cidfile,
-          })
-          .pipe(
-            // A failed create can leave a half-made host (a timed-out nsc
-            // may have registered it). A limit makes nothing, so skip the
-            // sweep there.
-            Effect.tapError((error) =>
-              error instanceof ProviderLimitError
-                ? Effect.void
-                : Effect.gen(function* () {
-                    const left = yield* nsc
-                      .list({ "proofbox.create-token": createToken })
-                      .pipe(Effect.orElseSucceed(() => []));
-                    yield* Effect.forEach(
-                      left,
-                      (instance) =>
-                        nsc
-                          .destroy(instance.clusterId)
-                          .pipe(Effect.orElseSucceed(() => undefined)),
-                      { discard: true },
-                    );
+        const sshKey = (yield* Effect.tryPromise({
+          try: () => readFile(`${keyBase}.pub`, "utf8"),
+          catch: (cause) =>
+            fail(`could not read the host key: ${describe(cause)}`),
+        })).trim();
+        const spanText = yield* createTimeout.pipe(
+          Effect.mapError((error) => fail(error.message)),
+        );
+        const span = yield* parseSpan(
+          "PROOFBOX_NS_CREATE_TIMEOUT",
+          spanText,
+        ).pipe(Effect.mapError((error) => fail(error.message)));
+        const instanceId = yield* Effect.timeoutOption(
+          Effect.gen(function* () {
+            const nowMillis = yield* Clock.currentTimeMillis;
+            const made = yield* api.create(region, {
+              shape: {
+                os: req.os,
+                machineArch: macos ? "arm64" : "amd64",
+                virtualCpu: size.cpu,
+                memoryMegabytes: size.ramGb * 1024,
+                selectors: macos
+                  ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
+                      name,
+                      value,
+                    }))
+                  : [],
+              },
+              labels: [
+                { name: "proofbox.os", value: req.os },
+                { name: "proofbox.size", value: formatSize(size) },
+                { name: "proofbox.create-token", value: createToken },
+              ],
+              deadline: new Date(nowMillis + durationSeconds * 1000),
+              authorizedSshKeys: [sshKey],
+            });
+            yield* api.wait(region, made);
+            return made;
+          }),
+          span,
+        ).pipe(
+          Effect.flatMap((made) =>
+            Option.isNone(made)
+              ? Effect.fail(
+                  new ProviderUnavailableError({
+                    provider: "namespace",
+                    reason: `Namespace did not make the host in ${spanText.replace(/(\d)([a-z])/g, "$1 $2")}; deleted any half-made host. Try again`,
                   }),
-            ),
-          );
-        hostId = id;
+                )
+              : Effect.succeed(made.value),
+          ),
+          // A failed create can leave a half-made host (a timed-out call
+          // may have registered it). A limit makes nothing, so skip the
+          // sweep there.
+          Effect.tapError((error) =>
+            error instanceof ProviderLimitError
+              ? Effect.void
+              : Effect.gen(function* () {
+                  const left = yield* api
+                    .list(region, [
+                      { name: "proofbox.create-token", value: createToken },
+                    ])
+                    .pipe(Effect.orElseSucceed(() => []));
+                  yield* Effect.forEach(
+                    left,
+                    (instance) =>
+                      api
+                        .destroy(region, instance.id)
+                        .pipe(Effect.orElseSucceed(() => undefined)),
+                    { discard: true },
+                  );
+                }),
+          ),
+        );
+        hostId = hostName(region, instanceId);
+        const id = hostId;
         if (maxLifeSeconds <= Math.floor(Date.now() / 1000)) {
           return yield* fail(
             "making the host took the whole Max life; try a larger --max-life",
@@ -532,8 +620,8 @@ export const makeNamespaceProvider = (deps: {
             Effect.gen(function* () {
               const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
               if (left > 0) {
-                yield* nsc
-                  .extend(id, Math.min(durationSeconds, left))
+                yield* api
+                  .extend(region, instanceId, Math.min(durationSeconds, left))
                   .pipe(Effect.ignore);
               }
             }),
@@ -579,7 +667,7 @@ export const makeNamespaceProvider = (deps: {
         const info = yield* inner.create({
           ...req,
           size,
-          name: id.slice(0, 6),
+          name: splitHostName(id).instanceId.slice(0, 6),
           maxLifeAt: new Date(maxLifeSeconds * 1000),
         });
         // The Base image must hide the host's workload token from user code:

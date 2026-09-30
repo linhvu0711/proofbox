@@ -1,3 +1,4 @@
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
 import {
   type ComputeClient,
@@ -46,7 +47,38 @@ export interface LabelEntry {
   readonly value: string;
 }
 
+// What a create asks the Compute API for; proofbox shapes it.
+export interface CreateReq {
+  readonly shape: {
+    readonly os: string;
+    readonly machineArch: string;
+    readonly virtualCpu: number;
+    readonly memoryMegabytes: number;
+    readonly selectors: ReadonlyArray<LabelEntry>;
+  };
+  readonly labels: ReadonlyArray<LabelEntry>;
+  readonly deadline: Date;
+  readonly authorizedSshKeys: ReadonlyArray<string>;
+}
+
 export interface NamespaceApi {
+  readonly create: (
+    region: string,
+    req: CreateReq,
+  ) => Effect.Effect<string, ApiError | ApiLoginError>;
+  readonly wait: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
+  readonly destroy: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
+  readonly extend: (
+    region: string,
+    instanceId: string,
+    seconds: number,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
   readonly list: (
     region: string,
     labels: ReadonlyArray<LabelEntry>,
@@ -223,5 +255,74 @@ export const makeNamespaceApi = (deps: {
       } satisfies ProviderAccount;
     });
 
-  return { list, checkToken };
+  const create = (region: string, req: CreateReq) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      const made = yield* Effect.tryPromise({
+        try: () =>
+          client.compute.createInstance({
+            shape: {
+              os: req.shape.os,
+              machineArch: req.shape.machineArch,
+              virtualCpu: req.shape.virtualCpu,
+              memoryMegabytes: req.shape.memoryMegabytes,
+              selectors: req.shape.selectors.map((label) => ({
+                name: label.name,
+                value: label.value,
+              })),
+            },
+            labels: req.labels.map((label) => ({
+              name: label.name,
+              value: label.value,
+            })),
+            deadline: timestampFromDate(req.deadline),
+            experimental: {
+              authorizedSshKeys: [...req.authorizedSshKeys],
+            },
+            documentedPurpose: "proofbox Sandbox",
+          }),
+        catch: fromConnect("CreateInstance"),
+      });
+      const instanceId = made.metadata?.instanceId;
+      if (instanceId === undefined || instanceId === "") {
+        return yield* new ProviderError({
+          provider: "namespace",
+          reason: "ComputeService.CreateInstance made no instance id",
+        });
+      }
+      return instanceId;
+    });
+
+  const wait = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () => client.compute.waitInstanceSync({ instanceId }),
+        catch: fromConnect("WaitInstanceSync", { region, instanceId }),
+      });
+    });
+
+  const destroy = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () => client.compute.destroyInstance({ instanceId }),
+        catch: fromConnect("DestroyInstance", { region, instanceId }),
+      });
+    });
+
+  const extend = (region: string, instanceId: string, seconds: number) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () =>
+          client.compute.extendInstance({
+            instanceId,
+            ensureMinimum: { seconds: BigInt(seconds), nanos: 0 },
+          }),
+        catch: fromConnect("ExtendInstance", { region, instanceId }),
+      });
+    });
+
+  return { create, wait, destroy, extend, list, checkToken };
 };

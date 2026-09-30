@@ -42,7 +42,9 @@ describe("fake Provider", () => {
         .pipe(Effect.provideService(Progress, noProgress), Effect.flip);
       // Then: a ProviderError, and no Sandbox folder was made
       expect(error._tag).toBe("ProviderError");
-      expect(error.reason).toContain("whole number of seconds");
+      if (error._tag === "ProviderError") {
+        expect(error.reason).toContain("whole number of seconds");
+      }
       expect(existsSync(root) ? readdirSync(root) : []).toEqual([]);
     }),
   );

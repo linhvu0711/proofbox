@@ -23,6 +23,7 @@ import {
   type TokenPermissionError,
   type TokenRejectedError,
   type ToolBundleHashError,
+  type UnknownRegionError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
 import { Size } from "./size.ts";
@@ -147,7 +148,9 @@ export interface Provider {
     | NotLoggedInError
     | LoginExpiredError
     | BadLoginsFileError
-    | TokenRejectedError,
+    | TokenRejectedError
+    | TokenPermissionError
+    | UnknownRegionError,
     Progress
   >;
   readonly extend: (
@@ -190,12 +193,30 @@ export interface Provider {
     SandboxInfo,
     SandboxGoneError | ProviderError | ProviderUnavailableError
   >;
-  readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
+  readonly list: Effect.Effect<
+    ReadonlyArray<SandboxInfo>,
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
+    | NotLoggedInError
+    | LoginExpiredError
+    | BadLoginsFileError
+  >;
   readonly delete: (
     name: string,
   ) => Effect.Effect<
     "deleted" | "gone",
-    ProviderError | ProviderUnavailableError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | TokenRejectedError
+    | TokenPermissionError
+    | NotLoggedInError
+    | LoginExpiredError
+    | BadLoginsFileError
   >;
   readonly stateDir: (name: string) => string;
   readonly secretsDir: (name: string, os: Os) => string;

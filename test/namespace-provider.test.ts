@@ -8,6 +8,7 @@ import {
   Effect,
   Layer,
   Option,
+  Redacted,
   Ref,
   Stream,
   TestClock,
@@ -15,30 +16,51 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
-import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
+import type {
+  InstanceListed,
+  NamespaceApi,
+} from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 
-// Stand-in Compute API until the API fakes land in the next slices.
-const fakeApi: NamespaceApi = {
-  list: () => Effect.succeed([]),
-  checkToken: () => Effect.die("unused"),
+// The Compute API, faked: each call lands in `calls` as
+// `<method> <region> <instanceId?>`; `create` answers the id below.
+const fakeApi = (
+  calls: Ref.Ref<ReadonlyArray<string>>,
+  instances: ReadonlyArray<InstanceListed> = [],
+): NamespaceApi => {
+  const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
+  return {
+    create: (region) =>
+      note(`create ${region}`).pipe(Effect.as("abc123def4567")),
+    wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
+    destroy: (region, instanceId) => note(`destroy ${region} ${instanceId}`),
+    extend: (region, instanceId) => note(`extend ${region} ${instanceId}`),
+    list: (region, labels) =>
+      note(`list ${region}`).pipe(
+        Effect.as(
+          instances.filter((instance) =>
+            labels.every(
+              (label) => instance.labels[label.name] === label.value,
+            ),
+          ),
+        ),
+      ),
+    checkToken: () => Effect.die("unused"),
+  };
 };
 
 const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
-  checkLogin: Ref.update(calls, (all) => [...all, "checkLogin"]),
-  create: () =>
-    Ref.update(calls, (all) => [...all, "create"]).pipe(
-      Effect.as("abc123def4567"),
-    ),
-  destroy: (id) => Ref.update(calls, (all) => [...all, `destroy ${id}`]),
+  checkLogin: Effect.die("unused"),
+  create: () => Effect.die("unused"),
+  destroy: () => Effect.die("unused"),
   extend: () => Effect.die("unused"),
   ensureImageExpiry: (image, hours) =>
     Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
-  list: () => Effect.succeed([]),
+  list: () => Effect.die("unused"),
   portForward: () => Effect.die("unused"),
 });
 
@@ -176,10 +198,17 @@ const makeProvider = (
   calls: Ref.Ref<ReadonlyArray<string>>,
   docker: DockerClient,
   run: Link["run"] = tenantRun,
+  options?: {
+    readonly instances?: ReadonlyArray<InstanceListed>;
+    readonly region?: string;
+  },
 ) =>
   makeNamespaceProvider({
-    api: fakeApi,
-    login: Effect.die("unused"),
+    api: fakeApi(calls, options?.instances ?? []),
+    login: Effect.succeed({
+      token: Redacted.make("token"),
+      region: Option.fromNullable(options?.region),
+    }),
     nsc: fakeNsc(calls),
     openLink: () =>
       Effect.succeed<Link>({
@@ -210,7 +239,7 @@ describe("Namespace Provider", () => {
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
         const provider = makeNamespaceProvider({
-          api: fakeApi,
+          api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
           login: Effect.die("unused"),
           nsc: fakeNsc(yield* Ref.make<ReadonlyArray<string>>([])),
           openLink: () => Effect.succeed(link),
@@ -226,7 +255,7 @@ describe("Namespace Provider", () => {
         yield* TestClock.setTime(new Date("1970-01-01T00:10:00Z").getTime());
         // When
         yield* provider.extend(
-          "abc123def4567",
+          "us:abc123def4567",
           new Date("1970-01-01T00:25:00Z"),
         );
         // Then
@@ -235,8 +264,8 @@ describe("Namespace Provider", () => {
         expect(seen[0]).toContain("docker exec -u root proofbox-abc123");
         expect(seen[0]).toContain("900");
         expect(yield* Ref.get(spawned)).toEqual([
-          ["namespace", "namespace/extend-main", ["abc123def4567", "900"]],
-          ["namespace", "namespace/extend-main", ["abc123def4567", "120"]],
+          ["namespace", "namespace/extend-main", ["us:abc123def4567", "900"]],
+          ["namespace", "namespace/extend-main", ["us:abc123def4567", "120"]],
         ]);
       }),
   );
@@ -258,9 +287,9 @@ describe("Namespace Provider", () => {
         );
         // Then
         expect(error.message).toBe(
-          "Sandbox ns:abc123def4567 can reach the Namespace workload token (the token file); deleted the host and refused the Sandbox",
+          "Sandbox ns:us:abc123def4567 can reach the Namespace workload token (the token file); deleted the host and refused the Sandbox",
         );
-        expect(yield* Ref.get(calls)).toContain("destroy abc123def4567");
+        expect(yield* Ref.get(calls)).toContain("destroy us abc123def4567");
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(
@@ -296,9 +325,9 @@ describe("Namespace Provider", () => {
         );
         // Then
         expect(error.message).toBe(
-          "Sandbox ns:abc123def4567 can reach the Namespace workload token (the token service); deleted the host and refused the Sandbox",
+          "Sandbox ns:us:abc123def4567 can reach the Namespace workload token (the token service); deleted the host and refused the Sandbox",
         );
-        expect(yield* Ref.get(calls)).toContain("destroy abc123def4567");
+        expect(yield* Ref.get(calls)).toContain("destroy us abc123def4567");
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(
@@ -488,5 +517,71 @@ describe("Namespace Provider", () => {
         expiry: [],
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("create in the login's region returns a region id", () =>
+    Effect.gen(function* () {
+      // Given: a login whose token carries no region
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}));
+      // When
+      const info = yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then
+      expect(info.name).toBe("us:abc123def4567");
+      expect((yield* Ref.get(calls)).slice(0, 2)).toEqual([
+        "create us",
+        "wait us abc123def4567",
+      ]);
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("create goes to the region of an eu login", () =>
+    Effect.gen(function* () {
+      // Given: a login in eu
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+        region: "eu",
+      });
+      // When
+      const info = yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then
+      expect(info.name).toBe("eu:abc123def4567");
+      expect((yield* Ref.get(calls)).slice(0, 2)).toEqual([
+        "create eu",
+        "wait eu abc123def4567",
+      ]);
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "delete of a us Sandbox goes to us after the login moved to eu",
+    () =>
+      Effect.gen(function* () {
+        // Given: a us Sandbox in eu's login
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          region: "eu",
+          instances: [
+            { id: "abc123def4567", labels: { "proofbox.os": "linux" } },
+          ],
+        });
+        // When
+        const outcome = yield* provider.delete("us:abc123def4567");
+        // Then: us was asked, never eu
+        expect(outcome).toBe("deleted");
+        expect(yield* Ref.get(calls)).toEqual([
+          "list us",
+          "list us",
+          "destroy us abc123def4567",
+        ]);
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 });

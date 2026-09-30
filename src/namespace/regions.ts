@@ -10,5 +10,7 @@ export const hostName = (region: string, instanceId: string) =>
 
 export const splitHostName = (name: string) => {
   const at = name.indexOf(":");
-  return { region: name.slice(0, at), instanceId: name.slice(at + 1) };
+  return at === -1
+    ? { region: "", instanceId: name }
+    : { region: name.slice(0, at), instanceId: name.slice(at + 1) };
 };
