@@ -12,6 +12,7 @@ export interface CliEnv {
   readonly env: {
     readonly PROOFBOX_FAKE_ROOT: string;
     readonly PROOFBOX_RUNTIME_DIR: string;
+    readonly PROOFBOX_FAKE_TOKEN: string;
     readonly DOCKER_HOST?: string;
     readonly PROOFBOX_NSC?: string;
   };
@@ -38,6 +39,9 @@ export const makeEnv = (
     env: {
       PROOFBOX_FAKE_ROOT: root,
       PROOFBOX_RUNTIME_DIR: runtime,
+      // The fake Provider needs a login; plain tests log in with the
+      // env token unless they unset it.
+      PROOFBOX_FAKE_TOKEN: "t0k",
       // Plain tests must not touch the host Docker daemon.
       ...(options.docker === true
         ? {}
@@ -105,6 +109,7 @@ export const runCli = (
   options: {
     readonly set?: Readonly<Record<string, string>>;
     readonly unset?: ReadonlyArray<string>;
+    readonly input?: string;
   } = {},
 ): Promise<CliResult> =>
   new Promise((resolve) => {
@@ -116,7 +121,7 @@ export const runCli = (
     for (const key of options.unset ?? []) {
       delete childEnv[key];
     }
-    execFile(
+    const child = execFile(
       process.execPath,
       // `--` ends Node's own flag scan; without it Node treats a
       // `--env-file` meant for the CLI as its own (nodejs/node#54232).
@@ -138,4 +143,7 @@ export const runCli = (
         });
       },
     );
+    if (options.input !== undefined) {
+      child.stdin?.end(options.input);
+    }
   });

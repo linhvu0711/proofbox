@@ -1,8 +1,7 @@
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
+import { formatTime } from "../format-time.ts";
 import { Providers } from "../provider.ts";
-
-const formatTime = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 
 export const listSandboxes = (options: { readonly json: boolean }) =>
   Effect.gen(function* () {
