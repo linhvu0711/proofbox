@@ -213,7 +213,9 @@ export const makeOpenLink = (
                 new ProviderError({ provider: "namespace", reason }),
               exit: (code) =>
                 code === 255
-                  ? Effect.fail(linkLost(ref, "the ssh link dropped mid-command"))
+                  ? Effect.fail(
+                      linkLost(ref, "the ssh link dropped mid-command"),
+                    )
                   : Effect.succeed(code),
             },
           );
