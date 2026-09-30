@@ -11,10 +11,19 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import { Clock, Duration, Effect, Redacted, Schema, Stream } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  type Option,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenRejectedError,
 } from "../errors.ts";
@@ -66,6 +75,10 @@ export const makeFakeProvider = (options: {
         readonly fail?: "push" | "pull" | undefined;
       }
     | undefined;
+  // A pretend region that never answers, named in `list`'s unreached.
+  readonly unreached?: string | undefined;
+  // When set, `list` itself fails unreachable — the reason it gives.
+  readonly listDown?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -73,8 +86,12 @@ export const makeFakeProvider = (options: {
   const gone = (name: string) => new SandboxGoneError({ id: `fake:${name}` });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
-  // A fixed offline table stands in for a Provider's token check.
-  const checkToken = (token: Redacted.Redacted<string>) =>
+  // A fixed offline table stands in for a Provider's token check. The
+  // fake has no regions; the region argument goes unused.
+  const checkToken = (
+    token: Redacted.Redacted<string>,
+    _region: Option.Option<string>,
+  ) =>
     Effect.gen(function* () {
       const known: Record<string, ProviderAccount> = {
         t0k: {
@@ -273,11 +290,11 @@ export const makeFakeProvider = (options: {
     readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
-      const token = yield* options.login ?? Effect.void;
+      const login = yield* options.login ?? Effect.void;
       // The fake stands in for a real Provider, which rejects a bad
       // token at its API — a rejected login makes no Sandbox.
-      if (Redacted.isRedacted(token)) {
-        yield* checkToken(token);
+      if (login !== undefined) {
+        yield* checkToken(login.token, login.region);
       }
       return yield* Effect.flatMap(Progress, (progress) =>
         progress.step("creating fake Sandbox", createWork(req)),
@@ -287,6 +304,12 @@ export const makeFakeProvider = (options: {
   const get = (name: string) => readFileInfo(name);
 
   const list = Effect.gen(function* () {
+    if (options.listDown !== undefined) {
+      return yield* new ProviderUnavailableError({
+        provider: "fake",
+        reason: options.listDown,
+      });
+    }
     const entries = yield* Effect.tryPromise({
       try: () =>
         readdir(root, { withFileTypes: true }).catch((cause) =>
@@ -299,7 +322,7 @@ export const makeFakeProvider = (options: {
     const names = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-    return yield* Effect.forEach(
+    const infos = yield* Effect.forEach(
       names,
       (name) =>
         readFileInfo(name).pipe(
@@ -307,6 +330,16 @@ export const makeFakeProvider = (options: {
         ),
       { discard: false },
     ).pipe(Effect.map((infos) => infos.filter((info) => info !== undefined)));
+    const unreached =
+      options.unreached === undefined
+        ? []
+        : [
+            {
+              where: `fake region ${options.unreached}`,
+              reason: `fake region ${options.unreached} did not answer`,
+            },
+          ];
+    return { infos, unreached };
   });
 
   const del = (name: string) =>

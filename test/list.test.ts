@@ -60,6 +60,39 @@ describe("list", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("list names a region it could not reach and still lists the rest", async () => {
+    // Given: a Sandbox plus a fake region that does not answer
+    const env = makeEnv();
+    writeFakeSandbox(env.root, "qqqqqq");
+    // When
+    const result = await runCli(env, ["list"], {
+      set: { PROOFBOX_FAKE_UNREACHED: "eu" },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Could not list Sandboxes in fake region eu: fake region eu did not answer\n",
+    );
+    expect(result.stdout).toBe(
+      "fake:qqqqqq  linux  deadline 2999-01-01T00:15:00Z  max life 2999-01-01T03:00:00Z\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("list names a Provider it could not reach at all and still exits 0", async () => {
+    // Given: the fake Provider's list itself does not answer
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["list"], {
+      set: { PROOFBOX_FAKE_LIST_DOWN: "fake did not answer" },
+    });
+    // Then: the Provider is named like an unreached region, exit 0
+    expect(result.stderr).toBe(
+      "Could not list Sandboxes in fake: fake did not answer\nNo live Sandboxes\n",
+    );
+    expect(result.stdout).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+
   it("list with no Sandbox says so on stderr", async () => {
     // Given
     const env = makeEnv();

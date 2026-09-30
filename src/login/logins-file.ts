@@ -15,8 +15,9 @@ import { withFileLock } from "../file-lock.ts";
 export const SavedLogin = Schema.Struct({
   way: Schema.Literal("token"),
   token: Schema.Redacted(Schema.String),
-  account: Schema.String,
-  expiresAt: Schema.Date,
+  account: Schema.optional(Schema.String),
+  expiresAt: Schema.optional(Schema.Date),
+  region: Schema.optional(Schema.String),
 });
 export type SavedLogin = typeof SavedLogin.Type;
 

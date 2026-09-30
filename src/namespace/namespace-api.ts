@@ -1,0 +1,466 @@
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
+import { Code, ConnectError } from "@connectrpc/connect";
+import {
+  type ComputeClient,
+  createComputeClient,
+  createRegionTransport,
+} from "@namespacelabs/sdk/api";
+import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
+import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
+import { Config, Effect, Option, Redacted, Schema } from "effect";
+import {
+  type BadLoginsFileError,
+  type LoginExpiredError,
+  type NotLoggedInError,
+  ProviderError,
+  ProviderLimitError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+  TokenPermissionError,
+  TokenRejectedError,
+} from "../errors.ts";
+import type { ProviderAccount, ProviderLogin } from "../provider.ts";
+import { DEFAULT_REGION, hostName } from "./regions.ts";
+
+export type ApiLoginError =
+  | NotLoggedInError
+  | LoginExpiredError
+  | BadLoginsFileError;
+
+export type ApiError =
+  | ProviderError
+  | ProviderLimitError
+  | ProviderUnavailableError
+  | SandboxGoneError
+  | TokenRejectedError
+  | TokenPermissionError;
+
+// One Namespace instance as `list` reports it: its id, its labels as a
+// name → value record, and the continent it runs on — every endpoint's
+// list is global, so the continent, not the queried region, names where
+// the instance lives.
+export interface InstanceListed {
+  readonly id: string;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly region?: string | undefined;
+}
+
+export interface LabelEntry {
+  readonly name: string;
+  readonly value: string;
+}
+
+// What GetSSHConfig hands back for one instance: the SSH gateway endpoint,
+// the username to dial it with, a short-lived private key, and the
+// gateway's host keys in OpenSSH format ("<type> <base64 key>").
+export interface SshConfig {
+  readonly username: string;
+  readonly endpoint: string;
+  readonly privateKey: Uint8Array;
+  readonly hostKeys: ReadonlyArray<string>;
+}
+
+// GetSSHConfig's Connect-JSON answer: strings and a non-empty host-key
+// list (each entry base64 as it arrives).
+const SshConfigBody = Schema.Struct({
+  username: Schema.String,
+  endpoint: Schema.String,
+  sshPrivateKey: Schema.String,
+  sshHostKeys: Schema.NonEmptyArray(Schema.String),
+});
+
+// A Connect error body; both fields may be absent on a bare HTTP error.
+const ConnectErrorBody = Schema.Struct({
+  code: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+});
+
+// What a create asks the Compute API for; proofbox shapes it.
+export interface CreateReq {
+  readonly shape: {
+    readonly os: string;
+    readonly machineArch: string;
+    readonly virtualCpu: number;
+    readonly memoryMegabytes: number;
+    readonly selectors: ReadonlyArray<LabelEntry>;
+  };
+  readonly labels: ReadonlyArray<LabelEntry>;
+  readonly deadline: Date;
+  readonly authorizedSshKeys: ReadonlyArray<string>;
+}
+
+export interface NamespaceApi {
+  readonly create: (
+    region: string,
+    req: CreateReq,
+  ) => Effect.Effect<string, ApiError | ApiLoginError>;
+  readonly wait: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
+  readonly destroy: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
+  readonly extend: (
+    region: string,
+    instanceId: string,
+    seconds: number,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
+  readonly list: (
+    region: string,
+    labels: ReadonlyArray<LabelEntry>,
+  ) => Effect.Effect<ReadonlyArray<InstanceListed>, ApiError | ApiLoginError>;
+  readonly sshConfig: (
+    region: string,
+    instanceId: string,
+  ) => Effect.Effect<SshConfig, ApiError | ApiLoginError>;
+  readonly checkToken: (
+    token: Redacted.Redacted<string>,
+    region: Option.Option<string>,
+  ) => Effect.Effect<
+    ProviderAccount,
+    TokenRejectedError | TokenPermissionError | ProviderUnavailableError
+  >;
+}
+
+const UNREACHABLE =
+  "Could not reach Namespace. Check your network and try again.";
+
+export const unreachable = () =>
+  new ProviderUnavailableError({
+    provider: "namespace",
+    reason: UNREACHABLE,
+  });
+
+// A refused create names the capacity it wanted; pull the clause that
+// ends at the first `)` so the size is included.
+const capacityClause = /ran out of capacity:[^)]*\)/;
+
+// Maps a failed Compute call to the proofbox error: `call` is the service
+// method name (`CreateInstance`), `host` the instance a `not_found` is
+// about.
+export const fromConnect =
+  (
+    call: string,
+    host?: { readonly region: string; readonly instanceId: string },
+  ) =>
+  (cause: unknown): ApiError => {
+    if (!(cause instanceof ConnectError)) {
+      return unreachable();
+    }
+    if (cause.code === Code.Unauthenticated) {
+      return new TokenRejectedError({ provider: "namespace" });
+    }
+    if (cause.code === Code.PermissionDenied) {
+      return new TokenPermissionError({
+        provider: "namespace",
+        call: `ComputeService.${call}`,
+      });
+    }
+    if (cause.code === Code.ResourceExhausted) {
+      const found = capacityClause.exec(cause.rawMessage);
+      return new ProviderLimitError({
+        provider: "namespace",
+        limit: found === null ? cause.rawMessage : found[0],
+      });
+    }
+    if (cause.code === Code.NotFound && host !== undefined) {
+      return new SandboxGoneError({
+        id: `ns:${hostName(host.region, host.instanceId)}`,
+      });
+    }
+    if (
+      cause.code === Code.Unavailable ||
+      cause.code === Code.DeadlineExceeded
+    ) {
+      return unreachable();
+    }
+    return new ProviderError({
+      provider: "namespace",
+      reason: `ComputeService.${call} failed: ${cause.rawMessage}`,
+    });
+  };
+
+// The same mapping as fromConnect for a call made over raw Connect JSON:
+// `status` the HTTP code, `body` the decoded JSON (an error body holds
+// Connect's `code` and `message` strings).
+export const httpError = (
+  call: string,
+  status: number,
+  body:
+    | {
+        readonly code?: string | undefined;
+        readonly message?: string | undefined;
+      }
+    | undefined,
+  host?: { readonly region: string; readonly instanceId: string },
+): ApiError => {
+  const code = body?.code;
+  const message = body?.message ?? `HTTP ${status}`;
+  if (code === "unauthenticated") {
+    return new TokenRejectedError({ provider: "namespace" });
+  }
+  if (code === "permission_denied") {
+    return new TokenPermissionError({
+      provider: "namespace",
+      call: `ComputeService.${call}`,
+    });
+  }
+  if (code === "resource_exhausted") {
+    const found = capacityClause.exec(message);
+    return new ProviderLimitError({
+      provider: "namespace",
+      limit: found === null ? message : found[0],
+    });
+  }
+  if (code === "not_found" && host !== undefined) {
+    return new SandboxGoneError({
+      id: `ns:${hostName(host.region, host.instanceId)}`,
+    });
+  }
+  if (code === "unavailable" || code === "deadline_exceeded" || status >= 500) {
+    return unreachable();
+  }
+  return new ProviderError({
+    provider: "namespace",
+    reason: `ComputeService.${call} failed: ${message}`,
+  });
+};
+
+// The Compute API base URL for a region; `{region}` in
+// PROOFBOX_NAMESPACE_COMPUTE_URL is replaced by the region.
+const computeUrlTemplate = Config.string("PROOFBOX_NAMESPACE_COMPUTE_URL").pipe(
+  Config.withDefault("https://{region}.compute.namespaceapis.com"),
+);
+
+export const makeNamespaceApi = (deps: {
+  readonly login: ProviderLogin;
+  readonly computeUrl?: Config.Config<string>;
+}): NamespaceApi => {
+  const template = deps.computeUrl ?? computeUrlTemplate;
+
+  const clientFor = (region: string, token: Redacted.Redacted<string>) =>
+    template.pipe(
+      Effect.map(
+        (url) =>
+          createComputeClient({
+            transport: createRegionTransport(region, {
+              tokenSource: fromBearerToken(Redacted.value(token)),
+              baseUrl: url.replaceAll("{region}", region),
+            }),
+          }) as ComputeClient,
+      ),
+      Effect.mapError(
+        (error) =>
+          new ProviderError({ provider: "namespace", reason: error.message }),
+      ),
+    );
+
+  // The token comes from the login in hand, so every call sees the
+  // freshest env or saved login.
+  const loggedClient = (region: string) =>
+    Effect.flatMap(deps.login, (hand) => clientFor(region, hand.token));
+
+  const list = (region: string, labels: ReadonlyArray<LabelEntry>) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      const labelFilter = labels.map((label) => ({
+        name: label.name,
+        value: label.value,
+        op: LabelFilterEntry_LabelFilterOp.EQUAL,
+      }));
+      const found: InstanceListed[] = [];
+      let cursor: Uint8Array = new Uint8Array();
+      while (true) {
+        const page = yield* Effect.tryPromise({
+          try: () =>
+            client.compute.listInstances({
+              labelFilter,
+              paginationCursor: cursor,
+            }),
+          catch: fromConnect("ListInstances"),
+        });
+        for (const instance of page.instances) {
+          found.push({
+            id: instance.instanceId,
+            labels: Object.fromEntries(
+              instance.labels.map((label) => [label.name, label.value]),
+            ),
+            region:
+              instance.hwDeployment?.geoContinent === ""
+                ? undefined
+                : instance.hwDeployment?.geoContinent,
+          });
+        }
+        if (page.paginationCursor.length === 0) {
+          return found;
+        }
+        cursor = page.paginationCursor as Uint8Array<ArrayBuffer>;
+      }
+    });
+
+  // A claims-bearing token gives its tenant and expiry; an opaque one
+  // (real revocable tokens are `nsrt_`) is still checked with the one
+  // ListInstances call, and account and expiry stay unknown.
+  const checkToken = (
+    token: Redacted.Redacted<string>,
+    region: Option.Option<string>,
+  ) =>
+    Effect.gen(function* () {
+      const client = yield* clientFor(
+        Option.getOrElse(region, () => DEFAULT_REGION),
+        token,
+      ).pipe(Effect.mapError(() => unreachable()));
+      yield* Effect.tryPromise({
+        try: () => client.compute.listInstances({ maxEntries: 1n }),
+        catch: fromConnect("ListInstances"),
+      }).pipe(
+        // checkToken's failure ways stay narrow; an odd answer reads as
+        // unreachable.
+        Effect.mapError((error) =>
+          error instanceof TokenRejectedError ||
+          error instanceof TokenPermissionError ||
+          error instanceof ProviderUnavailableError
+            ? error
+            : unreachable(),
+        ),
+      );
+      const claims = extractClaims(Redacted.value(token));
+      const tenantId = claims?.tenant_id;
+      const exp = claims?.exp;
+      return typeof tenantId === "string" && typeof exp === "number"
+        ? { account: tenantId, expiresAt: new Date(exp * 1000) }
+        : ({} satisfies ProviderAccount);
+    });
+
+  const create = (region: string, req: CreateReq) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      const made = yield* Effect.tryPromise({
+        try: () =>
+          client.compute.createInstance({
+            shape: {
+              os: req.shape.os,
+              machineArch: req.shape.machineArch,
+              virtualCpu: req.shape.virtualCpu,
+              memoryMegabytes: req.shape.memoryMegabytes,
+              selectors: req.shape.selectors.map((label) => ({
+                name: label.name,
+                value: label.value,
+              })),
+            },
+            labels: req.labels.map((label) => ({
+              name: label.name,
+              value: label.value,
+            })),
+            deadline: timestampFromDate(req.deadline),
+            experimental: {
+              authorizedSshKeys: [...req.authorizedSshKeys],
+            },
+            documentedPurpose: "proofbox Sandbox",
+          }),
+        catch: fromConnect("CreateInstance"),
+      });
+      const instanceId = made.metadata?.instanceId;
+      if (instanceId === undefined || instanceId === "") {
+        return yield* new ProviderError({
+          provider: "namespace",
+          reason: "ComputeService.CreateInstance made no instance id",
+        });
+      }
+      return instanceId;
+    });
+
+  const wait = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () => client.compute.waitInstanceSync({ instanceId }),
+        catch: fromConnect("WaitInstanceSync", { region, instanceId }),
+      });
+    });
+
+  const destroy = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () => client.compute.destroyInstance({ instanceId }),
+        catch: fromConnect("DestroyInstance", { region, instanceId }),
+      });
+    });
+
+  const extend = (region: string, instanceId: string, seconds: number) =>
+    Effect.gen(function* () {
+      const client = yield* loggedClient(region);
+      yield* Effect.tryPromise({
+        try: () =>
+          client.compute.extendInstance({
+            instanceId,
+            ensureMinimum: { seconds: BigInt(seconds), nanos: 0 },
+          }),
+        catch: fromConnect("ExtendInstance", { region, instanceId }),
+      });
+    });
+
+  // GetSSHConfig answers an `sshHostKeys` field the SDK's proto does not
+  // model yet, so this one call goes over Connect JSON itself: a POST to
+  // `/<service>/<method>` with a JSON body, errors in Connect's shape.
+  const sshConfig = (region: string, instanceId: string) =>
+    Effect.gen(function* () {
+      const hand = yield* deps.login;
+      const base = (yield* template.pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      )).replaceAll("{region}", region);
+      const response = yield* Effect.tryPromise({
+        try: async () => {
+          const res = await fetch(
+            `${base}/namespace.cloud.compute.v1beta.ComputeService/GetSSHConfig`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${Redacted.value(hand.token)}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ instanceId }),
+            },
+          );
+          const body: unknown = await res.json().catch(() => undefined);
+          return { status: res.status, body };
+        },
+        catch: () => unreachable(),
+      });
+      const decoded = yield* Schema.decodeUnknown(SshConfigBody)(
+        response.body,
+      ).pipe(Effect.option);
+      if (response.status !== 200) {
+        const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
+          response.body,
+        ).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+        return yield* httpError("GetSSHConfig", response.status, errorBody, {
+          region,
+          instanceId,
+        });
+      }
+      if (Option.isNone(decoded)) {
+        return yield* new ProviderError({
+          provider: "namespace",
+          reason: "ComputeService.GetSSHConfig gave an incomplete answer",
+        });
+      }
+      const body = decoded.value;
+      return {
+        username: body.username,
+        endpoint: body.endpoint,
+        privateKey: new Uint8Array(Buffer.from(body.sshPrivateKey, "base64")),
+        hostKeys: body.sshHostKeys.map((key) =>
+          Buffer.from(key, "base64").toString("utf8"),
+        ),
+      } satisfies SshConfig;
+    });
+
+  return { create, wait, destroy, extend, list, sshConfig, checkToken };
+};

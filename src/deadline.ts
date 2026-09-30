@@ -1,9 +1,15 @@
 import { Clock, Duration, Effect, Schedule } from "effect";
 import {
+  type BadLoginsFileError,
   BadSpanError,
+  type LoginExpiredError,
+  type NotLoggedInError,
   type ProviderError,
+  type ProviderLimitError,
   type ProviderUnavailableError,
   type SandboxGoneError,
+  type TokenPermissionError,
+  type TokenRejectedError,
 } from "./errors.ts";
 import type { Os, Provider, SandboxInfo } from "./provider.ts";
 
@@ -97,7 +103,15 @@ export const deadlinePush = (
   info: SandboxInfo,
 ): Effect.Effect<
   void,
-  SandboxGoneError | ProviderError | ProviderUnavailableError
+  | BadLoginsFileError
+  | LoginExpiredError
+  | NotLoggedInError
+  | SandboxGoneError
+  | ProviderError
+  | ProviderLimitError
+  | ProviderUnavailableError
+  | TokenRejectedError
+  | TokenPermissionError
 > =>
   Effect.flatMap(Clock.currentTimeMillis, (millis) =>
     provider.extend(
@@ -116,7 +130,16 @@ export const withDeadlinePush =
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
     A,
-    E | ProviderError | ProviderUnavailableError | SandboxGoneError,
+    | BadLoginsFileError
+    | E
+    | LoginExpiredError
+    | NotLoggedInError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | TokenPermissionError
+    | TokenRejectedError,
     R
   > =>
     Effect.gen(function* () {

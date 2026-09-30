@@ -15,6 +15,7 @@ export interface CliEnv {
     readonly PROOFBOX_FAKE_TOKEN: string;
     readonly DOCKER_HOST?: string;
     readonly PROOFBOX_NSC?: string;
+    readonly PROOFBOX_NAMESPACE_COMPUTE_URL?: string;
   };
 }
 
@@ -46,10 +47,14 @@ export const makeEnv = (
       ...(options.docker === true
         ? {}
         : { DOCKER_HOST: "unix:///nonexistent/proofbox-test.sock" }),
-      // Plain tests must not touch the real nsc binary either.
+      // Plain tests must not touch the real nsc binary or the real
+      // Compute API either: port 9 never answers.
       ...(options.namespace === true
         ? {}
-        : { PROOFBOX_NSC: "/nonexistent/proofbox-test-nsc" }),
+        : {
+            PROOFBOX_NSC: "/nonexistent/proofbox-test-nsc",
+            PROOFBOX_NAMESPACE_COMPUTE_URL: "http://127.0.0.1:9/{region}",
+          }),
     },
   };
 };

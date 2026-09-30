@@ -9,7 +9,18 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Chunk, Clock, Duration, Effect, Schedule, Stream } from "effect";
+import {
+  Chunk,
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Either,
+  Option,
+  Schedule,
+  Stream,
+} from "effect";
+import { parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -23,13 +34,20 @@ import {
 import {
   ProviderError,
   ProviderLimitError,
-  type ProviderUnavailableError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
+  UnknownRegionError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import { type Os, type Provider, SandboxInfo } from "../provider.ts";
+import {
+  type ListResult,
+  type Os,
+  type Provider,
+  type ProviderLogin,
+  SandboxInfo,
+} from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
@@ -42,14 +60,22 @@ import {
   readMemoryKills,
   writeMacDeadline,
 } from "./mac-host.ts";
+import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import { unreachable } from "./namespace-api.ts";
 import type { NscClient } from "./nsc-client.ts";
+import {
+  DEFAULT_REGION,
+  hostName,
+  KNOWN_REGIONS,
+  splitHostName,
+} from "./regions.ts";
 import {
   pullSnapshot,
   pushSnapshot,
   snapshotRef,
   snapshotTag,
 } from "./snapshot-image.ts";
-import type { Link, OpenLink } from "./ssh-link.ts";
+import type { Link, OpenLink, SshForward } from "./ssh-link.ts";
 
 const LINUX_SIZES: ReadonlyArray<Size> = [
   { cpu: 4, ramGb: 8 },
@@ -80,8 +106,11 @@ const describe = (cause: unknown) =>
 const exec = promisify(execFile);
 
 export const makeNamespaceProvider = (deps: {
+  readonly api: NamespaceApi;
+  readonly login: ProviderLogin;
   readonly nsc: NscClient;
   readonly openLink: OpenLink;
+  readonly forward: SshForward;
   readonly dockerFor: (link: Link) => DockerClient;
   readonly spawnDetached: (
     provider: string,
@@ -90,6 +119,8 @@ export const makeNamespaceProvider = (deps: {
   ) => Effect.Effect<void, ProviderError>;
 }): Provider => {
   const nsc = deps.nsc;
+  const api = deps.api;
+  const forward = deps.forward;
   const fail = (reason: string) =>
     new ProviderError({ provider: "namespace", reason });
   const gone = (name: string) => new SandboxGoneError({ id: `ns:${name}` });
@@ -98,7 +129,10 @@ export const makeNamespaceProvider = (deps: {
     id: () => `ns:${name}`,
   });
   const paths = (name: string) => keeperPaths({ provider: "ns", name });
-  const containerOf = (name: string) => `proofbox-${name.slice(0, 6)}`;
+  // A `:` is not legal in a container name, so the container takes only
+  // the instance part of `<region>:<instanceId>`.
+  const containerOf = (name: string) =>
+    `proofbox-${splitHostName(name).instanceId.slice(0, 6)}`;
   // The host's OS, written at create; a host made before macOS existed has
   // no file and is Linux.
   const osOf = (name: string) =>
@@ -126,10 +160,7 @@ export const makeNamespaceProvider = (deps: {
   const withCliLink = <A, E>(
     name: string,
     use: (link: Link) => Effect.Effect<A, E>,
-  ): Effect.Effect<
-    A,
-    E | ProviderError | ProviderUnavailableError | SandboxGoneError
-  > =>
+  ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
     Effect.scoped(
       Effect.gen(function* () {
         const link = yield* openLink(name, "cli");
@@ -230,7 +261,7 @@ export const makeNamespaceProvider = (deps: {
       });
       const info = yield* sandboxInfoFromLabels(
         brandFor(name),
-        name.slice(0, 6),
+        splitHostName(name).instanceId.slice(0, 6),
         labels,
         seconds,
       );
@@ -261,6 +292,15 @@ export const makeNamespaceProvider = (deps: {
       const seconds = Math.ceil(
         (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
       );
+      // The detached host-expiry destroys the host at this instant: the
+      // record lands before the push so a link that is slow or dead cannot
+      // leave the host living past the Sandbox's Deadline.
+      const dir = yield* paths(name);
+      yield* Effect.promise(() =>
+        writeFile(dir.deadline, String(Math.ceil(deadline.getTime() / 1000)), {
+          mode: 0o600,
+        }).catch(() => {}),
+      );
       // The host side first and detached: the nsc call needs no link, and the
       // link write below can spend a while in bring-up.
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
@@ -286,26 +326,88 @@ export const makeNamespaceProvider = (deps: {
     });
 
   // Each OS is its own label, so a host is listed with the OS it runs.
-  const listHosts = Effect.gen(function* () {
-    const [linux, macos] = yield* Effect.all(
-      [
-        nsc.list({ "proofbox.os": "linux" }),
-        nsc.list({ "proofbox.os": "macos" }),
-      ],
-      { concurrency: 2 },
-    );
-    return [
-      ...linux.map((instance) => ({ os: "linux" as const, instance })),
-      ...macos.map((instance) => ({ os: "macos" as const, instance })),
-    ];
-  });
+  const listHostsFor = (region: string) =>
+    Effect.gen(function* () {
+      const [linux, macos] = yield* Effect.all(
+        [
+          api.list(region, [{ name: "proofbox.os", value: "linux" }]),
+          api.list(region, [{ name: "proofbox.os", value: "macos" }]),
+        ],
+        { concurrency: 2 },
+      );
+      return [
+        ...linux.map((instance) => ({
+          os: "linux" as const,
+          region,
+          instance,
+        })),
+        ...macos.map((instance) => ({
+          os: "macos" as const,
+          region,
+          instance,
+        })),
+      ];
+    });
 
   const list = Effect.gen(function* () {
-    const hosts = yield* listHosts;
-    const instances = hosts.map((host) => host.instance);
+    // Each region's list is global today, so one answer would do. `list`
+    // still asks every known region: a second one is a spare when a
+    // region is down, and it keeps the list whole if a region ever lists
+    // only its own hosts.
+    // A region that cannot be reached is named in `unreached`; when
+    // nothing answered at all the list fails with the first error.
+    const perRegion = yield* Effect.forEach(
+      KNOWN_REGIONS,
+      (region) => listHostsFor(region).pipe(Effect.either),
+      { concurrency: 2 },
+    );
+    const unreached: Array<{ where: string; reason: string }> = [];
+    const failures: Array<ApiError | ApiLoginError> = [];
+    const hosts = perRegion.flatMap((entry, index) => {
+      if (Either.isLeft(entry)) {
+        failures.push(entry.left);
+        unreached.push({
+          where: `Namespace region ${KNOWN_REGIONS[index] ?? ""}`,
+          reason: entry.left.message,
+        });
+        return [];
+      }
+      return entry.right;
+    });
+    if (failures.length === KNOWN_REGIONS.length) {
+      const first = failures[0];
+      return yield* first ?? fail("no Namespace region could be reached");
+    }
+    // Every endpoint's list is global: one host comes back once per
+    // region asked. Keep one entry per instance, named by the region it
+    // was made in — the `proofbox.region` label create stamps — or the
+    // continent the instance reports, or the queried region.
+    const byId = new Map<
+      string,
+      {
+        os: "linux" | "macos";
+        region: string;
+        instance: (typeof hosts)[number]["instance"];
+      }
+    >();
+    for (const host of hosts) {
+      if (!byId.has(host.instance.id)) {
+        byId.set(host.instance.id, {
+          os: host.os,
+          region:
+            host.instance.labels["proofbox.region"] ??
+            host.instance.region ??
+            host.region,
+          instance: host.instance,
+        });
+      }
+    }
+    const live = [...byId.values()];
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
-    const alive = new Set(instances.map((instance) => instance.clusterId));
+    const alive = new Set(
+      live.map((host) => hostName(host.region, host.instance.id)),
+    );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
       const entries = await readdir(dir).catch(() => [] as string[]);
@@ -327,41 +429,55 @@ export const makeNamespaceProvider = (deps: {
           .map(async (name) => {
             if (!(await stale(`ns-${name}.key`))) return;
             await Promise.all(
-              [".key", ".key.pub", ".max-life", ".os", ".ctl", ".sock"].map(
-                (suffix) =>
-                  rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
-                    () => {},
-                  ),
+              [
+                ".key",
+                ".key.pub",
+                ".max-life",
+                ".deadline",
+                ".os",
+                ".ctl",
+                ".sock",
+                ".sshkey",
+                ".sshtarget",
+                ".known-hosts",
+              ].map((suffix) =>
+                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
+                  () => {},
+                ),
               ),
             );
           }),
       ).then(() => {});
     });
     const infos = yield* Effect.forEach(
-      hosts,
-      ({ os, instance }) =>
-        getAs(os, instance.clusterId).pipe(
+      live,
+      ({ os, region, instance }) =>
+        getAs(os, hostName(region, instance.id)).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
         ),
       { discard: false },
     );
-    return infos.filter((info) => info !== undefined);
+    return {
+      infos: infos.filter((info) => info !== undefined),
+      unreached,
+    } satisfies ListResult;
   }).pipe(
-    // A Provider that cannot list (nsc missing, not logged in) reports
-    // none rather than breaking `list` for every other Provider.
-    Effect.catchTag("ProviderUnavailableError", () => Effect.succeed([])),
-    Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
+    Effect.catchTag("SandboxGoneError", () => Effect.fail(unreachable())),
+    Effect.catchTag("NotLoggedInError", () =>
+      Effect.succeed({ infos: [], unreached: [] } satisfies ListResult),
+    ),
   );
 
   const del = (name: string) =>
     Effect.gen(function* () {
-      const hosts = yield* listHosts.pipe(
+      const { region, instanceId } = splitHostName(name);
+      const hosts = yield* listHostsFor(region).pipe(
         Effect.catchTag("SandboxGoneError", () => Effect.succeed([])),
       );
-      const present = hosts.some((host) => host.instance.clusterId === name);
+      const present = hosts.some((host) => host.instance.id === instanceId);
       if (present) {
-        yield* nsc
-          .destroy(name)
+        yield* api
+          .destroy(region, instanceId)
           .pipe(Effect.catchTag("SandboxGoneError", () => Effect.void));
       }
       // Hosts that expire on their own never reach destroy, so the local
@@ -373,11 +489,32 @@ export const makeNamespaceProvider = (deps: {
           rm(dir.key, { force: true }).catch(() => {}),
           rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
           rm(dir.maxLife, { force: true }).catch(() => {}),
+          rm(dir.deadline, { force: true }).catch(() => {}),
           rm(dir.os, { force: true }).catch(() => {}),
+          rm(dir.knownHosts, { force: true }).catch(() => {}),
+          rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
+            force: true,
+          }).catch(() => {}),
+          rm(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
+            force: true,
+          }).catch(() => {}),
         ]).then(() => {}),
       );
       return present ? ("deleted" as const) : ("gone" as const);
     });
+
+  // create+wait can hang; bound the wait, then sweep whatever it
+  // half-made.
+  const createTimeout = Config.string("PROOFBOX_NS_CREATE_TIMEOUT").pipe(
+    Config.withDefault("60s"),
+  );
+
+  // A destroy frees the host's quota a moment after it returns, so a
+  // create right behind a delete can land on a full-looking account:
+  // give a plan-limit refusal this long to lift before reporting it.
+  const limitWait = Config.string("PROOFBOX_NS_LIMIT_WAIT").pipe(
+    Config.withDefault("45s"),
+  );
 
   const create = (req: {
     readonly os: Parameters<Provider["create"]>[0]["os"];
@@ -388,26 +525,29 @@ export const makeNamespaceProvider = (deps: {
     readonly snapshot?: string | undefined;
   }) =>
     Effect.gen(function* () {
-      yield* nsc.checkLogin.pipe(
-        Effect.catchTag("SandboxGoneError", (error) =>
-          Effect.fail(fail(error.message)),
-        ),
-      );
+      const login = yield* deps.login;
+      const region = Option.getOrElse(login.region, () => DEFAULT_REGION);
+      if (!KNOWN_REGIONS.includes(region)) {
+        return yield* new UnknownRegionError({
+          provider: "namespace",
+          region,
+          known: KNOWN_REGIONS,
+        });
+      }
       const macos = req.os === "macos";
       const size = req.size ?? (macos ? DEFAULT_MACOS_SIZE : DEFAULT_SIZE);
       const staged = yield* paths(`new-${process.pid}`);
       const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
-      const cidfile = join(staged.dir, `ns-new-${process.pid}.cid`);
       // Whatever part of the make is left — key files, the host — leaves
       // nothing behind on a failed create.
       const createToken = makeSandboxName();
       let hostId: string | undefined;
+      let deadlineAt = 0;
       const cleanup = Effect.gen(function* () {
         yield* Effect.promise(() =>
           Promise.all([
             rm(keyBase, { force: true }).catch(() => {}),
             rm(`${keyBase}.pub`, { force: true }).catch(() => {}),
-            rm(cidfile, { force: true }).catch(() => {}),
           ]).then(() => {}),
         );
         if (hostId !== undefined) {
@@ -420,7 +560,10 @@ export const makeNamespaceProvider = (deps: {
               rm(hostPaths.os, { force: true }).catch(() => {}),
             ]).then(() => {}),
           );
-          yield* nsc.destroy(hostId).pipe(Effect.orElseSucceed(() => {}));
+          const host = splitHostName(hostId);
+          yield* api
+            .destroy(host.region, host.instanceId)
+            .pipe(Effect.orElseSucceed(() => {}));
         }
       });
       return yield* Effect.gen(function* () {
@@ -451,44 +594,106 @@ export const makeNamespaceProvider = (deps: {
         const maxLifeSeconds = Math.floor(
           (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
         );
-        const id = yield* nsc
-          .create({
-            machineType: macos
-              ? `macos/arm64:${formatSize(size)}`
-              : `linux/amd64:${formatSize(size)}`,
-            durationSeconds,
-            sshKeyFile: `${keyBase}.pub`,
-            selectors: macos ? MACOS_SELECTORS : undefined,
-            labels: {
-              "proofbox.os": req.os,
-              "proofbox.size": formatSize(size),
-              "proofbox.create-token": createToken,
-            },
-            cidfile,
-          })
-          .pipe(
-            // A failed create can leave a half-made host (a timed-out nsc
-            // may have registered it). A limit makes nothing, so skip the
-            // sweep there.
-            Effect.tapError((error) =>
-              error instanceof ProviderLimitError
-                ? Effect.void
-                : Effect.gen(function* () {
-                    const left = yield* nsc
-                      .list({ "proofbox.create-token": createToken })
-                      .pipe(Effect.orElseSucceed(() => []));
-                    yield* Effect.forEach(
-                      left,
-                      (instance) =>
-                        nsc
-                          .destroy(instance.clusterId)
-                          .pipe(Effect.orElseSucceed(() => undefined)),
-                      { discard: true },
-                    );
+        const sshKey = (yield* Effect.tryPromise({
+          try: () => readFile(`${keyBase}.pub`, "utf8"),
+          catch: (cause) =>
+            fail(`could not read the host key: ${describe(cause)}`),
+        })).trim();
+        const spanText = yield* createTimeout.pipe(
+          Effect.mapError((error) => fail(error.message)),
+        );
+        const span = yield* parseSpan(
+          "PROOFBOX_NS_CREATE_TIMEOUT",
+          spanText,
+        ).pipe(Effect.mapError((error) => fail(error.message)));
+        const limitSpan = yield* parseSpan(
+          "PROOFBOX_NS_LIMIT_WAIT",
+          yield* limitWait.pipe(
+            Effect.mapError((error) => fail(error.message)),
+          ),
+          {
+            units: ["ms", "s", "m"],
+            zero: true,
+            example: "45s",
+          },
+        ).pipe(Effect.mapError((error) => fail(error.message)));
+        const instanceId = yield* Effect.timeoutOption(
+          Effect.gen(function* () {
+            const nowMillis = yield* Clock.currentTimeMillis;
+            deadlineAt = Math.floor(
+              (nowMillis + durationSeconds * 1000) / 1000,
+            );
+            const made = yield* api
+              .create(region, {
+                shape: {
+                  os: req.os,
+                  machineArch: macos ? "arm64" : "amd64",
+                  virtualCpu: size.cpu,
+                  memoryMegabytes: size.ramGb * 1024,
+                  selectors: macos
+                    ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
+                        name,
+                        value,
+                      }))
+                    : [],
+                },
+                labels: [
+                  { name: "proofbox.os", value: req.os },
+                  { name: "proofbox.region", value: region },
+                  { name: "proofbox.size", value: formatSize(size) },
+                  { name: "proofbox.create-token", value: createToken },
+                ],
+                deadline: new Date(nowMillis + durationSeconds * 1000),
+                authorizedSshKeys: [sshKey],
+              })
+              .pipe(
+                Effect.retry({
+                  while: (error) => error instanceof ProviderLimitError,
+                  schedule: Schedule.spaced(Duration.seconds(5)).pipe(
+                    Schedule.upTo(limitSpan),
+                  ),
+                }),
+              );
+            yield* api.wait(region, made);
+            return made;
+          }),
+          span,
+        ).pipe(
+          Effect.flatMap((made) =>
+            Option.isNone(made)
+              ? Effect.fail(
+                  new ProviderUnavailableError({
+                    provider: "namespace",
+                    reason: `Namespace did not make the host in ${spanText.replace(/(\d)([a-z])/g, "$1 $2")}; deleted any half-made host. Try again`,
                   }),
-            ),
-          );
-        hostId = id;
+                )
+              : Effect.succeed(made.value),
+          ),
+          // A failed create can leave a half-made host (a timed-out call
+          // may have registered it). A limit makes nothing, so skip the
+          // sweep there.
+          Effect.tapError((error) =>
+            error instanceof ProviderLimitError
+              ? Effect.void
+              : Effect.gen(function* () {
+                  const left = yield* api
+                    .list(region, [
+                      { name: "proofbox.create-token", value: createToken },
+                    ])
+                    .pipe(Effect.orElseSucceed(() => []));
+                  yield* Effect.forEach(
+                    left,
+                    (instance) =>
+                      api
+                        .destroy(region, instance.id)
+                        .pipe(Effect.orElseSucceed(() => undefined)),
+                    { discard: true },
+                  );
+                }),
+          ),
+        );
+        hostId = hostName(region, instanceId);
+        const id = hostId;
         if (maxLifeSeconds <= Math.floor(Date.now() / 1000)) {
           return yield* fail(
             "making the host took the whole Max life; try a larger --max-life",
@@ -500,6 +705,9 @@ export const makeNamespaceProvider = (deps: {
             await rename(keyBase, hostPaths.key);
             await rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
             await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
+              mode: 0o600,
+            });
+            await writeFile(hostPaths.deadline, String(deadlineAt), {
               mode: 0o600,
             });
             await writeFile(hostPaths.os, req.os, { mode: 0o600 });
@@ -516,14 +724,24 @@ export const makeNamespaceProvider = (deps: {
         ]);
         // Provisioning can outlast the create duration (a cold image build):
         // keep the host's own Deadline ahead until the Sandbox takes over,
-        // but never past the Max life.
+        // but never past the Max life. The recorded Deadline moves with it —
+        // otherwise the host-expiry destroys a host that is still being
+        // prepared once its initial allowance runs out.
         yield* Effect.forkScoped(
           Effect.repeat(
             Effect.gen(function* () {
               const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
               if (left > 0) {
-                yield* nsc
-                  .extend(id, Math.min(durationSeconds, left))
+                const pushedAt =
+                  Math.floor(Date.now() / 1000) +
+                  Math.min(durationSeconds, left);
+                yield* Effect.promise(() =>
+                  writeFile(hostPaths.deadline, String(pushedAt), {
+                    mode: 0o600,
+                  }).catch(() => {}),
+                );
+                yield* api
+                  .extend(region, instanceId, Math.min(durationSeconds, left))
                   .pipe(Effect.ignore);
               }
             }),
@@ -555,8 +773,9 @@ export const makeNamespaceProvider = (deps: {
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
           // Publish the VNC port for the Live view; the host has only a
-          // private address, and nsc forwards onto that address, so the
-          // publish must cover it — loopback binds are unreachable.
+          // private address, and the SSH gateway forwards onto that
+          // address, so the publish must cover it — loopback binds are
+          // unreachable.
           runArgs: [
             "-p",
             "5900:5900",
@@ -569,7 +788,7 @@ export const makeNamespaceProvider = (deps: {
         const info = yield* inner.create({
           ...req,
           size,
-          name: id.slice(0, 6),
+          name: splitHostName(id).instanceId.slice(0, 6),
           maxLifeAt: new Date(maxLifeSeconds * 1000),
         });
         // The Base image must hide the host's workload token from user code:
@@ -713,11 +932,11 @@ export const makeNamespaceProvider = (deps: {
             )
             .pipe(Effect.ignore),
         );
-        const forward = yield* nsc.portForward(name, 5900);
+        const live = yield* forward(name, 5900);
         return {
-          address: `127.0.0.1:${forward.port}`,
+          address: `127.0.0.1:${live.port}`,
           password,
-          gone: forward.gone,
+          gone: live.gone,
         };
       }
       const link = yield* openLink(name, "cli");
@@ -783,11 +1002,11 @@ export const makeNamespaceProvider = (deps: {
           ])
           .pipe(Effect.ignore),
       );
-      const forward = yield* nsc.portForward(name, 5900);
+      const live = yield* forward(name, 5900);
       return {
-        address: `127.0.0.1:${forward.port}`,
+        address: `127.0.0.1:${live.port}`,
         password,
-        gone: forward.gone,
+        gone: live.gone,
       };
     });
 
@@ -808,7 +1027,12 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
-    login: { _tag: "External", tool: "nsc" },
+    login: {
+      _tag: "Ways",
+      ways: new Set(["token"]),
+      checkToken: api.checkToken,
+    },
+    regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },
     offers: {
       linux: {
         sizes: LINUX_SIZES,

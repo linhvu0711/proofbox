@@ -21,11 +21,15 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "2.16.0",
+    "@connectrpc/connect": "2.2.0",
+    "@connectrpc/connect-node": "2.2.0",
     "@effect/cli": "0.77.2",
     "@effect/platform": "0.97.2",
     "@effect/platform-node": "0.108.2",
     "@effect/printer": "0.51.0",
     "@effect/printer-ansi": "0.51.0",
+    "@namespacelabs/sdk": "1.1.0",
     "effect": "3.22.2"
   },
   "devDependencies": {

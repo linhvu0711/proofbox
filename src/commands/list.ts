@@ -11,16 +11,34 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
       [...providers.entries()],
       ([, provider]) =>
         provider.list.pipe(
-          Effect.map((infos) =>
-            infos.map((info) => ({
+          Effect.map((result) => ({
+            unreached: result.unreached,
+            sandboxes: result.infos.map((info) => ({
               id: `${provider.idPrefix}:${info.name}`,
               info,
             })),
+          })),
+          // A Provider that cannot be reached at all must not hide the
+          // Sandboxes of the rest: it is named like an unreached region
+          // and the others still list. Any other failure (auth, a corrupt
+          // file) still fails the command.
+          Effect.catchTag("ProviderUnavailableError", (error) =>
+            Effect.succeed({
+              unreached: [{ where: provider.name, reason: error.message }],
+              sandboxes: [],
+            }),
           ),
         ),
     );
+    for (const { unreached } of found) {
+      for (const miss of unreached) {
+        yield* output.err(
+          `Could not list Sandboxes in ${miss.where}: ${miss.reason}\n`,
+        );
+      }
+    }
     const sandboxes = found
-      .flat()
+      .flatMap((entry) => entry.sandboxes)
       .sort((a, b) => a.info.createdAt.getTime() - b.info.createdAt.getTime());
     if (options.json) {
       yield* output.out(

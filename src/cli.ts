@@ -52,7 +52,7 @@ const exec = Command.make(
   "exec",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
     command: Args.text({ name: "command" }).pipe(Args.atLeast(1)),
   },
@@ -227,7 +227,7 @@ const del = Command.make(
   "delete",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
   },
   ({ id }) => deleteSandbox(id),
@@ -280,8 +280,9 @@ const authLogin = Command.make(
   {
     provider: Args.text({ name: "provider" }),
     token: Options.boolean("token"),
+    region: Options.text("region").pipe(Options.optional),
   },
-  ({ provider, token }) => loginToProvider({ provider, token }),
+  ({ provider, token, region }) => loginToProvider({ provider, token, region }),
 );
 
 const authStatus = Command.make("status", {}, () => showAuthStatus);
@@ -319,7 +320,7 @@ const live = Command.make(
   "live",
   {
     id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:abc123"),
+      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
   },
   ({ id }) => openLive(id),

@@ -3,6 +3,7 @@ import {
   Context,
   type Duration,
   type Effect,
+  type Option,
   type Redacted,
   Schema,
   type Scope,
@@ -19,8 +20,10 @@ import {
   type ProviderUnavailableError,
   type SandboxGoneError,
   type TokenExposedError,
+  type TokenPermissionError,
   type TokenRejectedError,
   type ToolBundleHashError,
+  type UnknownRegionError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
 import { Size } from "./size.ts";
@@ -50,8 +53,8 @@ export const LoginWay = Schema.Literal("browser", "token");
 export type LoginWay = typeof LoginWay.Type;
 
 export interface ProviderAccount {
-  readonly account: string;
-  readonly expiresAt: Date;
+  readonly account?: string;
+  readonly expiresAt?: Date;
 }
 
 export interface LoginWays {
@@ -59,24 +62,26 @@ export interface LoginWays {
   readonly ways: ReadonlySet<LoginWay>;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
+    region: Option.Option<string>,
   ) => Effect.Effect<
     ProviderAccount,
-    TokenRejectedError | ProviderUnavailableError
+    TokenRejectedError | TokenPermissionError | ProviderUnavailableError
   >;
 }
 
-// What a Provider offers `proofbox auth`: no login at all, an outside CLI
-// for now, or its own login ways.
-export type LoginPart =
-  | { readonly _tag: "None" }
-  // Stand-in until #48: the Provider logs in with its own CLI.
-  | { readonly _tag: "External"; readonly tool: string }
-  | LoginWays;
+// What a Provider offers `proofbox auth`: no login at all, or its own
+// login ways.
+export type LoginPart = { readonly _tag: "None" } | LoginWays;
 
-// The token a command uses to act for a Provider account, from the env or
-// the saved login.
+// The token and region a command uses to act for a Provider account, from
+// the env or the saved login.
+export interface LoginInHand {
+  readonly token: Redacted.Redacted<string>;
+  readonly region: Option.Option<string>;
+}
+
 export type ProviderLogin = Effect.Effect<
-  Redacted.Redacted<string>,
+  LoginInHand,
   NotLoggedInError | LoginExpiredError | BadLoginsFileError
 >;
 
@@ -113,6 +118,12 @@ export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
   readonly login: LoginPart;
+  // A Provider whose API is regional names the regions it knows and the
+  // one new Sandboxes go to when the login has none.
+  readonly regions?: {
+    readonly known: ReadonlyArray<string>;
+    readonly fallback: string;
+  };
   readonly offers: Readonly<Partial<Record<Os, OsOffer>>>;
   readonly create: (req: {
     readonly os: Os;
@@ -137,7 +148,9 @@ export interface Provider {
     | NotLoggedInError
     | LoginExpiredError
     | BadLoginsFileError
-    | TokenRejectedError,
+    | TokenRejectedError
+    | TokenPermissionError
+    | UnknownRegionError,
     Progress
   >;
   readonly extend: (
@@ -145,7 +158,15 @@ export interface Provider {
     deadline: Date,
   ) => Effect.Effect<
     void,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
@@ -155,10 +176,23 @@ export interface Provider {
       readonly password: string;
       readonly gone: Effect.Effect<
         never,
-        SandboxGoneError | ProviderError | ProviderUnavailableError
+        | BadLoginsFileError
+        | LoginExpiredError
+        | NotLoggedInError
+        | SandboxGoneError
+        | ProviderError
+        | ProviderUnavailableError
       >;
     },
-    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError,
     Scope.Scope
   >;
   // Only where an OS offer has the "snapshot" feature. `save` stores the
@@ -170,7 +204,15 @@ export interface Provider {
       fingerprint: string,
     ) => Effect.Effect<
       void,
-      ProviderError | ProviderUnavailableError | SandboxGoneError,
+      | BadLoginsFileError
+      | LoginExpiredError
+      | NotLoggedInError
+      | ProviderError
+      | ProviderLimitError
+      | ProviderUnavailableError
+      | SandboxGoneError
+      | TokenRejectedError
+      | TokenPermissionError,
       Progress
     >;
   };
@@ -178,14 +220,40 @@ export interface Provider {
     name: string,
   ) => Effect.Effect<
     SandboxInfo,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
-  readonly list: Effect.Effect<ReadonlyArray<SandboxInfo>, ProviderError>;
+  readonly list: Effect.Effect<
+    ListResult,
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
+    | NotLoggedInError
+    | LoginExpiredError
+    | BadLoginsFileError
+  >;
   readonly delete: (
     name: string,
   ) => Effect.Effect<
     "deleted" | "gone",
-    ProviderError | ProviderUnavailableError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | TokenRejectedError
+    | TokenPermissionError
+    | NotLoggedInError
+    | LoginExpiredError
+    | BadLoginsFileError
   >;
   readonly stateDir: (name: string) => string;
   readonly secretsDir: (name: string, os: Os) => string;
@@ -193,15 +261,41 @@ export interface Provider {
     name: string,
   ) => Effect.Effect<
     Connection,
-    SandboxGoneError | ProviderError | ProviderUnavailableError,
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
   readonly memoryKills: (
     name: string,
   ) => Effect.Effect<
     number,
-    SandboxGoneError | ProviderError | ProviderUnavailableError
+    | BadLoginsFileError
+    | LoginExpiredError
+    | NotLoggedInError
+    | SandboxGoneError
+    | ProviderError
+    | ProviderLimitError
+    | ProviderUnavailableError
+    | TokenRejectedError
+    | TokenPermissionError
   >;
+}
+
+// What a Provider's list gives: the Sandboxes it reached, and each place
+// it could not reach — a `list` still shows the Sandboxes it got.
+export interface ListResult {
+  readonly infos: ReadonlyArray<SandboxInfo>;
+  readonly unreached: ReadonlyArray<{
+    readonly where: string;
+    readonly reason: string;
+  }>;
 }
 
 export class Providers extends Context.Tag("proofbox/Providers")<

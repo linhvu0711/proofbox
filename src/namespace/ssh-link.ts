@@ -1,9 +1,11 @@
-import { rm } from "node:fs/promises";
+import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
   Chunk,
   Data,
+  Deferred,
   Effect,
   Exit,
   Ref,
@@ -15,11 +17,12 @@ import { commandEvents } from "../command-events.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
-  type SandboxGoneError,
+  SandboxGoneError,
 } from "../errors.ts";
-import type { KeeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
-import type { NscClient } from "./nsc-client.ts";
+import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import { splitHostName } from "./regions.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -48,11 +51,7 @@ export type OpenLink = (
   id: string,
   paths: KeeperPaths,
   owner: LinkOwner,
-) => Effect.Effect<
-  Link,
-  ProviderError | ProviderUnavailableError | SandboxGoneError,
-  Scope.Scope
->;
+) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
 
 const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
   Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
@@ -71,17 +70,18 @@ const linkLost = (detail: string) =>
     reason: `lost the link to the Namespace host: ${detail}`,
   });
 
-// Bring-up failures that mean "the host is not ready yet" — sshd still
-// coming up, a tunnel that dropped. Only these are retried; a missing ssh
-// or nsc, or not being logged in, fails at once. After the retries give up
-// it is mapped to the linkLost ProviderUnavailableError.
+// Bring-up failures that mean "the link is not ready yet" — the SSH
+// gateway still coming up, a handshake that dropped. Only these are
+// retried; a missing ssh binary or not being logged in fails at once.
+// After the retries give up it is mapped to the linkLost
+// ProviderUnavailableError.
 class LinkDownError extends Data.TaggedError("LinkDownError")<{
   readonly detail: string;
 }> {}
 const down = (detail: string) => new LinkDownError({ detail });
 
 export const makeOpenLink = (
-  nsc: NscClient,
+  api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
 ): OpenLink => {
   const sshError = (error: {
@@ -102,7 +102,12 @@ export const makeOpenLink = (
   // a socket path at 103.
   let cliSeq = 0;
 
-  const sshBase = (ctl: string, key: string): ReadonlyArray<string> => [
+  const sshBase = (
+    ctl: string,
+    key: string,
+    hosts: string,
+    target: string,
+  ): ReadonlyArray<string> => [
     "-S",
     ctl,
     "-i",
@@ -110,27 +115,25 @@ export const makeOpenLink = (
     "-o",
     "BatchMode=yes",
     "-o",
-    "StrictHostKeyChecking=no",
+    "StrictHostKeyChecking=yes",
     "-o",
-    "UserKnownHostsFile=/dev/null",
+    `UserKnownHostsFile=${hosts}`,
     "-o",
     "LogLevel=ERROR",
-    "root@127.0.0.1",
+    target,
   ];
 
-  const checkCtl = (ctl: string) =>
+  const checkCtl = (ctl: string, target: string) =>
     Command.exitCode(
-      Command.make("ssh", "-S", ctl, "-O", "check", "root@127.0.0.1"),
+      Command.make("ssh", "-S", ctl, "-O", "check", target),
     ).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.map((code) => code === 0),
       Effect.catchAll(() => Effect.succeed(false)),
     );
 
-  const exitCtl = (ctl: string) =>
-    Command.exitCode(
-      Command.make("ssh", "-S", ctl, "-O", "exit", "root@127.0.0.1"),
-    ).pipe(
+  const exitCtl = (ctl: string, target: string) =>
+    Command.exitCode(Command.make("ssh", "-S", ctl, "-O", "exit", target)).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.catchAll(() => Effect.succeed(0)),
       Effect.asVoid,
@@ -193,9 +196,36 @@ export const makeOpenLink = (
           );
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
-      // forward or handshake.
-      if (owner === "cli" && (yield* checkCtl(paths.control))) {
-        const ssh = sshBase(paths.control, paths.key);
+      // handshake.
+      const { region, instanceId } = splitHostName(id);
+      const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
+      const targetFile = `${paths.control.replace(/\.ctl$/, "")}.sshtarget`;
+      // A warm open rides the Keeper's ControlMaster; the stored target
+      // saves the GetSSHConfig call a ride does not need.
+      if (owner === "cli") {
+        const stored = yield* Effect.promise(() =>
+          readFile(targetFile, "utf8")
+            .then((text) => text.trim())
+            .catch(() => ""),
+        );
+        if (stored !== "" && (yield* checkCtl(paths.control, stored))) {
+          const ssh = sshBase(
+            paths.control,
+            keeperKey,
+            paths.knownHosts,
+            stored,
+          );
+          return {
+            ssh,
+            run: runWith(ssh),
+            stream: streamWith(ssh),
+          } satisfies Link;
+        }
+      }
+      const cfg = yield* api.sshConfig(region, instanceId);
+      const target = `${cfg.username}@${cfg.endpoint}`;
+      if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
+        const ssh = sshBase(paths.control, keeperKey, paths.knownHosts, target);
         return {
           ssh,
           run: runWith(ssh),
@@ -206,27 +236,62 @@ export const makeOpenLink = (
         owner === "keeper"
           ? paths.control
           : join(dirname(paths.control), `ns-c${process.pid}-${cliSeq++}.ctl`);
-      const ssh = sshBase(ctl, paths.key);
+      // The gateway key is written once per open, next to the control socket
+      // it belongs to, and removed when the link's scope closes. It cannot
+      // share paths.key: ssh checks a <key>.pub next to the identity file,
+      // and the .pub there belongs to the local keypair create made. The
+      // host keys go to the per-Sandbox known_hosts file every open
+      // refreshes.
+      const key = `${ctl.replace(/\.ctl$/, "")}.sshkey`;
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
+            chmod(key, 0o600),
+          ),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
+      yield* Effect.tryPromise({
+        try: () => writeFile(targetFile, `${target}\n`, { mode: 0o600 }),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(
+            paths.knownHosts,
+            `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
+            { mode: 0o600 },
+          ),
+        catch: (cause) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: describe(cause),
+          }),
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => rm(key, { force: true }).catch(() => undefined)),
+      );
+      const ssh = sshBase(ctl, key, paths.knownHosts, target);
       const run = runWith(ssh);
       const stream = streamWith(ssh);
-      if (yield* checkCtl(ctl)) {
+      if (yield* checkCtl(ctl, target)) {
         return { ssh, run, stream } satisfies Link;
       }
-      // The host's sshd may still be starting when nsc reports the instance,
-      // and a port-forward whose first connection dies stops listening, so
-      // each attempt opens a fresh forward and master. An attempt's scope
-      // cleans up on failure; on success it is parked on the caller's scope.
+      // A master that died mid-attempt can leave its socket file; each
+      // attempt runs in its own scope so a failure drops the half-built
+      // master before the next try. On success the attempt's scope is
+      // parked on the caller's scope so the master lives until then.
       const outerScope = yield* Scope.Scope;
       const bringup = Effect.gen(function* () {
         const attemptScope = yield* Scope.make();
         return yield* Effect.gen(function* () {
-          const localPort = yield* nsc
-            .portForward(id, 22)
-            .pipe(Effect.map((forward) => forward.port));
-          // The forward binds its local port before the tunnel to the host
-          // is up; a connection that lands first is reset, which also drops
-          // the listener, so give the tunnel a beat before the master dials.
-          yield* Effect.sleep("1 second");
           // A dead master can leave its socket file behind; a later spawn
           // then refuses to multiplex ("ControlSocket already exists").
           yield* Effect.tryPromise({
@@ -241,14 +306,7 @@ export const makeOpenLink = (
           const master = yield* Effect.acquireRelease(
             Effect.gen(function* () {
               const process = yield* Command.start(
-                Command.make(
-                  "ssh",
-                  "-M",
-                  "-N",
-                  "-p",
-                  String(localPort),
-                  ...ssh,
-                ),
+                Command.make("ssh", "-M", "-N", ...ssh),
               ).pipe(
                 Effect.provideService(
                   CommandExecutor.CommandExecutor,
@@ -266,11 +324,11 @@ export const makeOpenLink = (
             }),
             (process) =>
               Effect.zipRight(
-                exitCtl(ctl),
+                exitCtl(ctl, target),
                 Effect.orElseSucceed(process.kill("SIGKILL"), () => undefined),
               ),
           );
-          const up = checkCtl(ctl).pipe(
+          const up = checkCtl(ctl, target).pipe(
             Effect.filterOrFail(
               (ok) => ok,
               () => down("ssh did not connect in 15 s"),
@@ -302,7 +360,27 @@ export const makeOpenLink = (
           ),
         );
       });
-      yield* Effect.retry(bringup, {
+      // A dead host drops the gateway link just like a cold one does; the
+      // list check between attempts names the Sandbox gone instead of
+      // burning the whole retry budget on a host that is already deleted.
+      const attempt = bringup.pipe(
+        Effect.catchTag(
+          "LinkDownError",
+          (error): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
+            api.list(region, []).pipe(
+              Effect.catchAll(() => Effect.fail(error)),
+              Effect.flatMap(
+                (
+                  instances,
+                ): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
+                  instances.some((instance) => instance.id === instanceId)
+                    ? Effect.fail(error)
+                    : Effect.fail(new SandboxGoneError({ id: `ns:${id}` })),
+              ),
+            ),
+        ),
+      );
+      yield* Effect.retry(attempt, {
         while: (error) => error instanceof LinkDownError,
         schedule: Schedule.spaced("1 second").pipe(
           Schedule.upTo("120 seconds"),
@@ -313,5 +391,188 @@ export const makeOpenLink = (
         ),
       );
       return { ssh, run, stream } satisfies Link;
+    });
+};
+
+// The Live view's local port: `ssh -L` through the same GetSSHConfig
+// gateway the links use. nsc's `instance port-forward` cannot carry it —
+// its per-connection dial rides the same websocket the token's grant does
+// not cover, and it dies with `websocket: bad handshake` (verified live
+// 2026-09-30). Scoped: the forward lives until the scope closes; `gone`
+// resolves with the failure if the ssh process exits after the port is
+// up. `name` is the full host name, `<region>:<instanceId>`.
+export type SshForward = (
+  name: string,
+  port: number,
+) => Effect.Effect<
+  {
+    readonly port: number;
+    readonly gone: Effect.Effect<never, ProviderError | SandboxGoneError>;
+  },
+  ApiError | ApiLoginError,
+  Scope.Scope
+>;
+
+export const makeSshForward = (
+  api: NamespaceApi,
+  executor: CommandExecutor.CommandExecutor,
+): SshForward => {
+  let seq = 0;
+  const fail = (reason: string) =>
+    new ProviderError({ provider: "namespace", reason });
+  return (name, port) =>
+    Effect.gen(function* () {
+      const { region, instanceId } = splitHostName(name);
+      const cfg = yield* api.sshConfig(region, instanceId);
+      const target = `${cfg.username}@${cfg.endpoint}`;
+      const dir = (yield* keeperPaths({ provider: "ns", name })).dir;
+      const pid = process.pid;
+      const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
+      const hosts = `${key}.known-hosts`;
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
+            chmod(key, 0o600),
+          ),
+        catch: (cause) => fail(describe(cause)),
+      });
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(
+            hosts,
+            `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
+            { mode: 0o600 },
+          ),
+        catch: (cause) => fail(describe(cause)),
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          Promise.all([rm(key, { force: true }), rm(hosts, { force: true })])
+            .then(() => undefined)
+            .catch(() => undefined),
+        ),
+      );
+      // OpenSSH 8.9 rejects `-L 0:` so the local port is picked here; a
+      // bind that lost the race exits at once under ExitOnForwardFailure.
+      const local = yield* Effect.tryPromise({
+        try: () =>
+          new Promise<number>((resolve, reject) => {
+            const server = createServer();
+            server.once("error", reject);
+            server.listen(0, "127.0.0.1", () => {
+              const address = server.address();
+              server.close(() =>
+                resolve(
+                  typeof address === "object" && address !== null
+                    ? address.port
+                    : 0,
+                ),
+              );
+            });
+          }),
+        catch: (cause) => fail(describe(cause)),
+      });
+      const proc = yield* Effect.acquireRelease(
+        Command.start(
+          Command.make(
+            "ssh",
+            "-N",
+            "-T",
+            "-v",
+            "-i",
+            key,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            `UserKnownHostsFile=${hosts}`,
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-L",
+            `127.0.0.1:${local}:127.0.0.1:${port}`,
+            target,
+          ),
+        ).pipe(
+          Effect.provideService(CommandExecutor.CommandExecutor, executor),
+          Effect.mapError((error) =>
+            error._tag === "SystemError" && error.reason === "NotFound"
+              ? new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason: "ssh is not installed; install an OpenSSH client",
+                })
+              : fail(error.message),
+          ),
+        ),
+        (proc) => Effect.orElseSucceed(proc.kill("SIGKILL"), () => undefined),
+      );
+      const stderr = yield* Ref.make("");
+      const stderrDone = yield* Deferred.make<void>();
+      const listening = yield* Deferred.make<number>();
+      // Both pipes stay open for the life of the process — a closed read
+      // side can kill the writer. `-v` logs the bound port on stderr:
+      // "debug1: Local forwarding listening on 127.0.0.1 port N".
+      yield* Stream.runForEach(proc.stdout, () => Effect.void).pipe(
+        Effect.forkScoped,
+      );
+      yield* Stream.runForEach(proc.stderr, (bytes) =>
+        Effect.gen(function* () {
+          const text = yield* Ref.updateAndGet(
+            stderr,
+            (all) => all + Buffer.from(bytes).toString("utf8"),
+          );
+          const match =
+            /Local forwarding listening on 127\.0\.0\.1 port (\d+)/.exec(text);
+          if (match !== null) {
+            yield* Deferred.complete(
+              listening,
+              Effect.succeed(Number(match[1])),
+            );
+          }
+        }),
+      ).pipe(
+        Effect.ensuring(Deferred.complete(stderrDone, Effect.void)),
+        Effect.forkScoped,
+      );
+      const gone: Effect.Effect<never, ProviderError | SandboxGoneError> =
+        proc.exitCode.pipe(
+          Effect.orElseSucceed(() => 1),
+          // The stderr drain can lag the exit by a beat; give it a moment so
+          // the exit line still lands in the reported reason.
+          Effect.zipRight(
+            Deferred.await(stderrDone).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.ignore,
+            ),
+          ),
+          Effect.zipRight(Ref.get(stderr)),
+          Effect.flatMap(
+            (text): Effect.Effect<never, ProviderError | SandboxGoneError> =>
+              // A dead host drops the forward without a "was destroyed"
+              // line; the list check names the Sandbox gone instead of the
+              // bare ssh exit.
+              api.list(region, []).pipe(
+                Effect.catchAll(() =>
+                  Effect.fail(
+                    fail(`the Live view's forward died: ${tail(text, 3)}`),
+                  ),
+                ),
+                Effect.flatMap(
+                  (
+                    instances,
+                  ): Effect.Effect<never, ProviderError | SandboxGoneError> =>
+                    instances.some((instance) => instance.id === instanceId)
+                      ? Effect.fail(
+                          fail(
+                            `the Live view's forward died: ${tail(text, 3)}`,
+                          ),
+                        )
+                      : Effect.fail(new SandboxGoneError({ id: `ns:${name}` })),
+                ),
+              ),
+          ),
+        );
+      const bound = yield* Effect.raceFirst(Deferred.await(listening), gone);
+      return { port: bound, gone };
     });
 };

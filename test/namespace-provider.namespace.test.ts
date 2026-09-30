@@ -104,8 +104,8 @@ describe("Namespace Provider", () => {
       ...extra,
     ]);
     const id = result.stdout.trim();
-    if (/^ns:[a-z0-9]+$/.test(id)) {
-      hosts.push(id.slice("ns:".length));
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
+      hosts.push(id.split(":").at(-1) ?? "");
     }
     return result;
   };
@@ -133,7 +133,7 @@ describe("Namespace Provider", () => {
     ]);
     // Then
     expect(created.exitCode).toBe(0);
-    expect(created.stdout).toMatch(/^ns:[a-z0-9]+\n$/);
+    expect(created.stdout).toMatch(/^ns:[a-z0-9]+:[a-z0-9]+\n$/);
     expect(dimensions.stdout).toContain("1440x900 pixels");
     expect(chromium.stdout).toMatch(/^Chromium \d+\./);
   });
@@ -235,7 +235,7 @@ describe("Namespace Provider", () => {
     const env = makeEnv({ docker: true, namespace: true });
     // When
     const created = await create(env);
-    const host = created.stdout.trim().slice("ns:".length);
+    const host = created.stdout.trim().split(":").at(-1) ?? "";
     // Then
     const entry = (await liveList()).find((item) => item.cluster_id === host);
     const shape = (entry?.shape ?? {}) as Record<string, unknown>;
@@ -250,7 +250,7 @@ describe("Namespace Provider", () => {
     const env = makeEnv({ docker: true, namespace: true });
     // When
     const created = await create(env, ["--size", "8x16"]);
-    const host = created.stdout.trim().slice("ns:".length);
+    const host = created.stdout.trim().split(":").at(-1) ?? "";
     // Then
     const entry = (await liveList()).find((item) => item.cluster_id === host);
     const shape = (entry?.shape ?? {}) as Record<string, unknown>;
@@ -314,9 +314,9 @@ describe("Namespace Provider", () => {
     const env = makeEnv({ docker: true, namespace: true });
     const created = await create(env, ["--idle", "2m"]);
     const id = created.stdout.trim();
-    const host = id.slice("ns:".length);
+    const host = id.split(":").at(-1) ?? "";
     const start = Date.now();
-    const pidPath = join(env.runtime, `ns-${host}.pid`);
+    const pidPath = join(env.runtime, `ns-${id.slice("ns:".length)}.pid`);
     expect(await waitUntil(async () => existsSync(pidPath), 30_000)).toBe(true);
     const pid = Number(readFileSync(pidPath, "utf8").trim());
     process.kill(pid, "SIGKILL");
@@ -337,7 +337,7 @@ describe("Namespace Provider", () => {
     const env = makeEnv({ docker: true, namespace: true });
     const created = await create(env, ["--idle", "1m", "--max-life", "3m"]);
     const id = created.stdout.trim();
-    const host = id.slice("ns:".length);
+    const host = id.split(":").at(-1) ?? "";
     const start = Date.now();
     // When: an exec every 30 s until 150 s — past the first 120 s duration
     let at150 = { exitCode: -1, stderr: "" };
@@ -421,7 +421,8 @@ describe("Namespace Provider", () => {
     const env = makeEnv({ docker: true, namespace: true });
     const created = await create(env);
     const id = created.stdout.trim();
-    const host = id.slice("ns:".length);
+    const host = id.split(":").at(-1) ?? "";
+    const stem = id.slice("ns:".length);
     const child = spawn(
       process.execPath,
       ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
@@ -445,8 +446,8 @@ describe("Namespace Provider", () => {
       });
       // When
       const entry = (await liveList()).find((item) => item.cluster_id === host);
-      const ctl = join(env.runtime, `ns-${host}.ctl`);
-      const key = join(env.runtime, `ns-${host}.key`);
+      const ctl = join(env.runtime, `ns-${stem}.ctl`);
+      const key = join(env.runtime, `ns-${stem}.sshkey`);
       expect(await waitUntil(async () => existsSync(ctl), 30_000)).toBe(true);
       const ip = await new Promise<string>((resolve, reject) => {
         execFile(
