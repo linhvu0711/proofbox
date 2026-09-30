@@ -35,11 +35,14 @@ export type ApiError =
   | TokenRejectedError
   | TokenPermissionError;
 
-// One Namespace instance as `list` reports it: its id and its labels as a
-// name → value record.
+// One Namespace instance as `list` reports it: its id, its labels as a
+// name → value record, and the continent it runs on — every endpoint's
+// list is global, so the continent, not the queried region, names where
+// the instance lives.
 export interface InstanceListed {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
+  readonly region?: string | undefined;
 }
 
 export interface LabelEntry {
@@ -264,6 +267,10 @@ export const makeNamespaceApi = (deps: {
             labels: Object.fromEntries(
               instance.labels.map((label) => [label.name, label.value]),
             ),
+            region:
+              instance.hwDeployment?.geoContinent === ""
+                ? undefined
+                : instance.hwDeployment?.geoContinent,
           });
         }
         if (page.paginationCursor.length === 0) {

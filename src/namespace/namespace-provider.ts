@@ -373,10 +373,32 @@ export const makeNamespaceProvider = (deps: {
       const first = failures[0];
       return yield* first ?? fail("no Namespace region could be reached");
     }
+    // Every endpoint's list is global: one host comes back once per
+    // region asked. Keep one entry per instance, labeled with the
+    // continent the instance reports, or the queried region when it
+    // reports none.
+    const byId = new Map<
+      string,
+      {
+        os: "linux" | "macos";
+        region: string;
+        instance: (typeof hosts)[number]["instance"];
+      }
+    >();
+    for (const host of hosts) {
+      if (!byId.has(host.instance.id)) {
+        byId.set(host.instance.id, {
+          os: host.os,
+          region: host.instance.region ?? host.region,
+          instance: host.instance,
+        });
+      }
+    }
+    const live = [...byId.values()];
     // Hosts can expire without a delete; their keypair and Max-life cap
     // stay in the runtime dir, so drop the files of any host that is gone.
     const alive = new Set(
-      hosts.map((host) => hostName(host.region, host.instance.id)),
+      live.map((host) => hostName(host.region, host.instance.id)),
     );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
@@ -420,7 +442,7 @@ export const makeNamespaceProvider = (deps: {
       ).then(() => {});
     });
     const infos = yield* Effect.forEach(
-      hosts,
+      live,
       ({ os, region, instance }) =>
         getAs(os, hostName(region, instance.id)).pipe(
           Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
