@@ -7,7 +7,7 @@ import { loginFor } from "./login/provider-login.ts";
 import { makeNamespaceApi } from "./namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "./namespace/namespace-provider.ts";
 import { makeNscClient } from "./namespace/nsc-client.ts";
-import { makeOpenLink } from "./namespace/ssh-link.ts";
+import { makeOpenLink, makeSshForward } from "./namespace/ssh-link.ts";
 import { type Provider, Providers } from "./provider.ts";
 import { spawnDetached } from "./spawn-detached.ts";
 
@@ -27,6 +27,7 @@ export const ProvidersLive = Layer.effect(
           login: namespaceLogin,
           nsc,
           openLink: makeOpenLink(namespaceApi, executor),
+          forward: makeSshForward(namespaceApi, executor),
           dockerFor: (link) => makeDockerClient(executor, { ssh: link.ssh }),
           spawnDetached,
         }),

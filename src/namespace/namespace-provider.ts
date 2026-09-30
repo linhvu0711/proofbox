@@ -75,7 +75,7 @@ import {
   snapshotRef,
   snapshotTag,
 } from "./snapshot-image.ts";
-import type { Link, OpenLink } from "./ssh-link.ts";
+import type { Link, OpenLink, SshForward } from "./ssh-link.ts";
 
 const LINUX_SIZES: ReadonlyArray<Size> = [
   { cpu: 4, ramGb: 8 },
@@ -110,6 +110,7 @@ export const makeNamespaceProvider = (deps: {
   readonly login: ProviderLogin;
   readonly nsc: NscClient;
   readonly openLink: OpenLink;
+  readonly forward: SshForward;
   readonly dockerFor: (link: Link) => DockerClient;
   readonly spawnDetached: (
     provider: string,
@@ -119,6 +120,7 @@ export const makeNamespaceProvider = (deps: {
 }): Provider => {
   const nsc = deps.nsc;
   const api = deps.api;
+  const forward = deps.forward;
   const fail = (reason: string) =>
     new ProviderError({ provider: "namespace", reason });
   const gone = (name: string) => new SandboxGoneError({ id: `ns:${name}` });
@@ -731,8 +733,9 @@ export const makeNamespaceProvider = (deps: {
           registry: true,
           memoryReserveGb: MEMORY_RESERVE_GB,
           // Publish the VNC port for the Live view; the host has only a
-          // private address, and nsc forwards onto that address, so the
-          // publish must cover it — loopback binds are unreachable.
+          // private address, and the SSH gateway forwards onto that
+          // address, so the publish must cover it — loopback binds are
+          // unreachable.
           runArgs: [
             "-p",
             "5900:5900",
@@ -889,11 +892,11 @@ export const makeNamespaceProvider = (deps: {
             )
             .pipe(Effect.ignore),
         );
-        const forward = yield* nsc.portForward(name, 5900);
+        const live = yield* forward(name, 5900);
         return {
-          address: `127.0.0.1:${forward.port}`,
+          address: `127.0.0.1:${live.port}`,
           password,
-          gone: forward.gone,
+          gone: live.gone,
         };
       }
       const link = yield* openLink(name, "cli");
@@ -959,11 +962,11 @@ export const makeNamespaceProvider = (deps: {
           ])
           .pipe(Effect.ignore),
       );
-      const forward = yield* nsc.portForward(name, 5900);
+      const live = yield* forward(name, 5900);
       return {
-        address: `127.0.0.1:${forward.port}`,
+        address: `127.0.0.1:${live.port}`,
         password,
-        gone: forward.gone,
+        gone: live.gone,
       };
     });
 

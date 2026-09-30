@@ -75,7 +75,6 @@ const fakeApi = (
 const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
   ensureImageExpiry: (image, hours) =>
     Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
-  portForward: () => Effect.die("unused"),
 });
 
 const fakeDocker = (options: {
@@ -256,6 +255,7 @@ const makeProvider = (
         stream: () => Stream.empty,
         run,
       }),
+    forward: () => Effect.die("unused"),
     dockerFor: () => docker,
     spawnDetached: () => Effect.void,
   });
@@ -283,6 +283,7 @@ describe("Namespace Provider", () => {
           login: Effect.die("unused"),
           nsc: fakeNsc(yield* Ref.make<ReadonlyArray<string>>([])),
           openLink: () => Effect.succeed(link),
+          forward: () => Effect.die("unused"),
           dockerFor: () => {
             throw new Error("unused");
           },

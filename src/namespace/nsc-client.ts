@@ -2,16 +2,7 @@ import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
-import {
-  Chunk,
-  Config,
-  Deferred,
-  Effect,
-  Redacted,
-  Ref,
-  type Scope,
-  Stream,
-} from "effect";
+import { Chunk, Config, Effect, Redacted, Stream } from "effect";
 import {
   type BadLoginsFileError,
   type LoginExpiredError,
@@ -22,7 +13,6 @@ import {
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import type { ProviderLogin } from "../provider.ts";
-import { splitHostName } from "./regions.ts";
 
 export interface NscExecResult {
   readonly exitCode: number;
@@ -30,8 +20,8 @@ export interface NscExecResult {
   readonly stderr: string;
 }
 
-// nsc still runs the Live-view port-forward and the Snapshot expiry;
-// everything else moved to the Compute API.
+// nsc still runs the Snapshot expiry; everything else moved to the
+// Compute API and the GetSSHConfig gateway.
 export type NscError =
   | BadLoginsFileError
   | LoginExpiredError
@@ -46,17 +36,6 @@ export interface NscClient {
     image: string,
     hours: number,
   ) => Effect.Effect<void, NscError>;
-  // Scoped: the forwarded port lives until the scope closes. `gone` resolves
-  // with the forward's failure if the process exits after its port is up.
-  // `name` is the full host name, `<region>:<instanceId>`.
-  readonly portForward: (
-    name: string,
-    port: number,
-  ) => Effect.Effect<
-    { readonly port: number; readonly gone: Effect.Effect<never, NscError> },
-    NscError,
-    Scope.Scope
-  >;
 }
 
 const describe = (cause: unknown) =>
@@ -195,78 +174,7 @@ export const makeNscClient = (
       }
     });
 
-  const portForward = (name: string, port: number) =>
-    Effect.gen(function* () {
-      const { region, instanceId } = splitHostName(name);
-      const process = yield* Effect.acquireRelease(
-        Command.start(
-          yield* nsc([
-            "--region",
-            region,
-            "instance",
-            "port-forward",
-            instanceId,
-            "--target_port",
-            String(port),
-          ]),
-        ).pipe(
-          Effect.provideService(CommandExecutor.CommandExecutor, executor),
-          Effect.mapError((error) => spawnError(error)),
-        ),
-        (process) =>
-          Effect.orElseSucceed(process.kill("SIGKILL"), () => undefined),
-      );
-      const stderr = yield* Ref.make("");
-      const stderrDone = yield* Deferred.make<void>();
-      const listening = yield* Deferred.make<number>();
-      // Keep both stdout and stderr open for the life of the process:
-      // ending a read early lets the next nsc log line hit a closed pipe
-      // and kills the forward.
-      yield* Stream.runForEach(process.stderr, (bytes) =>
-        Ref.update(
-          stderr,
-          (text) => text + Buffer.from(bytes).toString("utf8"),
-        ),
-      ).pipe(
-        Effect.ensuring(Deferred.complete(stderrDone, Effect.void)),
-        Effect.forkScoped,
-      );
-      yield* process.stdout.pipe(
-        Stream.decodeText(),
-        Stream.splitLines,
-        Stream.runForEach((line) => {
-          const match = /Listening on 127\.0\.0\.1:(\d+)/.exec(line);
-          return match === null
-            ? Effect.void
-            : Deferred.complete(listening, Effect.succeed(Number(match[1])));
-        }),
-        Effect.forkScoped,
-      );
-      const gone = process.exitCode.pipe(
-        Effect.orElseSucceed(() => 1),
-        // The stderr drain can lag the exit by a beat; give it a moment so a
-        // "was destroyed" line still maps to SandboxGoneError.
-        Effect.zipRight(
-          Deferred.await(stderrDone).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          ),
-        ),
-        Effect.zipRight(Ref.get(stderr)),
-        Effect.flatMap((text) =>
-          mapExit("port-forward", name, {
-            exitCode: 1,
-            stdout: "",
-            stderr: text,
-          }),
-        ),
-      );
-      const bound = yield* Effect.raceFirst(Deferred.await(listening), gone);
-      return { port: bound, gone };
-    });
-
   return {
     ensureImageExpiry,
-    portForward,
   };
 };

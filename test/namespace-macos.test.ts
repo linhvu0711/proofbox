@@ -22,7 +22,11 @@ import type {
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { NscClient } from "../src/namespace/nsc-client.ts";
-import type { HostResult, Link } from "../src/namespace/ssh-link.ts";
+import type {
+  HostResult,
+  Link,
+  SshForward,
+} from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
@@ -42,8 +46,8 @@ const makeMac = (
   answer: (line: string) => Answer | undefined = () => undefined,
   // Runs as the Link runs a line, e.g. to let a step take time.
   during: (line: string) => Effect.Effect<void> = () => Effect.void,
-  // The nsc port-forward a Mac Live view asks for; `calls` still notes it.
-  portForward: NscClient["portForward"] = () => Effect.die("unused"),
+  // The ssh forward a Mac Live view asks for; `calls` still notes it.
+  portForward: SshForward = () => Effect.die("unused"),
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -71,10 +75,6 @@ const makeMac = (
     };
     const nsc: NscClient = {
       ensureImageExpiry: () => Effect.void,
-      portForward: (id, port) =>
-        note(calls, `portForward ${id} ${port}`).pipe(
-          Effect.zipRight(portForward(id, port)),
-        ),
     };
     const reply = (line: string) => {
       const found = answer(line) ?? defaultAnswer(line) ?? {};
@@ -128,6 +128,10 @@ const makeMac = (
       }),
       nsc,
       openLink: () => Effect.succeed(link),
+      forward: (id, port) =>
+        note(calls, `portForward ${id} ${port}`).pipe(
+          Effect.zipRight(portForward(id, port)),
+        ),
       dockerFor: () => {
         throw new Error("a Mac has no Docker");
       },
