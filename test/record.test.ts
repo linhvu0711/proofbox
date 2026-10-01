@@ -11,7 +11,12 @@ import { CaptureBlockedError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type Provider,
+  type ProviderEntry,
+  Providers,
+  providerEntry,
+} from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const PNG_HEAD = new Uint8Array([
@@ -65,7 +70,7 @@ const blockedMac = (root: string, blocked: string): Provider => {
 const layers = (mac: Provider) => {
   const providers = Layer.succeed(
     Providers,
-    new Map<string, Provider>([["fake", mac]]),
+    new Map<string, ProviderEntry>([["fake", providerEntry(mac)]]),
   );
   return Layer.mergeAll(
     NodeContext.layer,

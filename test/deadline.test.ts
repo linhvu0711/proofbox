@@ -27,7 +27,11 @@ import { idleDefault, nextDeadline, parseSpan } from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type ProviderEntry,
+  Providers,
+  providerEntry,
+} from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const tempRoots: string[] = [];
@@ -36,8 +40,8 @@ const makeProviders = () => {
   tempRoots.push(root);
   return Layer.succeed(
     Providers,
-    new Map<string, Provider>([
-      ["fake", makeFakeProvider({ root, watch: "none" })],
+    new Map<string, ProviderEntry>([
+      ["fake", providerEntry(makeFakeProvider({ root, watch: "none" }))],
     ]),
   );
 };
@@ -66,9 +70,9 @@ const sandboxName = Effect.gen(function* () {
   return Chunk.toReadonlyArray(out).join("").trim().replace("fake:", "");
 });
 
-const fake = Effect.map(
+const fake = Effect.flatMap(
   Providers,
-  (providers) => providers.get("fake") as Provider,
+  (providers) => (providers.get("fake") as ProviderEntry).load,
 );
 
 describe("Deadline", () => {

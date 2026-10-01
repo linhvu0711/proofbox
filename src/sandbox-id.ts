@@ -3,10 +3,11 @@ import { Effect } from "effect";
 import {
   BadSandboxIdError,
   NoRegionError,
+  type ProviderError,
   UnknownProviderError,
   UnknownRegionError,
 } from "./errors.ts";
-import type { Provider, SandboxRef } from "./provider.ts";
+import type { Provider, ProviderEntry, SandboxRef } from "./provider.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -66,24 +67,29 @@ export interface ResolvedSandboxId extends SandboxRef {
 
 export const resolveSandboxId = (
   raw: string,
-  providers: ReadonlyMap<string, Provider>,
+  providers: ReadonlyMap<string, ProviderEntry>,
 ): Effect.Effect<
   ResolvedSandboxId,
-  BadSandboxIdError | NoRegionError | UnknownProviderError | UnknownRegionError
+  | BadSandboxIdError
+  | NoRegionError
+  | ProviderError
+  | UnknownProviderError
+  | UnknownRegionError
 > =>
   Effect.gen(function* () {
     const parsed = yield* parseSandboxId(
       raw,
-      [...providers.values()].map((provider) => provider.idPrefix),
+      [...providers.values()].map((entry) => entry.idPrefix),
     );
-    const provider = [...providers.values()].find(
+    const entry = [...providers.values()].find(
       (candidate) => candidate.idPrefix === parsed.provider,
     );
-    if (provider === undefined) {
+    if (entry === undefined) {
       return yield* Effect.die(
         new Error(`prefix ${parsed.provider} parsed but maps to no Provider`),
       );
     }
+    const provider = yield* entry.load;
     if (provider.regions === undefined) {
       if (parsed.region !== undefined) {
         return yield* new BadSandboxIdError({ id: raw });

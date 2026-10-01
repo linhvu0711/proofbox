@@ -34,8 +34,9 @@ import {
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { changeLogins } from "../src/login/logins-file.ts";
 import {
-  type Provider,
+  type ProviderEntry,
   Providers,
+  providerEntry,
   type TokenRequest,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
@@ -1170,16 +1171,16 @@ describe("auth", () => {
         const release = yield* Deferred.make<void>();
         const providers = Layer.succeed(
           Providers,
-          new Map<string, Provider>([
+          new Map<string, ProviderEntry>([
             [
               "fake",
-              {
+              providerEntry({
                 ...makeFakeProvider({ root, watch: "none" }),
                 list: Deferred.succeed(listing, undefined).pipe(
                   Effect.zipRight(Deferred.await(release)),
                   Effect.as({ infos: [], unreached: [] }),
                 ),
-              },
+              }),
             ],
           ]),
         );
@@ -1587,10 +1588,10 @@ describe("auth", () => {
       const waiting = yield* Deferred.make<void>();
       const providers = Layer.succeed(
         Providers,
-        new Map<string, Provider>([
+        new Map<string, ProviderEntry>([
           [
             "slow",
-            {
+            providerEntry({
               ...makeFakeProvider({ root, watch: "none" }),
               name: "slow",
               login: {
@@ -1607,7 +1608,7 @@ describe("auth", () => {
                     ),
                 },
               },
-            },
+            }),
           ],
         ]),
       );
@@ -1764,10 +1765,10 @@ describe("auth", () => {
       const requests = yield* Ref.make<ReadonlyArray<TokenRequest>>([]);
       const providers = Layer.succeed(
         Providers,
-        new Map<string, Provider>([
+        new Map<string, ProviderEntry>([
           [
             "robot",
-            {
+            providerEntry({
               ...makeFakeProvider({ root, watch: "none" }),
               name: "robot",
               login: {
@@ -1785,7 +1786,7 @@ describe("auth", () => {
                     ),
                 },
               },
-            },
+            }),
           ],
         ]),
       );
@@ -1821,10 +1822,10 @@ describe("auth", () => {
       const requests = yield* Ref.make<ReadonlyArray<TokenRequest>>([]);
       const providers = Layer.succeed(
         Providers,
-        new Map<string, Provider>([
+        new Map<string, ProviderEntry>([
           [
             "robot",
-            {
+            providerEntry({
               ...makeFakeProvider({ root, watch: "none" }),
               name: "robot",
               login: {
@@ -1842,7 +1843,7 @@ describe("auth", () => {
                     ),
                 },
               },
-            },
+            }),
           ],
         ]),
       );
