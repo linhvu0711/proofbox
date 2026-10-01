@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -15,12 +15,15 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
+import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import { execInSandbox } from "../src/commands/exec.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
   NotLoggedInError,
   ProviderLimitError,
   ProviderUnavailableError,
 } from "../src/errors.ts";
+import { keeperPaths } from "../src/keeper/paths.ts";
 import type {
   ApiError,
   ApiLoginError,
@@ -30,7 +33,9 @@ import type {
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type { Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
+import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { eventually, startKeeper } from "./support/keeper.ts";
 
 // The Compute API, faked: each call lands in `calls` as
 // `<method> <region> <instanceId?>`; `create` answers the id below.
@@ -815,5 +820,181 @@ describe("Namespace Provider", () => {
       expect(listed).toEqual({ infos: [], unreached: [] });
       expect(yield* Ref.get(calls)).toEqual([]);
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+});
+
+const NS_ID = "ns:us:abc123def4567";
+
+const stderrEvent = (text: string): ExecEvent => ({
+  _tag: "Stderr",
+  bytes: new TextEncoder().encode(text),
+});
+
+// A Linux Namespace Sandbox (idle 15m) with its Keeper in this process.
+// The link and its Docker count each call; `execStream` answers a command
+// with the checks' start mark, a trailer, and exit 0, unless the test
+// gives its own answer. Each API call lands in `calls`, an `extend` with
+// its seconds, and each detached spawn in `spawned`.
+const warmNamespace = (
+  answer: () => Stream.Stream<ExecEvent, ProviderUnavailableError> = () =>
+    Stream.fromIterable<ExecEvent>([
+      stderrEvent(CHECKS_START),
+      stderrEvent(checksTrailer(0, 0)),
+      { _tag: "Exit", code: 0 },
+    ]),
+) =>
+  Effect.gen(function* () {
+    const counts = { run: 0, stream: 0, execStream: 0, execText: 0 };
+    const runs: Array<string> = [];
+    const spawned: Array<string> = [];
+    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const api = fakeApi(calls);
+    const base = fakeDocker({});
+    const docker: DockerClient = {
+      ...base,
+      execStream: () => {
+        counts.execStream += 1;
+        return answer();
+      },
+      execText: (container, user, argv) => {
+        counts.execText += 1;
+        return base.execText(container, user, argv);
+      },
+    };
+    const provider = makeNamespaceProvider({
+      api: {
+        ...api,
+        extend: (region, instanceId, seconds) =>
+          Ref.update(calls, (all) => [
+            ...all,
+            `extend ${region} ${instanceId} ${seconds}`,
+          ]),
+      },
+      login: Effect.succeed({
+        token: Redacted.make("token"),
+        region: Option.none(),
+      }),
+      openLink: () =>
+        Effect.succeed<Link>({
+          ssh: [],
+          stream: () => {
+            counts.stream += 1;
+            return Stream.empty;
+          },
+          run: (commandLine) => {
+            counts.run += 1;
+            runs.push(commandLine);
+            return commandLine.includes("docker inspect")
+              ? Effect.succeed(
+                  done(
+                    `${JSON.stringify({
+                      "proofbox.name": "abc123",
+                      "proofbox.os": "linux",
+                      "proofbox.created-at": "1970-01-01T00:00:00Z",
+                      "proofbox.idle-seconds": "900",
+                      "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+                    })}|true\n900\n`,
+                  ),
+                )
+              : Effect.succeed(done());
+          },
+        }),
+      forward: () => Effect.die("unused"),
+      dockerFor: () => docker,
+      spawnDetached: (_provider, rel, args) =>
+        Effect.sync(() => {
+          spawned.push(`${rel} ${args.join(" ")}`);
+        }),
+    });
+    // The Max-life cap the host push reads, as create writes it.
+    const paths = yield* keeperPaths({
+      provider: "ns",
+      name: "us:abc123def4567",
+    });
+    writeFileSync(paths.maxLife, "4102444800\n");
+    const layers = yield* startKeeper(NS_ID, provider);
+    // The gone-watch reads once as soon as the Keeper serves, then every
+    // 2 s: wait for that first read (after connect's own), so it is not
+    // counted as the command's.
+    yield* eventually(
+      Effect.sync(
+        () =>
+          runs.filter((line) => line.includes("docker inspect")).length >= 2,
+      ),
+    );
+    counts.run = 0;
+    counts.stream = 0;
+    counts.execStream = 0;
+    counts.execText = 0;
+    runs.length = 0;
+    return { counts, runs, spawned, calls, layers };
+  });
+
+describe("Namespace Provider through the Keeper", () => {
+  it.scoped("a warm exec through the Keeper makes one call over the link", () =>
+    Effect.gen(function* () {
+      // Given
+      const ns = yield* warmNamespace();
+      // When
+      const code = yield* execInSandbox(NS_ID, ["true"]).pipe(
+        Effect.zipRight(Effect.flatMap(CliOutput, (output) => output.exitCode)),
+        Effect.provide(ns.layers),
+      );
+      // Then
+      expect(code).toBe(0);
+      expect(ns.counts).toEqual({
+        run: 0,
+        stream: 0,
+        execStream: 1,
+        execText: 0,
+      });
+      expect(ns.spawned).toEqual([]);
+      const pushed = Effect.map(Ref.get(ns.calls), (all) =>
+        all.includes("extend us abc123def4567 900"),
+      );
+      yield* eventually(pushed);
+      expect(yield* pushed).toBe(true);
+    }).pipe(runtimeConfig()),
+  );
+
+  it.scoped("the Keeper and its gone-watch start no extend-main", () =>
+    Effect.gen(function* () {
+      // Given
+      const ns = yield* warmNamespace();
+      yield* execInSandbox(NS_ID, ["true"]).pipe(Effect.provide(ns.layers));
+      const before = ns.runs.length;
+      // When
+      yield* TestClock.adjust("2 seconds");
+      yield* eventually(Effect.sync(() => ns.runs.length > before));
+      // Then
+      expect(ns.spawned).toEqual([]);
+      const watched = ns.runs.slice(before);
+      expect(watched).toHaveLength(1);
+      expect(watched[0]).toContain("docker inspect");
+    }).pipe(runtimeConfig()),
+  );
+
+  it.scoped("a link that drops mid-command ends with the link message", () =>
+    Effect.gen(function* () {
+      // Given
+      const ns = yield* warmNamespace(() =>
+        Stream.fail(
+          new ProviderUnavailableError({
+            provider: "namespace",
+            reason:
+              "lost the link to the Namespace host: the ssh link dropped mid-command",
+          }),
+        ),
+      );
+      // When
+      const error = yield* execInSandbox(NS_ID, ["true"]).pipe(
+        Effect.provide(ns.layers),
+        Effect.flip,
+      );
+      // Then
+      expect(error.message).toBe(
+        "Provider namespace failed: lost the link to the Namespace host: the ssh link dropped mid-command",
+      );
+    }).pipe(runtimeConfig()),
   );
 });

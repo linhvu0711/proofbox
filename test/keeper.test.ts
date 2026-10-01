@@ -15,10 +15,8 @@ import {
   ConfigProvider,
   Duration,
   Effect,
-  Layer,
   Ref,
   TestClock,
-  TestServices,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
@@ -26,15 +24,10 @@ import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
-import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import {
-  type Provider,
-  type ProviderEntry,
-  Providers,
-  providerEntry,
-} from "../src/provider.ts";
+import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { startKeeper } from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -62,18 +55,6 @@ const runtimeConfig = (env: { runtime: string }) =>
   Effect.withConfigProvider(
     ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", env.runtime]])),
   );
-
-const socketAnswers = (path: string) =>
-  Effect.async<boolean>((resume) => {
-    const probe = createConnection({ path }, () => {
-      probe.destroy();
-      resume(Effect.succeed(true));
-    });
-    probe.once("error", () => {
-      probe.destroy();
-      resume(Effect.succeed(false));
-    });
-  });
 
 // A fake Sandbox made at t=0 with a Keeper run in this process, and the
 // layers a command needs to reach it. The Provider counts the `get` and
@@ -119,27 +100,10 @@ const warmKeeper = (
           return fake.extend(ref, deadline);
         }),
     };
-    const providers = Layer.succeed(
-      Providers,
-      new Map<string, ProviderEntry>([["fake", providerEntry(counted)]]),
-    );
     const id = `fake:${info.name}`;
-    yield* Effect.forkScoped(
-      runKeeper(id).pipe(
-        Effect.provide(Layer.merge(providers, NodeContext.layer)),
-      ),
-    );
-    const socket = join(env.runtime, `fake-${info.name}.sock`);
-    for (let i = 0; i < 200 && !(yield* socketAnswers(socket)); i++) {
-      yield* TestServices.provideLive(Effect.sleep("20 millis"));
-    }
+    const layers = yield* startKeeper(id, counted);
     calls.get = 0;
     calls.extend = 0;
-    const layers = KeeperClient.Default.pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(CliOutput.Test, providers, NodeContext.layer),
-      ),
-    );
     const deadline = Effect.map(
       fake.get({ name: info.name, region: undefined }),
       (read) => read.deadline.toISOString(),
