@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import {
@@ -989,6 +989,36 @@ describe("auth", () => {
     expect(existsSync(tokenFile)).toBe(false);
   });
 
+  it("auth logout namespace destroys a host this machine started and drops its Max life file", async () => {
+    // Given: a saved namespace login, a host this machine made (its Max
+    // life file in the runtime dir), and a Namespace that lists it
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const maxLife = join(env.runtime, "ns-us:abc123def4567.max-life");
+    writeFileSync(maxLife, "4102444800");
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: { HOME: home, PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe("ns:us:abc123def4567\n");
+    expect(
+      ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.region),
+    ).toEqual(["us"]);
+    expect(existsSync(maxLife)).toBe(false);
+    expect(readSaved(home)).toEqual({});
+  });
+
   it("auth logout with no Sandboxes only logs out", async () => {
     // Given
     const env = makeEnv();
@@ -1019,6 +1049,26 @@ describe("auth", () => {
       "Logged out of fake. Deleted 1 Sandbox.\nCould not check fake: fake API is down\n",
     );
     expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout still removes the login when it cannot read the runtime dir", async () => {
+    // Given: the runtime dir is a regular file
+    const env = makeEnv();
+    const home = makeHome(ADA);
+    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
+    trackTempDir(dirname(file));
+    writeFileSync(file, "x");
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { HOME: home, PROOFBOX_RUNTIME_DIR: file },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stderr).toMatch(
+      /^Logged out of fake\.\nCould not check this machine's Sandboxes: .+\n$/,
+    );
     expect(result.exitCode).toBe(125);
     expect(readSaved(home)).toEqual({});
   });

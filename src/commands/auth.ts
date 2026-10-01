@@ -331,10 +331,15 @@ export const logoutOfProvider = (name: string) =>
         region: ref.region,
         name: ref.name,
       });
-    const local = yield* localSandboxes(provider.idPrefix);
+    // A runtime dir it cannot read must not keep the login: the failure is
+    // named and the login still goes.
+    const scanned = yield* Effect.either(localSandboxes(provider.idPrefix));
+    const local = Either.isRight(scanned) ? scanned.right : [];
     const localIds = new Set(local.map(idOf));
     const deleted: Array<string> = [];
-    const failed: Array<string> = [];
+    const failed: Array<string> = Either.isLeft(scanned)
+      ? [`Could not check this machine's Sandboxes: ${scanned.left.reason}`]
+      : [];
     for (const ref of local) {
       const id = idOf(ref);
       // "gone" counts too: the host is already down, and delete dropped
