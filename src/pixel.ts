@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { Duration, Effect, Schema } from "effect";
 import { PACE_SPAN, parseSpan } from "./deadline.ts";
 import { OutFileError, OutsideScreenError, ProviderError } from "./errors.ts";
-import { type HelperTable, runHelper } from "./helper.ts";
+import { type HelperLimit, type HelperTable, runHelper } from "./helper.ts";
 import type { Os } from "./provider.ts";
 
 export const PIXEL_HELPER: HelperTable = {
@@ -123,10 +123,12 @@ export const runPixel = Effect.fn("pixel.runPixel")(function* (
   options: {
     readonly screenshot?: string | undefined;
     readonly points?: ReadonlyArray<readonly [number, number]>;
-  } = {},
+    readonly limit: HelperLimit;
+  },
 ) {
   const collected = yield* runHelper(rawId, PIXEL_HELPER, helperArgv, {
     outcome: "no action was taken",
+    limit: options.limit,
   });
   if (collected.code === 3) {
     const [width, height] = collected.stdout

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
@@ -64,6 +64,60 @@ describe("Pixel actions", () => {
     );
     expect(bytes.readUInt32BE(16)).toBe(1440);
     expect(bytes.readUInt32BE(20)).toBe(900);
+  });
+
+  it("a frozen screen makes screenshot give up twice with exit 125", async () => {
+    // Given: a normal screenshot first, then a frozen X server
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-shot-"));
+    const warm = await runCli(env, [
+      "screenshot",
+      id,
+      "--out",
+      join(dir, "warm.png"),
+    ]);
+    expect(warm.stderr).toBe("");
+    const container = containerOf(id);
+    await docker([
+      "exec",
+      "-u",
+      "root",
+      container,
+      "pkill",
+      "-STOP",
+      "-x",
+      "Xvfb",
+    ]);
+    const out = join(dir, "frozen.png");
+    try {
+      // When
+      const result = await runCli(env, ["screenshot", id, "--out", out], {
+        set: { PROOFBOX_ANSWER_WAIT: "3s" },
+      });
+      // Then
+      expect({
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+        written: existsSync(out),
+      }).toEqual({
+        exitCode: 125,
+        stderr: `proofbox: the screenshot did not answer in 3 s; trying once more\nSandbox ${id} did not answer the screenshot in 3 s, twice. Try again in a minute. Keeper log: ${env.runtime}/docker-${id.slice("docker:".length)}.log\n`,
+        written: false,
+      });
+    } finally {
+      await docker([
+        "exec",
+        "-u",
+        "root",
+        container,
+        "pkill",
+        "-CONT",
+        "-x",
+        "Xvfb",
+      ]);
+    }
   });
 
   it("click presses the left button at the point", async () => {

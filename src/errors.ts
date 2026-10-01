@@ -1,4 +1,5 @@
-import { Data } from "effect";
+import { Data, type Duration } from "effect";
+import { formatWait } from "./format-time.ts";
 import type { Os } from "./provider.ts";
 import { formatMb } from "./upload/max-size.ts";
 
@@ -468,6 +469,35 @@ export class LoginTimeoutError extends Data.TaggedError("LoginTimeoutError")<{
   }
   get reason() {
     return this.message;
+  }
+}
+
+// A helper call got no answer within its limit; the helper call it ran
+// under decides whether to try again (ADR 0019).
+export class AnswerTimeoutError extends Data.TaggedError("AnswerTimeoutError")<{
+  readonly after: Duration.Duration;
+}> {
+  get message() {
+    return `No answer in ${formatWait(this.after)}`;
+  }
+}
+
+export class NoAnswerError extends Data.TaggedError("NoAnswerError")<{
+  readonly id: string;
+  readonly call: string;
+  readonly wait: string;
+  // read: tried twice; act: may have happened, never tried again;
+  // download: no new bytes, tried twice.
+  readonly kind: "read" | "act" | "download";
+  readonly log: string;
+}> {
+  get message() {
+    if (this.kind === "act") {
+      return `Sandbox ${this.id} did not answer the ${this.call} in ${this.wait}. The ${this.call} may have happened; take a screenshot to check before you try again. Keeper log: ${this.log}`;
+    }
+    return this.kind === "read"
+      ? `Sandbox ${this.id} did not answer the ${this.call} in ${this.wait}, twice. Try again in a minute. Keeper log: ${this.log}`
+      : `Sandbox ${this.id} sent no bytes of the ${this.call} for ${this.wait}, twice. Try again in a minute. Keeper log: ${this.log}`;
   }
 }
 

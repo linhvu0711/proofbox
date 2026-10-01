@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { BadMarkError, NoRecordingError, ProviderError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
 import { RECORD_HELPER } from "./record.ts";
@@ -22,7 +22,10 @@ export const setMark = Effect.fn("mark.setMark")(function* (options: {
     options.wait
       ? ["wait", JSON.stringify(options.label)]
       : ["mark", options.label],
-    { outcome: options.wait ? "no Wait mark was set" : "no Step mark was set" },
+    {
+      outcome: options.wait ? "no Wait mark was set" : "no Step mark was set",
+      limit: { _tag: "Act", name: "mark", extra: Duration.zero },
+    },
   );
   if (marked.code === 5) {
     return yield* new NoRecordingError({ id: options.id });

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
 
 export const typeText = Effect.fn("type.typeText")(function* (options: {
@@ -16,6 +16,9 @@ export const typeText = Effect.fn("type.typeText")(function* (options: {
   yield* runPixel(
     options.id,
     ["type", String(pace.letterMs), String(pace.settleMs), shot, options.text],
-    { screenshot: options.screenshot },
+    {
+      screenshot: options.screenshot,
+      limit: { _tag: "Act", name: "type", extra: Duration.zero },
+    },
   );
 }, Effect.scoped);

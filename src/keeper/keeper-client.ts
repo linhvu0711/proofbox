@@ -2,10 +2,20 @@ import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { promisify } from "node:util";
-import { Effect, Layer, Option, Ref, Schedule, Stream } from "effect";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Stream,
+} from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withRunningPush } from "../deadline.ts";
 import {
+  AnswerTimeoutError,
   ProviderError,
   SandboxGoneError,
   type UploadFailedError,
@@ -42,14 +52,66 @@ const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 // narrowed back to ProviderError.
 type StdinError = ProviderError | UploadFailedError | WorkFileGrewError;
 
+// How long a command may go without its answer: the whole call, or the
+// gap between two events (a download that keeps moving never fails).
+export type AnswerLimit =
+  | { readonly whole: Duration.Duration }
+  | { readonly idle: Duration.Duration };
+
 export interface KeeperExecOptions {
   readonly stdin?: Stream.Stream<Uint8Array, StdinError>;
+  readonly limit?: AnswerLimit;
 }
 
 export type KeeperExecError =
   | SandboxCallError
   | UploadFailedError
-  | WorkFileGrewError;
+  | WorkFileGrewError
+  | AnswerTimeoutError;
+
+// Fails the events with AnswerTimeoutError once the limit passes with no
+// answer, after `giveUp` tells the other end. With no limit the events
+// run as they are: `exec` has none (ADR 0019).
+const withAnswerLimit = <A, E, R>(
+  events: Stream.Stream<A, E, R>,
+  limit: AnswerLimit | undefined,
+  giveUp: Effect.Effect<void>,
+): Stream.Stream<A, E | AnswerTimeoutError, R> => {
+  if (limit === undefined) {
+    return events;
+  }
+  return Stream.unwrapScoped(
+    Effect.gen(function* () {
+      const last = yield* Ref.make(yield* Clock.currentTimeMillis);
+      const watch =
+        "whole" in limit
+          ? Effect.sleep(limit.whole)
+          : Effect.gen(function* () {
+              const idle = Duration.toMillis(limit.idle);
+              while (true) {
+                const quiet =
+                  (yield* Clock.currentTimeMillis) - (yield* Ref.get(last));
+                if (quiet >= idle) {
+                  return;
+                }
+                yield* Effect.sleep(Duration.millis(idle - quiet));
+              }
+            });
+      const after = "whole" in limit ? limit.whole : limit.idle;
+      return events.pipe(
+        Stream.tap(() =>
+          Effect.flatMap(Clock.currentTimeMillis, (now) => Ref.set(last, now)),
+        ),
+        Stream.interruptWhen(
+          watch.pipe(
+            Effect.zipRight(giveUp),
+            Effect.zipRight(Effect.fail(new AnswerTimeoutError({ after }))),
+          ),
+        ),
+      );
+    }),
+  );
+};
 
 const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
   options?.stdin === undefined
@@ -98,7 +160,7 @@ const execDirect = Effect.fn("keeperClient.execDirect")(function* (
       ),
     ),
   );
-  return events;
+  return withAnswerLimit(events, options?.limit, Effect.void);
 });
 
 export class KeeperClient extends Effect.Service<KeeperClient>()(
@@ -351,7 +413,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             ),
           ),
         );
-        return events;
+        return withAnswerLimit(events, options?.limit, Effect.void);
       });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {

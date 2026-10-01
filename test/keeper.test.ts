@@ -753,7 +753,10 @@ describe("Keeper", () => {
           keeper.id,
           { feature: "desktop", paths: { linux: "echo" } },
           ["clicked"],
-          { outcome: "click" },
+          {
+            outcome: "click",
+            limit: { _tag: "Act", name: "click", extra: Duration.zero },
+          },
         ).pipe(Effect.provide(keeper.layers));
         // Then
         expect(result.stdout.toString("utf8")).toBe("clicked\n");

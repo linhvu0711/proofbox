@@ -1,4 +1,4 @@
-import { Effect, Schema, Stream } from "effect";
+import { Duration, Effect, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   CaptureBlockedError,
@@ -8,7 +8,12 @@ import {
   RecordingRunningError,
   StopFlagsError,
 } from "../errors.ts";
-import { fetchHelper, type HelperTable, runHelper } from "../helper.ts";
+import {
+  fetchHelper,
+  type HelperLimit,
+  type HelperTable,
+  runHelper,
+} from "../helper.ts";
 import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
@@ -27,6 +32,15 @@ const CAPTION_FONTS: Readonly<Record<Os, string>> = {
 };
 
 const PROOF_WIDTH = 1440;
+
+// Every call `record stop` makes, from the stop to the build, is one
+// `record stop` to the Caller: it changes something, so it is never
+// tried again (ADR 0019).
+const STOP_LIMIT: HelperLimit = {
+  _tag: "Act",
+  name: "record stop",
+  extra: Duration.zero,
+};
 
 const StoppedRecording = Schema.Struct({
   dir: Schema.String,
@@ -49,6 +63,7 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
 ) {
   const started = yield* runHelper(id, RECORD_HELPER, ["start"], {
     outcome: "no Recording was started",
+    limit: { _tag: "Act", name: "record start", extra: Duration.zero },
   });
   if (started.code === 4) {
     return yield* new RecordingRunningError({ id });
@@ -85,6 +100,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       });
     const stopped = yield* runHelper(options.id, RECORD_HELPER, ["stop"], {
       outcome: "no Recording was stopped",
+      limit: STOP_LIMIT,
     });
     if (stopped.code === 5) {
       return yield* new NoRecordingError({ id: options.id });
@@ -134,7 +150,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         options.id,
         RECORD_HELPER,
         ["probe", info.dir],
-        { outcome: "no Proof video was made" },
+        { outcome: "no Proof video was made", limit: STOP_LIMIT },
       );
       if (probed.code !== 0) {
         return yield* helperFailed(probed);
@@ -146,7 +162,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           options.id,
           RECORD_HELPER,
           ["probe", info.dir, String(Math.max(probe.duration / 4, 0.1))],
-          { outcome: "no Proof video was made" },
+          { outcome: "no Proof video was made", limit: STOP_LIMIT },
         );
         if (again.code !== 0) {
           return yield* helperFailed(again);
@@ -163,7 +179,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         options.id,
         RECORD_HELPER,
         ["fetch", ACTION_LOG_PATHS[stopped.os]],
-        { outcome: "no Proof video was made" },
+        {
+          outcome: "no Proof video was made",
+          limit: { _tag: "Download", name: "Action log" },
+        },
       );
       if (actionLog.code !== 0) {
         return yield* helperFailed(actionLog);
@@ -242,6 +261,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           {
             outcome: "no Proof video was made",
             stdin: Stream.make(new TextEncoder().encode(script)),
+            limit: STOP_LIMIT,
           },
         );
         if (built.code !== 0) {

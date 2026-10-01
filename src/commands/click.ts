@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
 
 const BUTTONS = { left: "1", middle: "2", right: "3" } as const;
@@ -28,6 +28,10 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    { screenshot: options.screenshot, points: [[options.x, options.y]] },
+    {
+      screenshot: options.screenshot,
+      points: [[options.x, options.y]],
+      limit: { _tag: "Act", name: "click", extra: Duration.zero },
+    },
   );
 }, Effect.scoped);

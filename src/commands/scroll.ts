@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { BadStepsError } from "../errors.ts";
 import { resolvePace, runPixel } from "../pixel.ts";
 
@@ -34,6 +34,10 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    { screenshot: options.screenshot, points: [[options.x, options.y]] },
+    {
+      screenshot: options.screenshot,
+      points: [[options.x, options.y]],
+      limit: { _tag: "Act", name: "scroll", extra: Duration.zero },
+    },
   );
 }, Effect.scoped);
