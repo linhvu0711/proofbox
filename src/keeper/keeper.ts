@@ -7,12 +7,22 @@ import {
   type Socket,
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
-import { Effect, Fiber, Mailbox, Runtime, Schedule, Stream } from "effect";
+import {
+  Clock,
+  Effect,
+  Exit,
+  Fiber,
+  Mailbox,
+  Runtime,
+  Schedule,
+  Stream,
+} from "effect";
 import { withRunningPush } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
+import { programOf, writeKeeperLog } from "./keeper-log.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
 import { withStartLock } from "./start-lock.ts";
@@ -52,6 +62,15 @@ const frameOf = (event: ExecEvent) => {
   }
 };
 
+// The client wraps the text in its own ProviderError, so a ProviderError
+// sends only its reason.
+const failText = (error: unknown) =>
+  error instanceof ProviderError
+    ? error.reason
+    : error instanceof Error
+      ? error.message
+      : String(error);
+
 export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   rawId: string,
 ) {
@@ -84,36 +103,83 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         // it, and with it the ssh or docker exec and the Deadline push.
         let running: Fiber.RuntimeFiber<void> | undefined;
         let execEnded = false;
-        const endExec = () => {
+        // How an ended command ended, for the Keeper log: set only when the
+        // Caller ends it.
+        let ending: "gave up" | "Caller left" | undefined;
+        const endExec = (why: "gave up" | "Caller left") => {
           if (running !== undefined && !execEnded) {
+            ending = why;
             void Runtime.runPromiseExit(runtime)(Fiber.interrupt(running));
           }
         };
 
-        const runExec = (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-          withRunningPush(connection)(connection.exec(argv, options))
-            .pipe(
-              Stream.runForEach((event) => writeFrame(socket, frameOf(event))),
-            )
-            .pipe(
+        const runExec = (
+          argv: ReadonlyArray<string>,
+          options?: ExecOptions,
+        ) => {
+          const tally = {
+            out: 0,
+            err: 0,
+            exit: undefined as number | undefined,
+          };
+          let logged = false;
+          const log = (start: number, ended: string) =>
+            Effect.flatMap(Clock.currentTimeMillis, (now) => {
+              if (logged) {
+                return Effect.void;
+              }
+              logged = true;
+              return writeKeeperLog(paths.log, {
+                at: new Date(now),
+                kind: "exec",
+                program: programOf(argv),
+                ...tally,
+                tookMs: now - start,
+                ended,
+              });
+            });
+          return Effect.flatMap(Clock.currentTimeMillis, (start) =>
+            withRunningPush(connection)(connection.exec(argv, options)).pipe(
+              Stream.runForEach((event) => {
+                if (event._tag !== "Exit") {
+                  if (event._tag === "Stdout") {
+                    tally.out += event.bytes.length;
+                  } else {
+                    tally.err += event.bytes.length;
+                  }
+                  return writeFrame(socket, frameOf(event));
+                }
+                // The Caller may close as soon as it reads the exit, so the
+                // command counts as ended, and is logged, before it goes.
+                tally.exit = event.code;
+                execEnded = true;
+                return log(start, "done").pipe(
+                  Effect.zipRight(writeFrame(socket, frameOf(event))),
+                );
+              }),
+              Effect.as("done"),
               Effect.catchAll((error) =>
                 writeFrame(
                   socket,
                   error instanceof SandboxGoneError
                     ? { gone: error.id }
-                    : {
-                        // The client wraps the text in its own
-                        // ProviderError, so a ProviderError sends only
-                        // its reason.
-                        fail:
-                          error instanceof ProviderError
-                            ? error.reason
-                            : error instanceof Error
-                              ? error.message
-                              : String(error),
-                      },
-                ).pipe(Effect.orElseSucceed(() => undefined)),
+                    : { fail: failText(error) },
+                ).pipe(
+                  Effect.orElseSucceed(() => undefined),
+                  Effect.as(
+                    error instanceof SandboxGoneError
+                      ? "gone"
+                      : `error: ${failText(error)}`,
+                  ),
+                ),
               ),
+              Effect.onExit((exit) =>
+                log(
+                  start,
+                  ending ?? (Exit.isSuccess(exit) ? exit.value : "Caller left"),
+                ),
+              ),
+              Effect.asVoid,
               Effect.ensuring(
                 Effect.sync(() => {
                   execEnded = true;
@@ -135,7 +201,9 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                   }
                 }),
               ),
-            );
+            ),
+          );
+        };
 
         const failInput = (reason: string) =>
           mailbox === undefined || inputEnded
@@ -158,6 +226,17 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               mode = "plain";
               closeSocket = true;
               yield* writeFrame(socket, encodeReply({ info: connection.info }));
+              const now = yield* Clock.currentTimeMillis;
+              yield* writeKeeperLog(paths.log, {
+                at: new Date(now),
+                kind: "info",
+                program: "-",
+                out: 0,
+                err: 0,
+                exit: undefined,
+                tookMs: 0,
+                ended: "done",
+              });
             } else if (request.stdin === true) {
               mode = "stdin";
               mailbox = yield* Mailbox.make<Uint8Array, ProviderError>(16);
@@ -180,7 +259,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               Effect.try(() => decodeInput(JSON.parse(line))),
             );
             if (frame._tag === "Some" && "giveUp" in frame.value) {
-              endExec();
+              endExec("gave up");
             }
           } else if (mode === "stdin" && mailbox !== undefined && !inputEnded) {
             const frame = yield* Effect.try({
@@ -192,7 +271,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                 }),
             });
             if ("giveUp" in frame) {
-              endExec();
+              endExec("gave up");
             } else if ("in" in frame) {
               if (!execDone) {
                 yield* mailbox.offer(
@@ -256,7 +335,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         });
 
         socket.once("close", () => {
-          endExec();
+          endExec("Caller left");
           if (mailbox !== undefined && !inputEnded) {
             inputEnded = true;
             void Runtime.runPromiseExit(runtime)(

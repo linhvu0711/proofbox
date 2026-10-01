@@ -835,6 +835,69 @@ describe("Keeper", () => {
       expect(yield* running(`sleep ${nap}`)).toBe(false);
     }).pipe(runtimeConfig(env));
   });
+  it.scoped("the Keeper writes one log line per request", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given
+      const keeper = yield* warmKeeper(env);
+      yield* TestClock.adjust("10 minutes");
+      // When
+      yield* execInSandbox(keeper.id, ["echo", "hi"]).pipe(
+        Effect.provide(keeper.layers),
+      );
+      // Then
+      expect(
+        readFileSync(join(env.runtime, `fake-${keeper.name}.log`), "utf8"),
+      ).toBe(
+        "1970-01-01T00:10:00Z info - out=0 err=0 exit=- took=0.0s done\n1970-01-01T00:10:00Z exec sh out=3 err=0 exit=0 took=0.0s done\n",
+      );
+    }).pipe(runtimeConfig(env));
+  });
+
+  it("the Keeper log never holds exec arguments", async () => {
+    // Given
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    // When
+    await runCli(env, ["exec", id, "--", "echo", "tok-3141"]);
+    // Then
+    const log = readFileSync(join(env.runtime, `fake-${name}.log`), "utf8");
+    expect(log.includes("tok-3141")).toBe(false);
+  });
+
+  it("the Keeper log stays after delete", async () => {
+    // Given
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    await runCli(env, ["exec", id, "--", "true"]);
+    // When
+    await runCli(env, ["delete", id]);
+    // Then
+    expect(existsSync(join(env.runtime, `fake-${name}.log`))).toBe(true);
+  });
+
+  it("exec still works when the Keeper log cannot be written", async () => {
+    // Given: a folder where the log file goes
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    mkdirSync(join(env.runtime, `fake-${name}.log`));
+    // When
+    const result = await runCli(env, ["exec", id, "--", "echo", "hi"]);
+    // Then
+    expect({ stdout: result.stdout, exitCode: result.exitCode }).toEqual({
+      stdout: "hi\n",
+      exitCode: 0,
+    });
+  });
 });
 
 const ownsPid1 = () => {

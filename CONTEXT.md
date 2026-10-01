@@ -106,6 +106,10 @@ _Avoid_: video (too loose), screencast
 The timed list of commands, Step marks, and Wait marks during a Recording, kept inside the Sandbox next to it.
 _Avoid_: trace, event log
 
+**Keeper log**:
+The file on the Caller's machine where the Keeper writes one line per request: the program, how long it took, and how it ended, never the arguments, the input, or the output.
+_Avoid_: trace, debug log
+
 **Step mark**:
 A label the Caller sets during a Recording ("step 3: save the post"). It becomes the caption on the Proof video and the anchor for a Proof screenshot.
 _Avoid_: chapter, annotation

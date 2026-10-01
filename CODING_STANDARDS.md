@@ -38,7 +38,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - All output goes through the `CliOutput` service. [biome noConsole, in `src/`]
 - stdout carries only the result: an id, a list, or `--json`. Progress and messages go to stderr.
   An agent reads stdout as data, so one stray line breaks it.
-- There is no log library. See "Not covered".
+- The Keeper writes its log only through `writeKeeperLog` in `src/keeper/keeper-log.ts`: one line per request, never argv past the program name, never stdin or output (ADR 0019). There is no log library.
 
 ## Tests
 
@@ -137,7 +137,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 ## Not covered
 
 - HTTP API shape: proofbox has no HTTP API. Its API is the CLI, under "API shape".
-- Log library: none for now. Add a rule when proofbox needs logs past stderr.
+- Log library: none. The Keeper log is one hand-written file (see Logging and output).
 - `.dockerignore`: the build folder holds only the files the image needs, so there is nothing to keep out.
 - Swift formatter: there is one Swift file, and CI has no Swift toolchain.
 
