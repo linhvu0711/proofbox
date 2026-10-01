@@ -11,8 +11,8 @@ import { resolveSandboxId } from "./sandbox-id.ts";
 
 const KEEP_LINES = 50;
 
-export const runSetupScript = (rawId: string, script: Uint8Array) =>
-  Effect.gen(function* () {
+export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
+  function* (rawId: string, script: Uint8Array) {
     const providers = yield* Providers;
     const id = yield* resolveSandboxId(rawId, providers);
     const provider = id.provider;
@@ -94,4 +94,5 @@ export const runSetupScript = (rawId: string, script: Uint8Array) =>
       yield* keeper.stop(rawId);
       return yield* new SetupScriptFailedError({ code: result.code });
     }
-  });
+  },
+);

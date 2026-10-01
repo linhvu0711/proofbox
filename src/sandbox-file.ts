@@ -1,13 +1,13 @@
 import { Effect, Stream } from "effect";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 
-export const writeSandboxFile = (
-  rawId: string,
-  path: string,
-  bytes: Uint8Array,
-  options: { readonly executable: boolean },
-) =>
-  Effect.gen(function* () {
+export const writeSandboxFile = Effect.fn("sandboxFile.writeSandboxFile")(
+  function* (
+    rawId: string,
+    path: string,
+    bytes: Uint8Array,
+    options: { readonly executable: boolean },
+  ) {
     const keeper = yield* KeeperClient;
     const written = yield* keeper.exec(
       rawId,
@@ -31,4 +31,5 @@ export const writeSandboxFile = (
       ),
     );
     return code;
-  });
+  },
+);

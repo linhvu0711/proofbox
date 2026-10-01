@@ -3,7 +3,6 @@ import { Effect } from "effect";
 import {
   BadSandboxIdError,
   NoRegionError,
-  type ProviderError,
   UnknownProviderError,
   UnknownRegionError,
 } from "./errors.ts";
@@ -38,45 +37,34 @@ export const fileStem = (id: {
   readonly region: string | undefined;
 }) => (id.region === undefined ? id.name : `${id.region}:${id.name}`);
 
-export const parseSandboxId = (
+export const parseSandboxId = Effect.fn("sandboxId.parseSandboxId")(function* (
   raw: string,
   known: ReadonlyArray<string>,
-): Effect.Effect<SandboxId, BadSandboxIdError | UnknownProviderError> =>
-  Effect.gen(function* () {
-    const match = ID_PATTERN.exec(raw);
-    if (match === null) {
-      return yield* new BadSandboxIdError({ id: raw });
-    }
-    const provider = match[1] as string;
-    const region = match[2];
-    const name = match[3] as string;
-    if (!known.includes(provider)) {
-      return yield* new UnknownProviderError({
-        provider,
-        id: raw,
-        known,
-      });
-    }
-    return { provider, region, name };
-  });
+) {
+  const match = ID_PATTERN.exec(raw);
+  if (match === null) {
+    return yield* new BadSandboxIdError({ id: raw });
+  }
+  const provider = match[1] as string;
+  const region = match[2];
+  const name = match[3] as string;
+  if (!known.includes(provider)) {
+    return yield* new UnknownProviderError({
+      provider,
+      id: raw,
+      known,
+    });
+  }
+  return { provider, region, name };
+});
 
 export interface ResolvedSandboxId extends SandboxRef {
   readonly provider: Provider;
   readonly prefix: string;
 }
 
-export const resolveSandboxId = (
-  raw: string,
-  providers: ReadonlyMap<string, ProviderEntry>,
-): Effect.Effect<
-  ResolvedSandboxId,
-  | BadSandboxIdError
-  | NoRegionError
-  | ProviderError
-  | UnknownProviderError
-  | UnknownRegionError
-> =>
-  Effect.gen(function* () {
+export const resolveSandboxId = Effect.fn("sandboxId.resolveSandboxId")(
+  function* (raw: string, providers: ReadonlyMap<string, ProviderEntry>) {
     const parsed = yield* parseSandboxId(
       raw,
       [...providers.values()].map((entry) => entry.idPrefix),
@@ -118,4 +106,5 @@ export const resolveSandboxId = (
       name: parsed.name,
       region: parsed.region,
     };
-  });
+  },
+);

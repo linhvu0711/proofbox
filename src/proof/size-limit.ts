@@ -7,11 +7,11 @@ export const PROOF_SIZE_DEFAULT = 10_000_000;
 
 export const CRF_STEPS = [23, 28, 33] as const;
 
-export const encodeUnderLimit = <E, R>(
-  encode: (crf: number) => Effect.Effect<number, E, R>,
-  options: { readonly limit: number; readonly raw: string },
-) =>
-  Effect.gen(function* () {
+export const encodeUnderLimit = Effect.fn("sizeLimit.encodeUnderLimit")(
+  function* <E, R>(
+    encode: (crf: number) => Effect.Effect<number, E, R>,
+    options: { readonly limit: number; readonly raw: string },
+  ) {
     const output = yield* CliOutput;
     let last = 0;
     for (const [index, crf] of CRF_STEPS.entries()) {
@@ -31,4 +31,5 @@ export const encodeUnderLimit = <E, R>(
       limit: options.limit,
       raw: options.raw,
     });
-  });
+  },
+);

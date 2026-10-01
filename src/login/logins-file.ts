@@ -75,64 +75,69 @@ export const readLogins = Effect.gen(function* () {
 // Write a unique temp file and rename it over logins.json, so a crash
 // never leaves half a file; the dir and file stay readable by the owner
 // only.
-const saveLogins = (logins: LoginsFile) =>
-  Effect.gen(function* () {
-    const path = yield* loginsPath;
-    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    yield* Effect.tryPromise({
-      try: async () => {
-        try {
-          await writeFile(
-            temp,
-            `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
-            { mode: 0o600 },
-          );
-          await chmod(temp, 0o600);
-          await rename(temp, path);
-        } catch (cause) {
-          await rm(temp, { force: true });
-          throw cause;
-        }
-      },
-      catch: () =>
-        new BadLoginsFileError({ path, reason: "could not be written" }),
-    });
+const saveLogins = Effect.fn("loginsFile.saveLogins")(function* (
+  logins: LoginsFile,
+) {
+  const path = yield* loginsPath;
+  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  yield* Effect.tryPromise({
+    try: async () => {
+      try {
+        await writeFile(
+          temp,
+          `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
+          { mode: 0o600 },
+        );
+        await chmod(temp, 0o600);
+        await rename(temp, path);
+      } catch (cause) {
+        await rm(temp, { force: true });
+        throw cause;
+      }
+    },
+    catch: () =>
+      new BadLoginsFileError({ path, reason: "could not be written" }),
   });
+});
 
 // The lock every change to logins.json runs under. Create and logout also
 // hold it while they check for a login and for a running create, so a
 // create either shows up for logout or finds no login (ADR 0016).
-export const withLoginsLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const path = yield* loginsPath;
-    const dir = dirname(path);
-    yield* Effect.tryPromise({
-      try: async () => {
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        // mkdir's mode only applies to a new dir, so chmod always.
-        await chmod(dir, 0o700);
-      },
-      catch: () =>
-        new BadLoginsFileError({ path, reason: "could not be written" }),
-    });
-    const lockDir = join(dir, "logins.lock");
-    return yield* withFileLock<LoginsBusyError | BadLoginsFileError>({
-      dir: lockDir,
-      wait: Duration.seconds(5),
-      busy: () => new LoginsBusyError({ lockDir }),
-      failed: () =>
-        new BadLoginsFileError({ path, reason: "could not be written" }),
-    })(effect);
+export const withLoginsLock = Effect.fn("loginsFile.withLoginsLock")(function* <
+  A,
+  E,
+  R,
+>(effect: Effect.Effect<A, E, R>) {
+  const path = yield* loginsPath;
+  const dir = dirname(path);
+  yield* Effect.tryPromise({
+    try: async () => {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      // mkdir's mode only applies to a new dir, so chmod always.
+      await chmod(dir, 0o700);
+    },
+    catch: () =>
+      new BadLoginsFileError({ path, reason: "could not be written" }),
   });
+  const lockDir = join(dir, "logins.lock");
+  return yield* withFileLock<LoginsBusyError | BadLoginsFileError>({
+    dir: lockDir,
+    wait: Duration.seconds(5),
+    busy: () => new LoginsBusyError({ lockDir }),
+    failed: () =>
+      new BadLoginsFileError({ path, reason: "could not be written" }),
+  })(effect);
+});
 
 // Reads, changes one slot, and writes; only for code that holds the
 // logins lock already. Returns the logins as read.
-export const rewriteLogins = (change: (logins: LoginsFile) => LoginsFile) =>
-  Effect.gen(function* () {
-    const logins = yield* readLogins;
-    yield* saveLogins(change(logins));
-    return logins;
-  });
+export const rewriteLogins = Effect.fn("loginsFile.rewriteLogins")(function* (
+  change: (logins: LoginsFile) => LoginsFile,
+) {
+  const logins = yield* readLogins;
+  yield* saveLogins(change(logins));
+  return logins;
+});
 
 // Each auth command reads, changes one slot, and writes; the lock keeps
 // an overlapping command's slot from being dropped by the last write.
