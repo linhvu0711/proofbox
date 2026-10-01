@@ -1584,6 +1584,7 @@ describe("auth", () => {
       const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
       trackTempDir(root);
       const home = makeHome();
+      const waiting = yield* Deferred.make<void>();
       const providers = Layer.succeed(
         Providers,
         new Map<string, Provider>([
@@ -1600,7 +1601,10 @@ describe("auth", () => {
                     loginId: "L1",
                     url: "http://127.0.0.1:9/login/L1",
                   }),
-                  complete: () => Effect.never,
+                  complete: () =>
+                    Deferred.succeed(waiting, undefined).pipe(
+                      Effect.zipRight(Effect.never),
+                    ),
                 },
               },
             },
@@ -1616,6 +1620,7 @@ describe("auth", () => {
             region: Option.none(),
           }),
         );
+        yield* Deferred.await(waiting);
         yield* TestClock.adjust("9 minutes");
         // Then
         const running = yield* Fiber.poll(fiber);
