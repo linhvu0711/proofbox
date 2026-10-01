@@ -614,6 +614,26 @@ describe("Namespace Provider", () => {
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
+  it.effect("create marks a Linux host once its Sandbox is made", () =>
+    Effect.gen(function* () {
+      // Given: a link that keeps every command it runs
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: Array<string> = [];
+      const provider = makeProvider(calls, fakeDocker({}), (commandLine) => {
+        ran.push(commandLine);
+        return tenantRun(commandLine);
+      });
+      // When
+      yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then: the last command on the host is the mark
+      expect(ran.at(-1)).toBe('touch "$HOME/.proofbox-made"');
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
   it.effect("create goes to the region of an eu login", () =>
     Effect.gen(function* () {
       // Given: a login in eu
@@ -900,6 +920,36 @@ describe("Namespace Provider", () => {
         () =>
           Effect.succeed(
             done(`${JSON.stringify({ "proofbox.name": "lin000" })}|false\n0\n`),
+          ),
+        { instances: [UNFINISHED_LINUX] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list drops a Linux host whose Sandbox expired", () =>
+    Effect.gen(function* () {
+      // Given: Docker removed the container at its Deadline; the host
+      // still has the mark create left
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        (commandLine) =>
+          Effect.succeed(
+            commandLine.includes(".proofbox-made")
+              ? done()
+              : {
+                  exitCode: 1,
+                  stdout: "",
+                  stderr: "Error: No such object: proofbox-lin000",
+                },
           ),
         { instances: [UNFINISHED_LINUX] },
       );

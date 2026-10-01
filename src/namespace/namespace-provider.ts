@@ -111,6 +111,12 @@ const exec = promisify(execFile);
 
 const MAC_SCRIPT = checksScript(macChecks());
 
+// Left on a Linux host once its Sandbox is made. Docker removes the
+// container at its Deadline (`--rm`) while the host lives on a while, so
+// with no container this tells an expired Sandbox from one create never
+// finished. The login's home: the host user may not own /var/lib.
+const MADE_MARK = '"$HOME/.proofbox-made"';
+
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
   readonly login: ProviderLogin;
@@ -239,16 +245,19 @@ export const makeNamespaceProvider = (deps: {
       );
       const stderr = result.stderr.toLowerCase();
       // The container can stop or be removed between inspect and the deadline
-      // read; either way the Sandbox is gone rather than malformed. A host
-      // with no container at all is one create never finished; a stopped
-      // one ran out its Deadline (images/linux/init.sh).
-      const never =
+      // read; either way the Sandbox is gone rather than malformed.
+      const removed =
         stderr.includes("no such object") ||
         stderr.includes("no such container");
-      const missing = never || stderr.includes("is not running");
+      const missing = removed || stderr.includes("is not running");
       if (result.exitCode !== 0 || missing) {
+        if (removed) {
+          // No container and no mark: create never made the Sandbox.
+          const marked = yield* link.run(`test -e ${MADE_MARK}`);
+          return yield* marked.exitCode === 0 ? gone(ref) : gone(ref, true);
+        }
         if (missing) {
-          return yield* never ? gone(ref, true) : gone(ref);
+          return yield* gone(ref);
         }
         return yield* fail(
           `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
@@ -898,6 +907,12 @@ export const makeNamespaceProvider = (deps: {
             }
           }),
         );
+        const marked = yield* link.run(`touch ${MADE_MARK}`);
+        if (marked.exitCode !== 0) {
+          return yield* fail(
+            `could not mark the host: ${(marked.stderr || marked.stdout).trim()}`,
+          );
+        }
         return new SandboxInfo({
           name: ref.name,
           region: ref.region,
