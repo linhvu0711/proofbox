@@ -137,7 +137,10 @@ func key(_ keys: String) {
     var held: [(code: Int, flag: CGEventFlags)] = []
     for name in parts.dropLast() {
       guard let flag = modifiers[name], let code = modifierKeys[name] else { die("unknown modifier \(name)") }
-      held.append((code, flag))
+      // Names that share a key, like cmd and meta, press it once.
+      if !held.contains(where: { $0.flag == flag }) {
+        held.append((code, flag))
+      }
     }
     guard let code = named[last] else { die("unknown key \(last)") }
     var flags: CGEventFlags = []

@@ -51,7 +51,7 @@ export const TOOL_BUNDLE: ReadonlyArray<ToolFile> = [
         // and prints this hash.
         file: "input/proofbox-input",
         sha256:
-          "8a2510fdc36468ae0c8114b708a0254198f3ce3c267bcd3c15c2ed1ac2dc98cf",
+          "81c45c8b9e99a560c9c9565adc42df07a524ff8e0655732bacacda0b1d381e1a",
       },
     },
   }),
