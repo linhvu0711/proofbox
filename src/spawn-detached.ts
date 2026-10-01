@@ -10,11 +10,10 @@ export const spawnDetached = (
 ) =>
   Effect.try({
     try: () => {
-      spawn(
-        process.execPath,
-        ["--disable-warning=ExperimentalWarning", entryPath(rel), ...args],
-        { detached: true, stdio: "ignore" },
-      ).unref();
+      spawn(process.execPath, [entryPath(rel), ...args], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
     },
     catch: (cause) =>
       new ProviderError({

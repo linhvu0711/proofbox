@@ -35,7 +35,7 @@ No file means `namespace` for both. `create --provider <name>` overrides it for 
 
 ## Install
 
-Needs Node 24 or later and pnpm.
+Needs Node 24.12 or later and pnpm.
 
 ```sh
 git clone https://github.com/linhvu0711/proofbox.git

@@ -359,14 +359,10 @@ describe("Namespace Provider", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     // When: `live` as a child; read its first two stdout lines
-    const child = spawn(
-      process.execPath,
-      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
-      {
-        cwd: repoRoot,
-        env: { ...process.env, ...env.env },
-      },
-    );
+    const child = spawn(process.execPath, ["src/main.ts", "live", id], {
+      cwd: repoRoot,
+      env: { ...process.env, ...env.env },
+    });
     let port = 0;
     try {
       const lines = await new Promise<string[]>((resolve, reject) => {
@@ -419,14 +415,10 @@ describe("Namespace Provider", () => {
     const id = created.stdout.trim();
     const host = id.split(":").at(-1) ?? "";
     const stem = id.slice("ns:".length);
-    const child = spawn(
-      process.execPath,
-      ["--disable-warning=ExperimentalWarning", "src/main.ts", "live", id],
-      {
-        cwd: repoRoot,
-        env: { ...process.env, ...env.env },
-      },
-    );
+    const child = spawn(process.execPath, ["src/main.ts", "live", id], {
+      cwd: repoRoot,
+      env: { ...process.env, ...env.env },
+    });
     try {
       await new Promise<void>((resolve, reject) => {
         let text = "";

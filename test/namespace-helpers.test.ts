@@ -43,7 +43,7 @@ const runHelper = (
     }
     execFile(
       process.execPath,
-      ["--disable-warning=ExperimentalWarning", "--", script, ...args],
+      ["--", script, ...args],
       { cwd: repoRoot, env: childEnv, timeout: 60_000 },
       (error, stdout, stderr) => {
         resolve({
