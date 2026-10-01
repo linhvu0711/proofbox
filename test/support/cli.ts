@@ -18,6 +18,7 @@ export interface CliEnv {
     readonly PROOFBOX_NAMESPACE_IAM_URL?: string;
     readonly PROOFBOX_NAMESPACE_TOKEN_URL?: string;
     readonly PROOFBOX_OPEN?: string;
+    readonly HOME?: string;
   };
 }
 
@@ -27,6 +28,7 @@ export const makeEnv = (
   options: { readonly docker?: boolean; readonly namespace?: boolean } = {},
 ): CliEnv => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+  const home = mkdtempSync(join(tmpdir(), "proofbox-home-"));
   // ssh control sockets live in the runtime dir, and macOS caps a socket
   // path at 103 characters; its per-user tmpdir is too long for that.
   const runtime = mkdtempSync(
@@ -35,7 +37,7 @@ export const makeEnv = (
       "proofbox-runtime-",
     ),
   );
-  made.push(root, runtime);
+  made.push(root, home, runtime);
   return {
     root,
     runtime,
@@ -59,6 +61,10 @@ export const makeEnv = (
             PROOFBOX_NAMESPACE_TOKEN_URL: "http://127.0.0.1:9",
             PROOFBOX_OPEN: "/nonexistent/proofbox-test-open",
           }),
+      // Plain tests must not read the developer's own logins file.
+      ...(options.namespace === true || options.docker === true
+        ? {}
+        : { HOME: home }),
     },
   };
 };
