@@ -1088,20 +1088,47 @@ describe("auth", () => {
   });
 
   it("auth logout still removes the login when it cannot read the runtime dir", async () => {
-    // Given: the runtime dir is a regular file
-    const env = makeEnv();
-    const home = makeHome(ADA);
+    // Given: a Sandbox this machine started, then the runtime dir becomes
+    // a regular file, so logout cannot tell which Sandboxes are local
+    const { env, home, set, unset } = await fakeLoginWith(1);
     const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
     trackTempDir(dirname(file));
     writeFileSync(file, "x");
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
-      set: { HOME: home, PROOFBOX_RUNTIME_DIR: file },
+      set: { ...set, PROOFBOX_RUNTIME_DIR: file },
+      unset,
+    });
+    // Then: no Sandbox is called started elsewhere
+    expect(result.stderr).toMatch(
+      /^Logged out of fake\.\nCould not check this machine's Sandboxes: .+\n$/,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout namespace still reports when it cannot read the runtime dir", async () => {
+    // Given: a saved namespace login and a runtime dir that is a regular file
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
+    trackTempDir(dirname(file));
+    writeFileSync(file, "x");
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        PROOFBOX_RUNTIME_DIR: file,
+      },
       unset: ["PROOFBOX_FAKE_TOKEN"],
     });
     // Then
     expect(result.stderr).toMatch(
-      /^Logged out of fake\.\nCould not check this machine's Sandboxes: .+\n$/,
+      /^Logged out of namespace\.\n(?:.+\n)*Could not check this machine's Sandboxes: .+\n(?:.+\n)*Could not remove the cached Namespace tokens: .+\n/,
     );
     expect(result.exitCode).toBe(125);
     expect(readSaved(home)).toEqual({});

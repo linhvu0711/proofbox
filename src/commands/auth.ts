@@ -379,22 +379,34 @@ export const logoutOfProvider = (name: string) =>
       // Older versions kept a bearer-token file per token, and the session
       // trade keeps a tenant-token file per session, in the runtime dir;
       // those die with the login.
-      const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" }))
-        .dir;
-      yield* Effect.tryPromise({
-        try: async () => {
-          for (const file of await readdir(dir)) {
-            if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
-              await rm(join(dir, file), { force: true });
-            }
-          }
-        },
-        catch: (cause) =>
-          new ProviderError({
-            provider: "namespace",
-            reason: String(cause),
-          }),
-      });
+      // A failure here is named like the others; the login is gone already.
+      const cleared = yield* Effect.either(
+        Effect.gen(function* () {
+          const dir = (yield* keeperPaths({
+            provider: "ns",
+            name: "__probe__",
+          })).dir;
+          yield* Effect.tryPromise({
+            try: async () => {
+              for (const file of await readdir(dir)) {
+                if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
+                  await rm(join(dir, file), { force: true });
+                }
+              }
+            },
+            catch: (cause) =>
+              new ProviderError({
+                provider: "namespace",
+                reason: String(cause),
+              }),
+          });
+        }),
+      );
+      if (Either.isLeft(cleared)) {
+        failed.push(
+          `Could not remove the cached Namespace tokens: ${cleared.left.reason}`,
+        );
+      }
     }
     const note =
       deleted.length === 0
@@ -405,7 +417,8 @@ export const logoutOfProvider = (name: string) =>
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
     // A Sandbox from another machine stops by that machine's login; it
     // stays.
-    if (Either.isRight(listed)) {
+    // Without a scan there is no telling local from elsewhere: say neither.
+    if (Either.isRight(listed) && Either.isRight(scanned)) {
       for (const id of listed.right.infos.map(idOf)) {
         if (!localIds.has(id)) {
           yield* output.err(`${id} still runs, started elsewhere.\n`);
