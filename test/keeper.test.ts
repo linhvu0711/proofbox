@@ -24,6 +24,7 @@ import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
@@ -510,6 +511,29 @@ describe("Keeper", () => {
         );
         // Then
         expect(error.message).toBe(`Sandbox ${keeper.id} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a Pixel helper through a warm Keeper asks the Provider nothing from the CLI",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a desktop Sandbox whose helper is `echo`
+        const keeper = yield* warmKeeper(env, { desktop: true });
+        yield* TestClock.adjust("10 minutes");
+        // When
+        const result = yield* runHelper(
+          keeper.id,
+          { feature: "desktop", paths: { linux: "echo" } },
+          ["clicked"],
+          { outcome: "click" },
+        ).pipe(Effect.provide(keeper.layers));
+        // Then
+        expect(result.stdout.toString("utf8")).toBe("clicked\n");
+        expect(keeper.calls).toEqual({ get: 0, extend: 0 });
+        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
       }).pipe(runtimeConfig(env));
     },
   );
