@@ -82,7 +82,7 @@ describe("edit-plan", () => {
       { kind: "cut", from: 58, to: 61, step: 2 },
       { kind: "still", at: 61, seconds: 2, label: "» 54 s later", step: 2 },
       { kind: "cut", from: 115, to: 118, step: 3 },
-      { kind: "still", at: 118, seconds: 2, label: "» 54 s later", step: 3 },
+      { kind: "still", at: 118, seconds: 2, step: 3 },
     ]);
     expect(plan.captions).toEqual([
       { step: 1, from: 1, to: 6 },
@@ -132,6 +132,117 @@ describe("edit-plan", () => {
       { kind: "still", at: 12, seconds: 2, step: 1 },
     ]);
     expect(plan.seconds).toBe(14);
+  });
+
+  it("a Still part a Caller action ends is cut with no label, keeping 2 s after and 1 s before", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "cut", from: 29, to: 40, step: 1 },
+      { kind: "still", at: 40, seconds: 2, step: 1 },
+    ]);
+    expect(plan.seconds).toBe(20);
+  });
+
+  it("a Still part the app ends keeps its label", () => {
+    // Given: a click at 10 s that changed nothing
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [10],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later",
+      step: 1,
+    });
+  });
+
+  it("a Caller action more than 1 s before the change leaves the label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [28.9],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later",
+      step: 1,
+    });
+  });
+
+  it("a Still part that runs to the end of the Recording has no label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, undefined]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "still", at: 7, seconds: 2, step: 1 },
+    ]);
+    expect(plan.seconds).toBe(9);
+  });
+
+  it("a Still part across a Step mark that a Caller action ends has no label on either side", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 15],
+      clicks: [],
+      actions: [29.5],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "still", at: 7, seconds: 2, step: 1 },
+      { kind: "cut", from: 29, to: 40, step: 2 },
+      { kind: "still", at: 40, seconds: 2, step: 2 },
+    ]);
+    expect(plan.seconds).toBe(22);
   });
 
   it("the label reads seconds, then minutes", () => {
@@ -248,7 +359,6 @@ describe("edit-plan", () => {
         kind: "still",
         at: 32.77,
         seconds: 2,
-        label: "» 25 s later",
         step: 2,
       },
     ]);

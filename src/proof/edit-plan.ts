@@ -47,6 +47,7 @@ export interface PlanInput {
     readonly x: number;
     readonly y: number;
   }>;
+  readonly actions?: ReadonlyArray<number>;
 }
 
 const parseTime = (text: string): number => {
@@ -93,6 +94,10 @@ export const nothingChanged = (probe: ProbeResult): boolean => {
   return probe.duration - still + points < 1;
 };
 
+// A Caller action logged up to 1 s before a Still part ends ended it: the
+// Action log time runs about 0.47 s ahead of the video.
+const CALLER_WINDOW = 1;
+
 export const labelText = (seconds: number): string => {
   const n = Math.round(seconds);
   if (n < 60) {
@@ -109,6 +114,24 @@ export const planEdit = (input: PlanInput): EditPlan => {
   const clips: Clip[] = [];
   const captions: Caption[] = [];
   const rings: Ring[] = [];
+  // The label the Still part holding [from, to] keeps: none when the part
+  // runs to the end of the Recording or a Caller action ended it (ADR 0018).
+  const stillLabel = (from: number, to: number): string | undefined => {
+    const freeze = input.freezes.find(
+      ([a, b]) => a <= from && (b ?? input.duration) >= to,
+    );
+    if (freeze === undefined) {
+      return labelText(to - from);
+    }
+    const end = freeze[1] ?? input.duration;
+    if (end >= input.duration) {
+      return undefined;
+    }
+    const ended = (input.actions ?? []).some(
+      (t) => end - CALLER_WINDOW <= t && t <= end,
+    );
+    return ended ? undefined : labelText(to - from);
+  };
   const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
   const cutSpans: {
     from: number;
@@ -163,7 +186,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
     if (merged.length > 0) {
       const tail = end - (merged[merged.length - 1]?.[1] ?? end);
       if (tail >= 3) {
-        endLabel = labelText(tail);
+        endLabel = stillLabel(end - tail, end);
       } else {
         const last = merged[merged.length - 1];
         if (last !== undefined) {
@@ -175,12 +198,13 @@ export const planEdit = (input: PlanInput): EditPlan => {
     let cursor = start;
     for (const [a, b] of merged) {
       const gap = a - cursor;
-      if (gap >= 3) {
+      const gapLabel = gap >= 3 ? stillLabel(cursor, a) : undefined;
+      if (gapLabel !== undefined) {
         clips.push({
           kind: "still",
           at: cursor,
           seconds: 2,
-          label: labelText(gap),
+          label: gapLabel,
           step,
         });
         out += 2;
@@ -200,7 +224,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
           kind: "still",
           at: start,
           seconds: 3,
-          label: end - start >= 3 ? labelText(end - start) : undefined,
+          label: end - start >= 3 ? stillLabel(start, end) : undefined,
           step,
         });
         out += 3;
