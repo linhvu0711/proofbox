@@ -393,16 +393,19 @@ export const logoutOfProvider = (name: string) =>
         }
       }
     }
+    // Failures last, and each one fails the command: a Sandbox this
+    // machine started may still run.
+    const unchecked = Either.isRight(listed)
+      ? listed.right.unreached
+      : [{ where: provider.name, reason: listed.left.message }];
+    for (const miss of unchecked) {
+      failed.push(`Could not check ${miss.where}: ${miss.reason}`);
+    }
     for (const line of failed) {
       yield* output.err(`${line}\n`);
     }
     if (failed.length > 0) {
       yield* output.setExitCode(125);
-    }
-    if (Either.isRight(listed)) {
-      for (const miss of listed.right.unreached) {
-        yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
-      }
     }
     for (const id of deleted) {
       yield* output.out(`${id}\n`);

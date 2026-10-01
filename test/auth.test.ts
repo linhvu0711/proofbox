@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import {
@@ -949,27 +949,11 @@ describe("auth", () => {
     expect(existsSync(join(env.runtime, `fake-${name1}.pid`))).toBe(false);
   });
 
-  it("auth logout names the Sandboxes of every region and the region it could not check", async () => {
+  it("auth logout names the region it could not check and still deletes", async () => {
     // Given: a fake login, two Sandboxes, and a fake region that does not answer
-    const env = makeEnv();
-    const home = makeHome();
-    const set = { HOME: home, PROOFBOX_FAKE_UNREACHED: "eu" };
-    const unset = ["PROOFBOX_FAKE_TOKEN"];
-    await runCli(env, ["auth", "login", "fake", "--token"], {
-      input: "t0k\n",
-      set,
-      unset,
+    const { env, set, unset, ids } = await fakeLoginWith(2, {
+      PROOFBOX_FAKE_UNREACHED: "eu",
     });
-    const first = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
-    const second = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
@@ -980,10 +964,8 @@ describe("auth", () => {
       "Logged out of fake. Deleted 2 Sandboxes.\n" +
         "Could not check fake region eu: fake region eu did not answer\n",
     );
-    expect(new Set(result.stdout.trim().split("\n"))).toEqual(
-      new Set([first.stdout.trim(), second.stdout.trim()]),
-    );
-    expect(result.exitCode).toBe(0);
+    expect(new Set(result.stdout.trim().split("\n"))).toEqual(new Set(ids));
+    expect(result.exitCode).toBe(125);
   });
 
   it("auth logout namespace removes the nsc token files", async () => {
@@ -1024,28 +1006,21 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("auth logout still removes the login when it cannot list Sandboxes", async () => {
+  it("auth logout still deletes and removes the login when it cannot list Sandboxes", async () => {
     // Given
-    const env = makeEnv();
-    const home = makeHome(
-      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}',
-    );
-    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
-    trackTempDir(dirname(file));
-    writeFileSync(file, "x");
+    const { env, home, set, unset, ids } = await fakeLoginWith(1);
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
-      set: { HOME: home, PROOFBOX_FAKE_ROOT: file },
-      unset: ["PROOFBOX_FAKE_TOKEN"],
+      set: { ...set, PROOFBOX_FAKE_LIST_DOWN: "fake API is down" },
+      unset,
     });
     // Then
-    expect(result.stderr).toBe("Logged out of fake.\n");
-    expect(result.exitCode).toBe(0);
-    expect(
-      JSON.parse(
-        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
-      ),
-    ).toEqual({});
+    expect(result.stderr).toBe(
+      "Logged out of fake. Deleted 1 Sandbox.\nCould not check fake: fake API is down\n",
+    );
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
   });
 
   it("auth logout with no saved login says so", async () => {
