@@ -70,13 +70,15 @@ export type KeeperExecError =
   | AnswerTimeoutError;
 
 // Fails the events with AnswerTimeoutError once the limit passes with no
-// answer, after `giveUp` tells the other end. With no limit the events
-// run as they are: `exec` has none (ADR 0019).
-const withAnswerLimit = <A, E, R>(
-  events: Stream.Stream<A, E, R>,
+// answer, after `giveUp` tells the other end. An idle limit counts only
+// new stdout bytes, the file a download writes; stderr keeps no download
+// alive. With no limit the events run as they are: `exec` has none
+// (ADR 0019).
+const withAnswerLimit = <E, R>(
+  events: Stream.Stream<ExecEvent, E, R>,
   limit: AnswerLimit | undefined,
   giveUp: Effect.Effect<void>,
-): Stream.Stream<A, E | AnswerTimeoutError, R> => {
+): Stream.Stream<ExecEvent, E | AnswerTimeoutError, R> => {
   if (limit === undefined) {
     return events;
   }
@@ -99,8 +101,12 @@ const withAnswerLimit = <A, E, R>(
             });
       const after = "whole" in limit ? limit.whole : limit.idle;
       return events.pipe(
-        Stream.tap(() =>
-          Effect.flatMap(Clock.currentTimeMillis, (now) => Ref.set(last, now)),
+        Stream.tap((event) =>
+          event._tag === "Stdout" && event.bytes.length > 0
+            ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                Ref.set(last, now),
+              )
+            : Effect.void,
         ),
         Stream.interruptWhen(
           watch.pipe(

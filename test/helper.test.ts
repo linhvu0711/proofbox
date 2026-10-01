@@ -495,6 +495,41 @@ describe("Helper call time limits", () => {
     }),
   );
 
+  it.effect("a stalled download that still writes to stderr gives up", () =>
+    Effect.gen(function* () {
+      // Given: one chunk, then only a stderr line every 50 s
+      const sandbox = yield* macSandbox(() =>
+        Stream.concat(
+          Stream.make(stdout(PNG_HEAD)),
+          Stream.repeatEffect(
+            Effect.as(Effect.sleep("50 seconds"), {
+              _tag: "Stderr" as const,
+              bytes: new TextEncoder().encode("still here\n"),
+            }),
+          ),
+        ),
+      );
+      const dest = join(tempDir("proofbox-out-"), "proof.mp4");
+      // When
+      const error = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            Effect.flip(fetchVideo(sandbox.id, dest)),
+          );
+          yield* sleepsNear(120_000);
+          yield* TestClock.adjust("121 seconds");
+          yield* sleepsNear(240_000);
+          yield* TestClock.adjust("130 seconds");
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      // Then
+      expect(error.message).toBe(
+        `Sandbox ${sandbox.id} sent no bytes of the Proof video for 2 min, twice. Try again in a minute. Keeper log: ${sandbox.log}`,
+      );
+    }),
+  );
+
   it.effect("a failed download leaves no .part file", () =>
     Effect.gen(function* () {
       // Given: one chunk, then nothing more
