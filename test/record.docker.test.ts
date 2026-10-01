@@ -457,29 +457,17 @@ describe("Recording and the Proof video", () => {
     const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
     await runCli(env, ["record", "start", id]);
     await runCli(env, ["mark", id, "step 1: open the menu"]);
-    await wait(6000);
     await runCli(env, [
       "click",
       id,
-      "700",
-      "400",
+      "720",
+      "450",
       "--button",
       "right",
       "--pace",
       "fast",
     ]);
     await wait(1000);
-    await runCli(env, [
-      "click",
-      id,
-      "740",
-      "500",
-      "--button",
-      "right",
-      "--pace",
-      "fast",
-    ]);
-    await wait(300);
     const marked = await runCli(env, [
       "mark",
       id,
@@ -487,9 +475,12 @@ describe("Recording and the Proof video", () => {
       "--wait",
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
-    // When — a Step mark ends step 1 at once, so the still part after
-    // the Wait mark stays under 3 s and cannot take it.
-    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    // The closing Step mark ends step 1 at once, so the still after the
+    // Escape stays under 3 s and cannot take the Wait mark.
+    await runCli(env, ["mark", id, "step 2: done"]);
+    await wait(1000);
+    // When
     const result = await runCli(env, [
       "record",
       "stop",
@@ -511,10 +502,17 @@ describe("Recording and the Proof video", () => {
     const id = created.stdout.trim();
     const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
     await runCli(env, ["record", "start", id]);
-    await wait(6000);
-    // The opening still is one Still part: the first Wait mark takes it,
-    // so the second names it as not used — before any Step mark exists.
-    await runCli(env, ["mark", id, "first reason", "--wait"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
     const marked = await runCli(env, [
       "mark",
       id,
@@ -522,27 +520,11 @@ describe("Recording and the Proof video", () => {
       "--wait",
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
-    await runCli(env, [
-      "click",
-      id,
-      "700",
-      "400",
-      "--button",
-      "right",
-      "--pace",
-      "fast",
-    ]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    // The closing Step mark ends the mark's step at once, so the still
+    // after the Escape stays under 3 s and cannot take the Wait mark.
+    await runCli(env, ["mark", id, "step 1: done"]);
     await wait(1000);
-    await runCli(env, [
-      "click",
-      id,
-      "740",
-      "500",
-      "--button",
-      "right",
-      "--pace",
-      "fast",
-    ]);
     // When
     const result = await runCli(env, [
       "record",
