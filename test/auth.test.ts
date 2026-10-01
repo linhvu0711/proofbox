@@ -7,7 +7,6 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1308,14 +1307,15 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("auth logout skips a create mark nobody touched for a minute", async () => {
+  it("auth logout skips a create mark whose process id now belongs to another process", async () => {
     // Given: one Sandbox, and a crashed create's mark whose process id now
-    // belongs to a live process (this test's own)
+    // belongs to a live process (this test's own) that started at another
+    // time
     const { env, set, unset, ids } = await fakeLoginWith(1);
-    const mark = join(env.runtime, `fake-creating-${process.pid}-0123abcd`);
-    writeFileSync(mark, `${process.pid}\n`);
-    const old = new Date(Date.now() - 2 * 60 * 1000);
-    utimesSync(mark, old, old);
+    writeFileSync(
+      join(env.runtime, `fake-creating-${process.pid}-0123abcd`),
+      `${process.pid}\nMon Jan  1 00:00:00 2001\n`,
+    );
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
@@ -1325,6 +1325,23 @@ describe("auth", () => {
     expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
     expect(result.stdout).toBe(`${ids[0]}\n`);
     expect(result.exitCode).toBe(0);
+  });
+
+  it("create with an env token works while the logins lock is busy", async () => {
+    // Given: no saved login, an env token, and a busy logins lock
+    const env = makeEnv();
+    const home = makeHome();
+    mkdirSync(join(home, ".config", "proofbox"), { recursive: true });
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:\S+\n$/);
   });
 
   it("create after auth logout says how to log in and makes nothing", async () => {

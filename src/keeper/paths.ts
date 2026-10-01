@@ -1,16 +1,16 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmod,
   mkdir,
   readdir,
+  readFile,
   rm,
-  stat,
-  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Config, Duration, Effect, Schedule } from "effect";
+import { Config, Effect } from "effect";
 import { ProviderError } from "../errors.ts";
 import type { SandboxRef } from "../provider.ts";
 
@@ -110,7 +110,9 @@ export const localSandboxes = (
 // `<prefix>-creating-<pid>-<random>`, in the runtime dir from its login
 // check until its Max life file is written: its host can exist before that
 // file does, so logout waits for it (ADR 0016). The random part keeps two
-// creates in one process apart.
+// creates in one process apart. The mark holds the process id and the
+// process's start time, so a crashed create's id, reused by some other
+// process, does not pass for it.
 export const markCreate = (
   prefix: string,
 ): Effect.Effect<string, ProviderError> =>
@@ -121,8 +123,10 @@ export const markCreate = (
       dir,
       `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
     );
+    const started = yield* startOf(process.pid);
     yield* Effect.tryPromise({
-      try: () => writeFile(path, `${process.pid}\n`, { mode: 0o600 }),
+      try: () =>
+        writeFile(path, `${process.pid}\n${started}\n`, { mode: 0o600 }),
       catch: (cause) =>
         new ProviderError({
           provider: prefix,
@@ -135,66 +139,53 @@ export const markCreate = (
 export const unmarkCreate = (path: string) =>
   Effect.promise(() => rm(path, { force: true }).catch(() => {}));
 
-// A live create touches its mark this often; a mark left untouched for
-// STALE_MARK is stale, so a crashed create's process id, reused by some
-// other process, cannot hold logout forever.
-const MARK_BEAT = Duration.seconds(10);
-const STALE_MARK = Duration.minutes(1);
-
-// Runs until interrupted; a failed touch waits for the next beat.
-export const keepMarkFresh = (path: string) =>
-  Effect.promise(() => {
-    const now = new Date();
-    return utimes(path, now, now).catch(() => {});
-  }).pipe(Effect.repeat(Schedule.spaced(MARK_BEAT)), Effect.asVoid);
-
-// A process that is gone answers ESRCH; EPERM means it runs as someone
-// else, which is still alive.
-const isAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (cause) {
-    return (
-      typeof cause === "object" &&
-      cause !== null &&
-      "code" in cause &&
-      cause.code === "EPERM"
-    );
-  }
-};
+// When a process started, as `ps` tells it, or "" when it is gone or `ps`
+// cannot say. `ps` lives in /bin or /usr/bin on macOS and Linux, and the
+// C locale keeps the text the same in every process.
+const startOf = (pid: number) =>
+  Effect.promise(
+    () =>
+      new Promise<string>((resolve) => {
+        execFile(
+          "ps",
+          ["-o", "lstart=", "-p", String(pid)],
+          { env: { PATH: "/bin:/usr/bin", LC_ALL: "C" } },
+          (error, stdout) => resolve(error === null ? stdout.trim() : ""),
+        );
+      }),
+  );
 
 // The marks of the creates still running for one Provider. A mark whose
-// process is gone, or that nobody touched for STALE_MARK, is skipped.
+// process is gone, or whose process id now belongs to a process that
+// started at another time, is skipped.
 export const liveCreates = (
   prefix: string,
 ): Effect.Effect<ReadonlyArray<string>, ProviderError> =>
   Effect.gen(function* () {
     const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
       .dir;
-    const oldest = Date.now() - Duration.toMillis(STALE_MARK);
-    return yield* Effect.tryPromise({
+    const marks = yield* Effect.tryPromise({
       try: async () => {
-        const live: Array<string> = [];
+        const found: Array<{ readonly name: string; readonly text: string }> =
+          [];
         for (const entry of await readdir(dir)) {
-          const pid = /^(\d+)-[0-9a-f]+$/.exec(
-            entry.startsWith(`${prefix}-creating-`)
-              ? entry.slice(`${prefix}-creating-`.length)
-              : "",
-          )?.[1];
-          if (pid === undefined || !isAlive(Number(pid))) {
-            continue;
-          }
-          // A mark removed since readdir is a create that just finished.
-          const touched = await stat(join(dir, entry)).then(
-            (info) => info.mtimeMs,
-            () => 0,
-          );
-          if (touched >= oldest) {
-            live.push(entry);
+          if (
+            /^\d+-[0-9a-f]+$/.test(
+              entry.startsWith(`${prefix}-creating-`)
+                ? entry.slice(`${prefix}-creating-`.length)
+                : "",
+            )
+          ) {
+            // A mark removed since readdir is a create that just finished.
+            const text = await readFile(join(dir, entry), "utf8").catch(
+              () => undefined,
+            );
+            if (text !== undefined) {
+              found.push({ name: entry, text });
+            }
           }
         }
-        return live;
+        return found;
       },
       catch: (cause) =>
         new ProviderError({
@@ -202,4 +193,14 @@ export const liveCreates = (
           reason: cause instanceof Error ? cause.message : String(cause),
         }),
     });
+    const live: Array<string> = [];
+    for (const mark of marks) {
+      const [pid = "", started = ""] = mark.text.split("\n");
+      const now = /^\d+$/.test(pid) ? yield* startOf(Number(pid)) : "";
+      // A mark without a start time counts while its process id runs.
+      if (now !== "" && (started === "" || started === now)) {
+        live.push(mark.name);
+      }
+    }
+    return live;
   });

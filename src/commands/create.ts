@@ -17,8 +17,9 @@ import {
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { keepMarkFresh, markCreate, unmarkCreate } from "../keeper/paths.ts";
+import { markCreate, unmarkCreate } from "../keeper/paths.ts";
 import { withLoginsLock } from "../login/logins-file.ts";
+import { envToken } from "../login/provider-login.ts";
 import { Progress } from "../progress.ts";
 import {
   lacksFeature,
@@ -34,20 +35,29 @@ import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
-// A create with a Provider login marks itself while the Provider makes
-// the host, and writes the mark under the logins lock: a logout either
-// waits for this create or has removed the login already, and then the
-// Provider finds none (ADR 0016). With no HOME there is no saved login
-// for logout to remove, so no mark.
+// A create that may act with the saved login marks itself while the
+// Provider makes the host, and writes the mark under the logins lock: a
+// logout either waits for this create or has removed the login already,
+// and then the Provider finds none (ADR 0016). The env token wins over the
+// saved login, and logout never removes it, so a create with one needs no
+// mark; nor does a Provider with no login, or a run with no HOME.
 const markCreating = (provider: Provider) =>
-  provider.login._tag === "None"
-    ? Effect.succeed(Option.none<string>())
-    : withLoginsLock(markCreate(provider.idPrefix)).pipe(
-        Effect.map(Option.some),
-        Effect.catchTag("ConfigError", () =>
-          Effect.succeed(Option.none<string>()),
-        ),
-      );
+  Effect.gen(function* () {
+    if (provider.login._tag === "None") {
+      return Option.none<string>();
+    }
+    // A redacted string can never fail to load, so `option` yields None
+    // for a missing variable and anything else is a defect.
+    if (Option.isSome(yield* Effect.orDie(envToken(provider.name)))) {
+      return Option.none<string>();
+    }
+    return yield* withLoginsLock(markCreate(provider.idPrefix)).pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("ConfigError", () =>
+        Effect.succeed(Option.none<string>()),
+      ),
+    );
+  });
 
 export const createSandbox = (options: {
   readonly os: Os;
@@ -154,26 +164,16 @@ export const createSandbox = (options: {
             script,
             files,
           });
-    const made = provider.create({
-      os: options.os,
-      idle,
-      maxLife,
-      size,
-      snapshot: fp,
-    });
-    // The mark stays fresh while the Provider works, and goes once the Max
-    // life file is there for logout to find. The touches never end on
-    // their own, so the race ends with the create.
+    // The mark goes once the Max life file is there for logout to find.
     const info = yield* Effect.acquireUseRelease(
       markCreating(provider),
-      (mark) =>
-        Option.match(mark, {
-          onNone: () => made,
-          onSome: (path) =>
-            Effect.raceFirst(
-              made,
-              keepMarkFresh(path).pipe(Effect.zipRight(Effect.never)),
-            ),
+      () =>
+        provider.create({
+          os: options.os,
+          idle,
+          maxLife,
+          size,
+          snapshot: fp,
         }),
       (mark) =>
         Option.match(mark, { onNone: () => Effect.void, onSome: unmarkCreate }),
