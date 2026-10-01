@@ -1214,6 +1214,80 @@ describe("auth", () => {
     expect(again.stdout).toBe(made.stdout);
   });
 
+  it("auth logout goes on when a create it waits for fails", async () => {
+    // Given: a create still running
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    const hold = join(env.root, "release-create");
+    let stopCreate = () => {};
+    const creating = runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      {
+        set: { ...set, PROOFBOX_FAKE_CREATE_HOLD: hold },
+        unset,
+        onStderr: (_chunk, interrupt) => {
+          stopCreate = interrupt;
+        },
+      },
+    );
+    await until(() =>
+      readdirSync(env.root).some((f) => f !== "release-create"),
+    );
+    // When: the create fails while logout waits for it
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+      onStderr: (chunk) => {
+        if (chunk.includes("Waiting")) {
+          stopCreate();
+        }
+      },
+    });
+    writeFileSync(hold, "");
+    await creating;
+    // Then: logout finishes and the login is gone
+    expect(result.stderr).toMatch(
+      /^Waiting for 1 create to finish…\nLogged out of fake\./,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("create with the saved login stops when the logins lock stays busy", async () => {
+    // Given: a saved login and a logins lock another process holds
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // Then
+    expect(result.stderr).toContain(
+      `Another proofbox command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+
+  it("auth logout stops when the logins lock stays busy and keeps the login", async () => {
+    // Given: a saved login and a logins lock another process holds
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toContain(
+      `Another proofbox command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(Object.keys(readSaved(home) as object)).toEqual(["fake"]);
+  });
+
   it("auth logout skips a create mark whose process is gone", async () => {
     // Given: one Sandbox, and the mark of a create that crashed
     const { env, set, unset, ids } = await fakeLoginWith(1);
