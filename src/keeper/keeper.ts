@@ -1,4 +1,5 @@
-import { rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { rename, rm, writeFile } from "node:fs/promises";
 import {
   createConnection,
   createServer,
@@ -14,6 +15,7 @@ import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
+import { withStartLock } from "./start-lock.ts";
 
 const socketAnswers = (path: string) =>
   Effect.async<boolean>((resume) => {
@@ -63,9 +65,6 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   if (yield* socketAnswers(paths.socket)) {
     return;
   }
-  yield* Effect.promise(() =>
-    rm(paths.socket, { force: true }).catch(() => {}),
-  );
 
   const serve = Effect.scoped(
     Effect.gen(function* () {
@@ -248,43 +247,73 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           }
         });
       };
-      yield* Effect.acquireRelease(
-        Effect.async<Server, ProviderError>((resume) => {
-          const server = createServer(handleClient);
-          server.once("error", (error) =>
-            resume(
-              Effect.fail(
+      // Under the lock, check the socket again: a Keeper that waited for
+      // the lock finds the first one's socket answers, and ends.
+      const started = yield* withStartLock(
+        paths.startLock,
+        id.provider.name,
+        Effect.gen(function* () {
+          if (yield* socketAnswers(paths.socket)) {
+            return false;
+          }
+          yield* Effect.promise(() =>
+            rm(paths.socket, { force: true }).catch(() => {}),
+          );
+          // Write a unique temp file and rename it over the pid file, so a
+          // reader never sees it empty.
+          const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+          yield* Effect.acquireRelease(
+            Effect.tryPromise({
+              try: async () => {
+                try {
+                  await writeFile(temp, `${process.pid}\n`);
+                  await rename(temp, paths.pid);
+                } catch (cause) {
+                  await rm(temp, { force: true });
+                  throw cause;
+                }
+              },
+              catch: (cause) =>
                 new ProviderError({
                   provider: id.provider.name,
-                  reason: error.message,
+                  reason:
+                    cause instanceof Error ? cause.message : String(cause),
                 }),
-              ),
-            ),
-          );
-          server.listen(paths.socket, () => resume(Effect.succeed(server)));
-        }),
-        (server) =>
-          Effect.promise(
-            () => new Promise<void>((done) => server.close(() => done())),
-          ),
-      );
-      yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () => writeFile(paths.pid, `${process.pid}\n`),
-          catch: (cause) =>
-            new ProviderError({
-              provider: id.provider.name,
-              reason: cause instanceof Error ? cause.message : String(cause),
             }),
+            () =>
+              Effect.promise(() =>
+                Promise.all([
+                  rm(paths.socket, { force: true }).catch(() => {}),
+                  rm(paths.pid, { force: true }).catch(() => {}),
+                ]).then(() => {}),
+              ),
+          );
+          yield* Effect.acquireRelease(
+            Effect.async<Server, ProviderError>((resume) => {
+              const server = createServer(handleClient);
+              server.once("error", (error) =>
+                resume(
+                  Effect.fail(
+                    new ProviderError({
+                      provider: id.provider.name,
+                      reason: error.message,
+                    }),
+                  ),
+                ),
+              );
+              server.listen(paths.socket, () => resume(Effect.succeed(server)));
+            }),
+            (server) =>
+              Effect.promise(
+                () => new Promise<void>((done) => server.close(() => done())),
+              ),
+          );
+          return true;
         }),
-        () =>
-          Effect.promise(() =>
-            Promise.all([
-              rm(paths.socket, { force: true }).catch(() => {}),
-              rm(paths.pid, { force: true }).catch(() => {}),
-            ]).then(() => {}),
-          ),
       );
+      if (!started) {
+        return;
+      }
       // The gone-watch reads over the Keeper's own link; a gone Sandbox
       // fails it and ends the Keeper.
       yield* Effect.repeat(connection.get, Schedule.spaced("2 seconds"));
