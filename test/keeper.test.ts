@@ -504,6 +504,15 @@ describe("Keeper", () => {
   );
 });
 
+const ownsPid1 = () => {
+  try {
+    process.kill(1, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 describe("Create marks", () => {
   afterEach(() => {
     cleanupEnvs();
@@ -537,8 +546,9 @@ describe("Create marks", () => {
     },
   );
 
-  // As root every process is this user's, so the case cannot happen.
-  it.effect.skipIf(process.getuid?.() === 0)(
+  // Where process 1 is this user's (root, or some containers), the case
+  // cannot happen.
+  it.effect.skipIf(ownsPid1())(
     "a create mark whose process id belongs to another user is not live",
     () => {
       const env = makeEnv();
