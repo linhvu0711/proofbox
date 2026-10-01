@@ -59,6 +59,8 @@ case "$cmd" in
     done
     cat "$DIR/ffmpeg.log" >&2
     kill -TERM "$(cat "$DIR/pid")" 2>/dev/null || true
+    # dash and macOS sh both have -ef; ShellCheck before 0.10 says it is not POSIX.
+    # shellcheck disable=SC3013
     if [ "$DIR" -ef "$CUR" ]; then
       rm -f "$CUR"
     fi
