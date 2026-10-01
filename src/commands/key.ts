@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
 
-export const pressKey = (options: {
+export const pressKey = Effect.fn("key.pressKey")(function* (options: {
   readonly id: string;
   readonly keys: string;
   readonly screenshot?: string | undefined;
@@ -10,13 +10,12 @@ export const pressKey = (options: {
   readonly letter?: string | undefined;
   readonly typeMax?: string | undefined;
   readonly settle?: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    const pace = yield* resolvePace(options);
-    const shot = options.screenshot === undefined ? "0" : "1";
-    yield* runPixel(
-      options.id,
-      ["key", options.keys, String(pace.settleMs), shot],
-      { screenshot: options.screenshot },
-    );
-  }).pipe(Effect.scoped);
+}) {
+  const pace = yield* resolvePace(options);
+  const shot = options.screenshot === undefined ? "0" : "1";
+  yield* runPixel(
+    options.id,
+    ["key", options.keys, String(pace.settleMs), shot],
+    { screenshot: options.screenshot },
+  );
+}, Effect.scoped);

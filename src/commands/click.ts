@@ -3,7 +3,7 @@ import { resolvePace, runPixel } from "../pixel.ts";
 
 const BUTTONS = { left: "1", middle: "2", right: "3" } as const;
 
-export const clickAt = (options: {
+export const clickAt = Effect.fn("click.clickAt")(function* (options: {
   readonly id: string;
   readonly x: number;
   readonly y: number;
@@ -14,21 +14,20 @@ export const clickAt = (options: {
   readonly letter?: string | undefined;
   readonly typeMax?: string | undefined;
   readonly settle?: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    const pace = yield* resolvePace(options);
-    const shot = options.screenshot === undefined ? "0" : "1";
-    yield* runPixel(
-      options.id,
-      [
-        "click",
-        String(options.x),
-        String(options.y),
-        BUTTONS[options.button],
-        String(pace.glideMs),
-        String(pace.settleMs),
-        shot,
-      ],
-      { screenshot: options.screenshot, points: [[options.x, options.y]] },
-    );
-  }).pipe(Effect.scoped);
+}) {
+  const pace = yield* resolvePace(options);
+  const shot = options.screenshot === undefined ? "0" : "1";
+  yield* runPixel(
+    options.id,
+    [
+      "click",
+      String(options.x),
+      String(options.y),
+      BUTTONS[options.button],
+      String(pace.glideMs),
+      String(pace.settleMs),
+      shot,
+    ],
+    { screenshot: options.screenshot, points: [[options.x, options.y]] },
+  );
+}, Effect.scoped);

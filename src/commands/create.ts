@@ -41,36 +41,35 @@ import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 // and then the Provider finds none (ADR 0016). The env token wins over the
 // saved login, and logout never removes it, so a create with one needs no
 // mark; nor does a Provider with no login, or a run with no HOME.
-const markCreating = (provider: Provider) =>
-  Effect.gen(function* () {
-    if (provider.login._tag === "None") {
-      return Option.none<string>();
-    }
-    // A redacted string can never fail to load, so `option` yields None
-    // for a missing variable and anything else is a defect.
-    if (Option.isSome(yield* Effect.orDie(envToken(provider.name)))) {
-      return Option.none<string>();
-    }
-    return yield* withLoginsLock(markCreate(provider.idPrefix)).pipe(
-      Effect.map((mark) => Option.some(mark)),
-      Effect.catchTag("ConfigError", () =>
-        Effect.succeed(Option.none<string>()),
-      ),
-    );
-  });
+const markCreating = Effect.fn("create.markCreating")(function* (
+  provider: Provider,
+) {
+  if (provider.login._tag === "None") {
+    return Option.none<string>();
+  }
+  // A redacted string can never fail to load, so `option` yields None
+  // for a missing variable and anything else is a defect.
+  if (Option.isSome(yield* Effect.orDie(envToken(provider.name)))) {
+    return Option.none<string>();
+  }
+  return yield* withLoginsLock(markCreate(provider.idPrefix)).pipe(
+    Effect.map((mark) => Option.some(mark)),
+    Effect.catchTag("ConfigError", () => Effect.succeed(Option.none<string>())),
+  );
+});
 
-export const createSandbox = (options: {
-  readonly os: Os;
-  readonly provider?: string | undefined;
-  readonly idle?: string | undefined;
-  readonly maxLife?: string | undefined;
-  readonly work?: string | undefined;
-  readonly setup?: string | undefined;
-  readonly envFile?: string | undefined;
-  readonly maxSize?: string | undefined;
-  readonly size?: string | undefined;
-}) =>
-  Effect.gen(function* () {
+export const createSandbox = Effect.fn("create.createSandbox")(
+  function* (options: {
+    readonly os: Os;
+    readonly provider?: string | undefined;
+    readonly idle?: string | undefined;
+    readonly maxLife?: string | undefined;
+    readonly work?: string | undefined;
+    readonly setup?: string | undefined;
+    readonly envFile?: string | undefined;
+    readonly maxSize?: string | undefined;
+    readonly size?: string | undefined;
+  }) {
     const providers = yield* Providers;
     const providerName = options.provider ?? (yield* providerForOs(options.os));
     const entry = providers.get(providerName);
@@ -247,4 +246,6 @@ export const createSandbox = (options: {
       ),
     );
     yield* output.out(`${id}\n`);
-  }).pipe(Effect.scoped);
+  },
+  Effect.scoped,
+);
