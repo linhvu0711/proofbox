@@ -289,6 +289,56 @@ describe("edit-plan", () => {
     ]);
   });
 
+  it("a Wait mark in the hold before the first Step mark is not used", () => {
+    // Given: a change, then still until the first Step mark — that hold
+    // shows in no clip, so a Wait mark that only matches it is not used.
+    const input = {
+      duration: 40,
+      freezes: [
+        [0, 10],
+        [15, 40],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [35],
+      clicks: [],
+      waits: [{ t: 20, reason: "too early" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([{ reason: "too early", step: 0 }]);
+    expect(
+      plan.clips.every(
+        (clip) => !(clip.kind === "still" && clip.label?.includes("too early")),
+      ),
+    ).toBe(true);
+  });
+
+  it("a Wait mark before the first Step mark goes on an early gap that is shown", () => {
+    // Given: a still gap between changes before the first Step mark —
+    // that gap keeps a clip, so a Wait mark in it is used.
+    const input = {
+      duration: 40,
+      freezes: [
+        [0, 10],
+        [15, 40],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [35],
+      clicks: [],
+      waits: [{ t: 5, reason: "too early" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([]);
+    expect(plan.clips[0]).toEqual({
+      kind: "still",
+      at: 0,
+      seconds: 2,
+      label: "» 9 s later · too early",
+      step: 0,
+    });
+  });
+
   it("two Wait marks on one Still part show the first reason", () => {
     // Given
     const input = {

@@ -209,8 +209,10 @@ export const planEdit = (input: PlanInput): EditPlan => {
         position = b;
       }
       if (merged.length === 0) {
-        stillParts.push({ from: start, to: end, endsAt: end });
-      } else if (end - position >= 3) {
+        if (holds) {
+          stillParts.push({ from: start, to: end, endsAt: end });
+        }
+      } else if (holds && end - position >= 3) {
         stillParts.push({ from: position, to: end, endsAt: end });
       }
     }

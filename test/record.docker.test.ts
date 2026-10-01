@@ -487,8 +487,9 @@ describe("Recording and the Proof video", () => {
       "--wait",
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
-    // When — stop at once, so the still part after the Wait mark stays
-    // under 3 s and cannot take it.
+    // When — a Step mark ends step 1 at once, so the still part after
+    // the Wait mark stays under 3 s and cannot take it.
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
     const result = await runCli(env, [
       "record",
       "stop",
@@ -511,6 +512,16 @@ describe("Recording and the Proof video", () => {
     const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
     await runCli(env, ["record", "start", id]);
     await wait(6000);
+    // The opening still is one Still part: the first Wait mark takes it,
+    // so the second names it as not used — before any Step mark exists.
+    await runCli(env, ["mark", id, "first reason", "--wait"]);
+    const marked = await runCli(env, [
+      "mark",
+      id,
+      "nobody waits here",
+      "--wait",
+    ]);
+    expect(marked.exitCode, marked.stderr).toBe(0);
     await runCli(env, [
       "click",
       id,
@@ -532,16 +543,7 @@ describe("Recording and the Proof video", () => {
       "--pace",
       "fast",
     ]);
-    await wait(300);
-    const marked = await runCli(env, [
-      "mark",
-      id,
-      "nobody waits here",
-      "--wait",
-    ]);
-    expect(marked.exitCode, marked.stderr).toBe(0);
-    // When — stop at once, so the still part after the Wait mark stays
-    // under 3 s and cannot take it.
+    // When
     const result = await runCli(env, [
       "record",
       "stop",
