@@ -10,6 +10,10 @@ proofbox is a CLI that lets any coding agent rent a disposable machine, run an a
 A disposable machine (Linux or macOS in v1) that proofbox creates, drives, and deletes for one caller.
 _Avoid_: VM, box, instance, devbox
 
+**Unfinished Sandbox**:
+A machine that `create` started at the Provider but has not finished making into a Sandbox. A create may still be making it, or a create stopped part way. It still counts against the Provider account's quota until `delete` removes it or its Deadline passes.
+_Avoid_: half-made host, orphan, leftover instance
+
 **Provider**:
 A service that supplies Sandboxes, such as Namespace or Docker. Each OS maps to one Provider in the config.
 _Avoid_: platform, backend, vendor
