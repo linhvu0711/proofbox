@@ -1,11 +1,15 @@
 // Live Namespace calls for the .namespace.test.ts suites: `liveInstances`
-// lists every host the token can see across the known regions, and
-// `destroyHost` deletes one, best effort.
+// lists every host the token can see across the known regions,
+// `destroyHost` deletes one, best effort, and `snapshotExpiry` reads when
+// the Registry deletes a saved Snapshot.
 
+import { timestampDate } from "@bufbuild/protobuf/wkt";
 import {
   type ComputeClient,
   createComputeClient,
+  createGlobalTransport,
   createRegionTransport,
+  createRegistryClient,
 } from "@namespacelabs/sdk/api";
 import { fromBearerToken } from "@namespacelabs/sdk/auth";
 import type { InstanceShape } from "@namespacelabs/sdk/proto/namespace/cloud/compute/v1beta/compute_pb";
@@ -17,11 +21,16 @@ export interface LiveInstance {
   readonly shape?: InstanceShape | undefined;
 }
 
-const clientFor = (region: string): ComputeClient => {
+const liveToken = (): string => {
   const token = process.env.PROOFBOX_NAMESPACE_TOKEN;
   if (token === undefined) {
     throw new Error("PROOFBOX_NAMESPACE_TOKEN is not set");
   }
+  return token;
+};
+
+const clientFor = (region: string): ComputeClient => {
+  const token = liveToken();
   const baseUrl = (
     process.env.PROOFBOX_NAMESPACE_COMPUTE_URL ??
     "https://{region}.compute.namespaceapis.com"
@@ -73,4 +82,28 @@ export const destroyHost = async (
   } catch {
     // Best effort: a host already gone must not fail the cleanup.
   }
+};
+
+// The Registry keeps a Snapshot under `proofbox-snapshot-linux`, tagged
+// with its Fingerprint; undefined when the image has no expiry.
+export const snapshotExpiry = async (
+  fingerprint: string,
+): Promise<Date | undefined> => {
+  const token = liveToken();
+  const client = createRegistryClient({
+    tokenSource: fromBearerToken(token),
+    transport: createGlobalTransport({
+      tokenSource: fromBearerToken(token),
+      baseUrl:
+        process.env.PROOFBOX_NAMESPACE_REGISTRY_URL ??
+        "https://global.namespaceapis.com",
+    }),
+  });
+  const { image } = await client.registry.getImage({
+    repository: "proofbox-snapshot-linux",
+    reference: fingerprint,
+  });
+  return image?.expiresAt === undefined
+    ? undefined
+    : timestampDate(image.expiresAt);
 };

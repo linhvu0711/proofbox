@@ -19,7 +19,11 @@ import {
   runCli,
   trackTempDir,
 } from "./support/cli.ts";
-import { destroyHost, liveInstances } from "./support/namespace-live.ts";
+import {
+  destroyHost,
+  liveInstances,
+  snapshotExpiry,
+} from "./support/namespace-live.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
@@ -115,7 +119,7 @@ describe("Namespace Provider", () => {
     expect(chromium.stdout).toMatch(/^Chromium \d+\./);
   });
 
-  it("a second create reuses the Snapshot, skips the Setup script, and holds no Secret", async () => {
+  it("a second create reuses the Snapshot, keeps it 336h, skips the Setup script, and holds no Secret", async () => {
     // Given: a lockfile no earlier run had, so the Fingerprint is new
     const env = makeEnv({ docker: true, namespace: true });
     const folder = makeGitFolder({
@@ -138,7 +142,10 @@ describe("Namespace Provider", () => {
     const fp = /Snapshot saved, Fingerprint ([0-9a-f]{12})/.exec(
       first.stderr,
     )?.[1];
+    const started = Date.now();
     const second = await create(env, ["--work", folder, "--setup", script]);
+    const ended = Date.now();
+    const expiry = fp === undefined ? undefined : await snapshotExpiry(fp);
     const id = second.stdout.trim();
     const runs = await runCli(env, ["exec", id, "--", "cat", "runs.txt"]);
     const found = await runCli(env, [
@@ -158,12 +165,26 @@ describe("Namespace Provider", () => {
       setupRan: second.stderr.includes("proofbox: running Setup script"),
       runs: runs.stdout,
       found: found.stdout,
+      expiryWarned: `${first.stderr}${second.stderr}`.includes(
+        "could not set the Snapshot expiry",
+      ),
+      expirySet: expiry !== undefined,
+      keptTwoWeeks:
+        expiry !== undefined &&
+        expiry.getTime() >= started + 336 * 3_600_000 - 60_000,
+      notKeptLonger:
+        expiry !== undefined &&
+        expiry.getTime() <= ended + 336 * 3_600_000 + 60_000,
     }).toEqual({
       saved: true,
       reused: true,
       setupRan: false,
       runs: "ran\n",
       found: "clean\n",
+      expiryWarned: false,
+      expirySet: true,
+      keptTwoWeeks: true,
+      notKeptLonger: true,
     });
   });
 
