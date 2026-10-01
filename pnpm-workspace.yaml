@@ -1,0 +1,7 @@
+saveExact: true
+allowBuilds:
+  esbuild: false
+  ssh2: false
+  cpu-features: false
+  msgpackr-extract: false
+  '@parcel/watcher': false
