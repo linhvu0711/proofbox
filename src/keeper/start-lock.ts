@@ -1,12 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Data, Duration, Effect, Schedule } from "effect";
 import { ProviderError } from "../errors.ts";
-
-// A start holds its lock for a few ms. A lock this old was left by a
-// Keeper whose pid now names some other process.
-const STALE_AFTER_MS = 30_000;
+import { ownStart, stillRuns } from "./paths.ts";
 
 // A held start lock, inside this file only: it tells the retry to try
 // again.
@@ -15,7 +12,7 @@ class StartLockHeldError extends Data.TaggedError("StartLockHeldError") {}
 interface Owner {
   readonly pid: number;
   readonly token: string;
-  readonly at: number;
+  readonly started: string;
 }
 
 const hasCode = (cause: unknown, code: string) =>
@@ -29,12 +26,9 @@ const removeDir = (dir: string) => rm(dir, { recursive: true, force: true });
 // The owner of the lock at `dir`, or undefined when no lock is there.
 const readOwner = async (dir: string): Promise<Owner | undefined> => {
   try {
-    const [text, info] = await Promise.all([
-      readFile(join(dir, "owner"), "utf8"),
-      stat(dir),
-    ]);
-    const [pid = "", token = ""] = text.trim().split(" ");
-    return { pid: Number(pid), token, at: info.mtimeMs };
+    const text = await readFile(join(dir, "owner"), "utf8");
+    const [pid = "", token = "", started = ""] = text.split("\n");
+    return { pid: Number(pid), token, started };
   } catch (cause) {
     if (hasCode(cause, "ENOENT")) {
       return undefined;
@@ -43,30 +37,17 @@ const readOwner = async (dir: string): Promise<Owner | undefined> => {
   }
 };
 
-// A lock is stale when its owner is gone: the Keeper was killed mid-start.
-const isStale = (owner: Owner) => {
-  if (!Number.isInteger(owner.pid) || owner.pid <= 0) {
-    return true;
-  }
-  if (Date.now() - owner.at > STALE_AFTER_MS) {
-    return true;
-  }
-  try {
-    process.kill(owner.pid, 0);
-    return false;
-  } catch (cause) {
-    return hasCode(cause, "ESRCH");
-  }
-};
-
 // Build the lock whole in a temp dir, then rename it into place. A rename
 // onto a lock that is there fails, so a lock never shows without its
 // owner.
-const take = async (dir: string, token: string) => {
+const take = async (dir: string, token: string, started: string) => {
   const temp = `${dir}.${token}.tmp`;
   try {
     await mkdir(temp);
-    await writeFile(join(temp, "owner"), `${process.pid} ${token}\n`);
+    await writeFile(
+      join(temp, "owner"),
+      `${process.pid}\n${token}\n${started}\n`,
+    );
     await rename(temp, dir);
     return true;
   } catch (cause) {
@@ -98,21 +79,34 @@ const takeOver = async (dir: string, stale: Owner, token: string) => {
   await rename(aside, dir).catch(() => removeDir(aside));
 };
 
-// One try at the lock: take it, or take over a stale one.
-const tryTake = async (dir: string, token: string) => {
-  if (await take(dir, token)) {
+// One try at the lock: take it, or take over one whose owner is gone,
+// which is a Keeper killed mid-start. A process id that some other process
+// reuses does not pass for the owner.
+const tryTake = Effect.fn("startLock.tryTake")(function* (
+  dir: string,
+  token: string,
+  started: string,
+  failed: (cause: unknown) => ProviderError,
+) {
+  const attempt = <A>(run: () => Promise<A>) =>
+    Effect.tryPromise({ try: run, catch: (cause) => failed(cause) });
+  if (yield* attempt(() => take(dir, token, started))) {
     return true;
   }
-  const owner = await readOwner(dir);
+  const owner = yield* attempt(() => readOwner(dir));
   if (owner === undefined) {
-    return take(dir, token);
+    return yield* attempt(() => take(dir, token, started));
   }
-  if (isStale(owner)) {
-    await takeOver(dir, owner, token);
-    return take(dir, token);
+  const live =
+    Number.isInteger(owner.pid) &&
+    owner.pid > 0 &&
+    (yield* stillRuns(owner.pid, owner.started));
+  if (live) {
+    return false;
   }
-  return false;
-};
+  yield* attempt(() => takeOver(dir, owner, token));
+  return yield* attempt(() => take(dir, token, started));
+});
 
 // Runs a Keeper's start, from its socket check until it listens, under a
 // lock per Sandbox, so a second Keeper started at once waits and then
@@ -130,10 +124,8 @@ export const withStartLock = Effect.fn("startLock.withStartLock")(function* <
       provider,
       reason: cause instanceof Error ? cause.message : String(cause),
     });
-  const acquire = Effect.tryPromise({
-    try: () => tryTake(dir, token),
-    catch: (cause) => failed(cause),
-  }).pipe(
+  const started = yield* ownStart;
+  const acquire = tryTake(dir, token, started, failed).pipe(
     Effect.filterOrFail(
       (held) => held,
       () => new StartLockHeldError(),

@@ -62,7 +62,7 @@ const staleStartLock = (env: { runtime: string }, name: string) => {
   const dead = spawnSync("true").pid;
   const lock = join(env.runtime, `fake-${name}.start-lock`);
   mkdirSync(lock);
-  writeFileSync(join(lock, "owner"), `${dead} killed\n`);
+  writeFileSync(join(lock, "owner"), `${dead}\nkilled\n\n`);
 };
 
 const runtimeConfig = (env: { runtime: string }) =>
@@ -555,6 +555,47 @@ describe("Keeper", () => {
     },
   );
 
+  it.scopedLive(
+    "a Keeper takes over a start lock whose pid another process now runs",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a Sandbox, and a start lock whose pid is this process,
+        // which started at another time than the owner did
+        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const info = yield* fake
+          .create({
+            os: "linux",
+            idle: Duration.minutes(5),
+            maxLife: Duration.hours(1),
+          })
+          .pipe(Effect.provideService(Progress, noProgress));
+        const lock = join(env.runtime, `fake-${info.name}.start-lock`);
+        mkdirSync(lock);
+        writeFileSync(
+          join(lock, "owner"),
+          `${process.pid}\nreused\nThu Jan  1 00:00:00 1970\n`,
+        );
+        const socket = join(env.runtime, `fake-${info.name}.sock`);
+        // When
+        yield* Effect.forkScoped(
+          runKeeper(`fake:${info.name}`).pipe(
+            Effect.provideService(
+              Providers,
+              new Map([["fake", providerEntry(fake)]]),
+            ),
+            Effect.provide(NodeContext.layer),
+          ),
+        );
+        for (let i = 0; i < 20 && !existsSync(socket); i++) {
+          yield* Effect.sleep("100 millis");
+        }
+        // Then
+        expect(existsSync(socket)).toBe(true);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
   it.scopedLive("a Keeper never takes over a live start lock", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
@@ -569,7 +610,7 @@ describe("Keeper", () => {
         .pipe(Effect.provideService(Progress, noProgress));
       const lock = join(env.runtime, `fake-${info.name}.start-lock`);
       mkdirSync(lock);
-      writeFileSync(join(lock, "owner"), `${process.pid} live\n`);
+      writeFileSync(join(lock, "owner"), `${process.pid}\nlive\n\n`);
       // When
       yield* runKeeper(`fake:${info.name}`).pipe(
         Effect.provideService(
@@ -581,7 +622,7 @@ describe("Keeper", () => {
       );
       // Then
       expect(readFileSync(join(lock, "owner"), "utf8")).toBe(
-        `${process.pid} live\n`,
+        `${process.pid}\nlive\n\n`,
       );
     }).pipe(runtimeConfig(env));
   });

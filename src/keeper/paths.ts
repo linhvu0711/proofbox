@@ -120,8 +120,7 @@ export const markCreate = Effect.fn("paths.markCreate")(function* (
     dir,
     `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
   );
-  const own = yield* startOf(process.pid);
-  const started = own._tag === "Started" ? own.at : "";
+  const started = yield* ownStart;
   yield* Effect.tryPromise({
     try: () => writeFile(path, `${process.pid}\n${started}\n`, { mode: 0o600 }),
     catch: (cause) =>
@@ -199,6 +198,27 @@ const runsAsMe = (pid: number) => {
   }
 };
 
+// This process's start time, as `stillRuns` compares it; empty when it
+// cannot be told.
+export const ownStart = Effect.map(startOf(process.pid), (own) =>
+  own._tag === "Started" ? own.at : "",
+);
+
+// Whether process `pid` still runs and is the one that started at
+// `started`, so an id reused by some other process does not pass for it.
+// With no start time to compare, a process id this user runs counts.
+export const stillRuns = Effect.fn("paths.stillRuns")(function* (
+  pid: number,
+  started: string,
+) {
+  const now = yield* startOf(pid);
+  return now._tag === "Started"
+    ? started === ""
+      ? runsAsMe(pid)
+      : started === now.at
+    : now._tag === "Unknown" && runsAsMe(pid);
+});
+
 // The marks of the creates still running for one Provider. A mark whose
 // process is gone, or whose process id now belongs to a process that
 // started at another time, is skipped.
@@ -240,16 +260,9 @@ export const liveCreates = Effect.fn("paths.liveCreates")(function* (
     if (!/^\d+$/.test(pid)) {
       continue;
     }
-    const now = yield* startOf(Number(pid));
     // With no start time to compare, a process id this user runs counts:
     // logout would rather wait than miss a host.
-    const running =
-      now._tag === "Started"
-        ? started === ""
-          ? runsAsMe(Number(pid))
-          : started === now.at
-        : now._tag === "Unknown" && runsAsMe(Number(pid));
-    if (running) {
+    if (yield* stillRuns(Number(pid), started)) {
       live.push(mark.name);
     }
   }
