@@ -145,12 +145,18 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     if (out === undefined) {
       return yield* Effect.die(new Error("record stop lost --out"));
     }
+    // Checking and building the Proof video run as long as the Recording,
+    // so they get its length on top of the wait.
+    const buildLimit: HelperLimit = {
+      ...STOP_LIMIT,
+      extra: Duration.seconds(info.stop - info.start),
+    };
     const buildProof = Effect.gen(function* () {
       const probed = yield* runHelper(
         options.id,
         RECORD_HELPER,
         ["probe", info.dir],
-        { outcome: "no Proof video was made", limit: STOP_LIMIT },
+        { outcome: "no Proof video was made", limit: buildLimit },
       );
       if (probed.code !== 0) {
         return yield* helperFailed(probed);
@@ -162,7 +168,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           options.id,
           RECORD_HELPER,
           ["probe", info.dir, String(Math.max(probe.duration / 4, 0.1))],
-          { outcome: "no Proof video was made", limit: STOP_LIMIT },
+          { outcome: "no Proof video was made", limit: buildLimit },
         );
         if (again.code !== 0) {
           return yield* helperFailed(again);
@@ -261,7 +267,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           {
             outcome: "no Proof video was made",
             stdin: Stream.make(new TextEncoder().encode(script)),
-            limit: STOP_LIMIT,
+            limit: buildLimit,
           },
         );
         if (built.code !== 0) {

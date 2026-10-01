@@ -13,7 +13,6 @@ import {
   Ref,
   Stream,
   TestClock,
-  TestServices,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
@@ -35,6 +34,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { sleepsFrom } from "./support/clock.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -134,21 +134,6 @@ const macSandbox = (answer: Answer) =>
           ),
         ),
     };
-  });
-
-// Waits, on the real clock, until the TestClock holds a sleep that ends at
-// or after each of `ends` (ms since t=0), so a call's own timers are set
-// before a test moves the clock. A retry sets its timer at 120 s or a
-// little later, as its file reads finish before or after the clock stops.
-const sleepsFrom = (...ends: ReadonlyArray<number>) =>
-  Effect.gen(function* () {
-    for (let i = 0; i < 2000; i++) {
-      const pending = Chunk.toReadonlyArray(yield* TestClock.sleeps());
-      if (ends.every((end) => pending.some((at) => at >= end))) {
-        return;
-      }
-      yield* TestServices.provideLive(Effect.sleep("10 millis"));
-    }
   });
 
 const captured = (which: "out" | "err") =>

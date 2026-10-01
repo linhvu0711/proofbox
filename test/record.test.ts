@@ -3,21 +3,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
-import { Duration, Effect, Layer, Stream } from "effect";
+import {
+  ConfigProvider,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Stream,
+  TestClock,
+} from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { stopRecording } from "../src/commands/record.ts";
-import { CaptureBlockedError } from "../src/errors.ts";
+import { CaptureBlockedError, NothingChangedError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
+  type ExecEvent,
   type Provider,
   type ProviderEntry,
   Providers,
   providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { sleepsFrom } from "./support/clock.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -51,6 +61,48 @@ const blockedMac = (root: string, blocked: string): Provider => {
         { _tag: "Stdout" as const, bytes: PNG_HEAD },
         { _tag: "Exit" as const, code: 0 },
       );
+    }
+    return Stream.make({ _tag: "Exit" as const, code: 1 });
+  };
+  return {
+    ...base,
+    offers: {
+      ...base.offers,
+      macos: {
+        sizes: [{ cpu: 4, ramGb: 7 }],
+        features: new Set(["desktop", "recording"]),
+      },
+    },
+    connect: (sandbox) =>
+      Effect.map(base.connect(sandbox), (connection) => ({
+        ...connection,
+        exec: (argv) => answer(argv),
+      })),
+  };
+};
+
+// A fake Mac whose Recording ran 300 s (start 1000, stop 1300) and whose
+// check (`probe`) answers with `probe`.
+const stoppingMac = (
+  root: string,
+  probe: Stream.Stream<ExecEvent>,
+): Provider => {
+  const base = makeFakeProvider({ root, watch: "none" });
+  const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
+    const [, action] = argv;
+    if (action === "stop") {
+      return Stream.make(
+        {
+          _tag: "Stdout" as const,
+          bytes: new TextEncoder().encode(
+            '{"dir":"/var/lib/proofbox/recordings/1","start":1000,"stop":1300,"steps":0,"width":1440,"height":900}',
+          ),
+        },
+        { _tag: "Exit" as const, code: 0 },
+      );
+    }
+    if (action === "probe") {
+      return probe;
     }
     return Stream.make({ _tag: "Exit" as const, code: 1 });
   };
@@ -272,6 +324,93 @@ describe("Recording and the Proof video", () => {
         ).toBe(true);
         rmSync(join(process.cwd(), "proof-blocked.png"), { force: true });
       }).pipe(Effect.provide(layers(mac)));
+    },
+  );
+
+  effectIt.effect(
+    "record stop gives the check 2 min plus the Recording's length",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      tempRoots.push(root, runtime);
+      const mac = stoppingMac(root, Stream.never);
+      return Effect.gen(function* () {
+        // Given: a 300 s Recording whose check never answers
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
+        tempRoots.push(dir);
+        // When
+        const fiber = yield* Effect.fork(
+          Effect.flip(stopRecording({ id, out: join(dir, "proof.mp4") })),
+        );
+        yield* sleepsFrom(420_000);
+        yield* TestClock.adjust("421 seconds");
+        const error = yield* Fiber.join(fiber);
+        // Then
+        expect(
+          error.message.startsWith(
+            `Sandbox ${id} did not answer the record stop in 7 min.`,
+          ),
+        ).toBe(true);
+      }).pipe(
+        Effect.provide(layers(mac)),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+        ),
+      );
+    },
+  );
+
+  effectIt.effect(
+    "record stop accepts a check that takes 400 s on a 5 min Recording",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      tempRoots.push(root, runtime);
+      const mac = stoppingMac(
+        root,
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.as(Effect.sleep("400 seconds"), {
+              _tag: "Stdout" as const,
+              bytes: new TextEncoder().encode(
+                "Duration: 00:05:00.00\nlavfi.freezedetect.freeze_start: 0\n",
+              ),
+            }),
+          ),
+          Stream.make({ _tag: "Exit" as const, code: 0 }),
+        ),
+      );
+      return Effect.gen(function* () {
+        // Given: a 300 s Recording whose check answers after 400 s
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
+        tempRoots.push(dir);
+        // When
+        const fiber = yield* Effect.fork(
+          Effect.flip(stopRecording({ id, out: join(dir, "proof.mp4") })),
+        );
+        yield* sleepsFrom(400_000);
+        yield* TestClock.adjust("401 seconds");
+        const error = yield* Fiber.join(fiber);
+        // Then
+        expect(error).toBeInstanceOf(NothingChangedError);
+      }).pipe(
+        Effect.provide(layers(mac)),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+        ),
+      );
     },
   );
 });
