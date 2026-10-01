@@ -272,6 +272,41 @@ describe("Namespace errors", () => {
     });
   });
 
+  it("delete of an Unfinished Sandbox destroys its host", async () => {
+    // Given: Namespace lists a Mac host that never got its Sandbox state
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? {
+            json: {
+              instances: [
+                {
+                  instanceId: "abc123def4567",
+                  labels: [{ name: "proofbox.os", value: "macos" }],
+                },
+              ],
+            },
+          }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["delete", "ns:us:abc123def4567"], {
+      set: nsEnv(ns),
+    });
+    // Then
+    expect({
+      stdout: result.stdout,
+      destroyed: ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.body),
+      exitCode: result.exitCode,
+    }).toEqual({
+      stdout: "Deleted ns:us:abc123def4567\n",
+      destroyed: [{ instanceId: "abc123def4567" }],
+      exitCode: 0,
+    });
+  });
+
   it("create when Namespace cannot be reached says to check the network", async () => {
     // Given: makeEnv points the Compute API at port 9
     const env = makeEnv();

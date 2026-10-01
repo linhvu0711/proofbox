@@ -184,11 +184,15 @@ export const makeDockerProvider = (options: {
         ),
       { discard: false },
     );
-    return { infos: infos.filter((info) => info !== undefined), unreached: [] };
+    return {
+      infos: infos.filter((info) => info !== undefined),
+      unreached: [],
+      unfinished: [],
+    };
   }).pipe(
     // proofbox list must work where Docker does not run (a Mac caller).
     Effect.catchTag("ProviderUnavailableError", () =>
-      Effect.succeed({ infos: [], unreached: [] }),
+      Effect.succeed({ infos: [], unreached: [], unfinished: [] }),
     ),
   );
 

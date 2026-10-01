@@ -1571,7 +1571,7 @@ describe("auth", () => {
                 ...makeFakeProvider({ root, watch: "none" }),
                 list: Deferred.succeed(listing, undefined).pipe(
                   Effect.zipRight(Deferred.await(release)),
-                  Effect.as({ infos: [], unreached: [] }),
+                  Effect.as({ infos: [], unreached: [], unfinished: [] }),
                 ),
               }),
             ],

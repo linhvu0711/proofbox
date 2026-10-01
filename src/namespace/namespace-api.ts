@@ -1,4 +1,4 @@
-import { timestampFromDate } from "@bufbuild/protobuf/wkt";
+import { timestampDate, timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
 import {
   type ComputeClient,
@@ -9,6 +9,7 @@ import {
   createRegistryClient,
 } from "@namespacelabs/sdk/api";
 import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
+import { InstanceMetadata_Status } from "@namespacelabs/sdk/proto/namespace/cloud/compute/v1beta/compute_pb";
 import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
 import { Config, Effect, Option, Redacted, Schema } from "effect";
 import {
@@ -48,11 +49,13 @@ export type ApiError =
 // One Namespace instance as `list` reports it: its id, its labels as a
 // name → value record, and the continent it runs on — every endpoint's
 // list is global, so the continent, not the queried region, names where
-// the instance lives.
+// the instance lives. `starting` is true while Namespace still makes it.
 export interface InstanceListed {
   readonly id: string;
   readonly labels: Readonly<Record<string, string>>;
   readonly region?: string | undefined;
+  readonly createdAt?: Date | undefined;
+  readonly starting?: boolean | undefined;
 }
 
 export interface LabelEntry {
@@ -375,6 +378,13 @@ export const makeNamespaceApi = (deps: {
               instance.hwDeployment?.geoContinent === ""
                 ? undefined
                 : instance.hwDeployment?.geoContinent,
+            createdAt:
+              instance.createdAt === undefined
+                ? undefined
+                : timestampDate(instance.createdAt),
+            starting:
+              instance.status === InstanceMetadata_Status.PENDING ||
+              instance.status === InstanceMetadata_Status.CREATING,
           });
         }
         if (page.paginationCursor.length === 0) {

@@ -370,7 +370,7 @@ export const makeFakeProvider = (options: {
               reason: `fake region ${options.unreached} did not answer`,
             },
           ];
-    return { infos, unreached };
+    return { infos, unreached, unfinished: [] };
   });
 
   const del = (sandbox: SandboxRef) =>

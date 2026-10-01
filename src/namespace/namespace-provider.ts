@@ -54,6 +54,7 @@ import {
   type ProviderLogin,
   SandboxInfo,
   type SandboxRef,
+  type UnfinishedSandbox,
 } from "../provider.ts";
 import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
@@ -128,8 +129,9 @@ export const makeNamespaceProvider = (deps: {
     new ProviderError({ provider: "namespace", reason });
   const sandboxId = (ref: SandboxRef) =>
     formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
-  const gone = (ref: SandboxRef) =>
-    new SandboxGoneError({ id: sandboxId(ref) });
+  // `unfinished`: the host is there, but create never made its Sandbox.
+  const gone = (ref: SandboxRef, unfinished?: true) =>
+    new SandboxGoneError({ id: sandboxId(ref), unfinished });
   const brandFor = (ref: SandboxRef) => ({
     provider: "namespace",
     id: () => sandboxId(ref),
@@ -237,14 +239,16 @@ export const makeNamespaceProvider = (deps: {
       );
       const stderr = result.stderr.toLowerCase();
       // The container can stop or be removed between inspect and the deadline
-      // read; either way the Sandbox is gone rather than malformed.
-      const missing =
+      // read; either way the Sandbox is gone rather than malformed. A host
+      // with no container at all is one create never finished; a stopped
+      // one ran out its Deadline (images/linux/init.sh).
+      const never =
         stderr.includes("no such object") ||
-        stderr.includes("no such container") ||
-        stderr.includes("is not running");
+        stderr.includes("no such container");
+      const missing = never || stderr.includes("is not running");
       if (result.exitCode !== 0 || missing) {
         if (missing) {
-          return yield* gone(ref);
+          return yield* never ? gone(ref, true) : gone(ref);
         }
         return yield* fail(
           `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
@@ -476,22 +480,49 @@ export const makeNamespaceProvider = (deps: {
           }),
       ).then(() => {});
     });
+    // A host Namespace still makes has no link to read over yet, and one
+    // whose Sandbox state was never written reads as never made: both are
+    // Unfinished Sandboxes. Any other gone host is dropped.
+    const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       live,
-      ({ os, region, instance }) =>
-        getAs(os, { name: instance.id, region }).pipe(
-          Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
-        ),
+      ({ os, region, instance }) => {
+        const entry = {
+          name: instance.id,
+          region,
+          os,
+          createdAt: instance.createdAt,
+        };
+        if (instance.starting === true) {
+          unfinished.push(entry);
+          return Effect.succeed(undefined);
+        }
+        return getAs(os, { name: instance.id, region }).pipe(
+          Effect.catchTag("SandboxGoneError", (error) =>
+            Effect.sync(() => {
+              if (error.unfinished === true) {
+                unfinished.push(entry);
+              }
+              return undefined;
+            }),
+          ),
+        );
+      },
       { discard: false },
     );
     return {
       infos: infos.filter((info) => info !== undefined),
       unreached,
+      unfinished,
     } satisfies ListResult;
   }).pipe(
     Effect.catchTag("SandboxGoneError", () => Effect.fail(unreachable())),
     Effect.catchTag("NotLoggedInError", () =>
-      Effect.succeed({ infos: [], unreached: [] } satisfies ListResult),
+      Effect.succeed({
+        infos: [],
+        unreached: [],
+        unfinished: [],
+      } satisfies ListResult),
     ),
   );
 
