@@ -49,6 +49,24 @@ export const readEvents = async (
     .map((line) => JSON.parse(line) as PageEvent);
 };
 
+// The modifiers the Mac thinks are held, as held-modifiers.swift prints
+// them: "none" when no key is down.
+export const readHeldModifiers = async (
+  env: CliEnv,
+  id: string,
+): Promise<string> => {
+  await sendFile(env, id, "held-modifiers.swift");
+  const result = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    `cd ${DIR} && swiftc -O held-modifiers.swift -o held-modifiers && ./held-modifiers`,
+  ]);
+  return result.stdout.trim();
+};
+
 export const openEventsPage = async (env: CliEnv, id: string) => {
   await sendFile(env, id, "events.html");
   await sendFile(env, id, "events-server.py");
