@@ -30,9 +30,10 @@ const STATUS = new Map([
 ]);
 
 // <region>/namespace.cloud.compute.v1beta.ComputeService/<method>, or the
-// sign-in service's own /<service>/<method> (the call's region is "").
+// sign-in, token, and registry services' /<service>/<method> (those
+// calls' region is "").
 const PATH =
-  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|(nsl\.signin\.SigninService|namespace\.cloud\.registry\.v1beta\.ContainerRegistryService))\/([^/]+)$/;
+  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|(nsl\.signin\.SigninService|namespace\.cloud\.iam\.v1beta\.TokenService|namespace\.cloud\.registry\.v1beta\.ContainerRegistryService))\/([^/]+)$/;
 
 const LOGIN_PAGE = /^\/login\/([^/]+)$/;
 

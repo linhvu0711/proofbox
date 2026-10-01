@@ -4,6 +4,7 @@ import {
   type ComputeClient,
   createComputeClient,
   createGlobalTransport,
+  createIAMClient,
   createRegionTransport,
   createRegistryClient,
 } from "@namespacelabs/sdk/api";
@@ -12,16 +13,21 @@ import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespa
 import { Config, Effect, Option, Redacted, Schema } from "effect";
 import {
   type BadLoginsFileError,
-  type LoginExpiredError,
+  LoginExpiredError,
   type NotLoggedInError,
   ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
+  TokenDeniedError,
   TokenPermissionError,
   TokenRejectedError,
 } from "../errors.ts";
-import type { ProviderAccount, ProviderLogin } from "../provider.ts";
+import type {
+  ProviderAccount,
+  ProviderLogin,
+  TokenRequest,
+} from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { DEFAULT_REGION } from "./regions.ts";
 
@@ -129,6 +135,16 @@ export interface NamespaceApi {
   ) => Effect.Effect<
     ProviderAccount,
     TokenRejectedError | TokenPermissionError | ProviderUnavailableError
+  >;
+  readonly makeToken: (
+    tenant: Redacted.Redacted<string>,
+    request: TokenRequest,
+  ) => Effect.Effect<
+    Redacted.Redacted<string>,
+    | TokenDeniedError
+    | LoginExpiredError
+    | ProviderUnavailableError
+    | ProviderError
   >;
 }
 
@@ -257,6 +273,28 @@ const computeUrlTemplate = Config.string("PROOFBOX_NAMESPACE_COMPUTE_URL").pipe(
 const registryUrlTemplate = Config.string(
   "PROOFBOX_NAMESPACE_REGISTRY_URL",
 ).pipe(Config.withDefault("https://global.namespaceapis.com"));
+
+// The IAM API base URL for the token calls; it is a global endpoint,
+// not the private sign-in host PROOFBOX_NAMESPACE_IAM_URL names.
+const tokenUrl = Config.string("PROOFBOX_NAMESPACE_TOKEN_URL").pipe(
+  Config.withDefault("https://iam.namespaceapis.com"),
+);
+
+// The only rights a robot token gets: what `create`, `exec`, `list`,
+// `delete`, and the Snapshot push need. The push itself runs on the
+// Sandbox host with its own registry login.
+const ROBOT_GRANTS = [
+  {
+    resourceType: "instance",
+    resourceId: "*",
+    actions: ["create", "get", "list", "wait", "refresh", "destroy", "ssh"],
+  },
+  {
+    resourceType: "containerregistry/image",
+    resourceId: "*",
+    actions: ["get", "update"],
+  },
+];
 
 export const makeNamespaceApi = (deps: {
   readonly login: ProviderLogin;
@@ -533,6 +571,64 @@ export const makeNamespaceApi = (deps: {
       });
     });
 
+  // A tenant token mints a revokable robot token over the public IAM
+  // endpoint: name, description, expiry, and the grants, the same
+  // request Namespace's own CLI sends for a token with no user.
+  const makeToken = (
+    tenant: Redacted.Redacted<string>,
+    request: TokenRequest,
+  ) =>
+    Effect.gen(function* () {
+      const baseUrl = yield* tokenUrl.pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      );
+      const client = createIAMClient({
+        tokenSource: fromBearerToken(Redacted.value(tenant)),
+        transport: createGlobalTransport({
+          tokenSource: fromBearerToken(Redacted.value(tenant)),
+          baseUrl,
+        }),
+      });
+      const made = yield* Effect.tryPromise({
+        try: () =>
+          client.tokens.createRevokableToken({
+            name: request.name,
+            description: "Made by proofbox auth token",
+            expiresAt: timestampFromDate(request.expiresAt),
+            access: { grants: ROBOT_GRANTS },
+          }),
+        catch: (cause) => {
+          if (
+            !(cause instanceof ConnectError) ||
+            cause.code === Code.Unavailable ||
+            cause.code === Code.DeadlineExceeded
+          ) {
+            return unreachable();
+          }
+          if (cause.code === Code.PermissionDenied) {
+            return new TokenDeniedError({ provider: "namespace" });
+          }
+          if (cause.code === Code.Unauthenticated) {
+            return new LoginExpiredError({ provider: "namespace" });
+          }
+          return new ProviderError({
+            provider: "namespace",
+            reason: `TokenService.CreateRevokableToken failed: ${cause.rawMessage}`,
+          });
+        },
+      });
+      if (made.bearerToken === "") {
+        return yield* new ProviderError({
+          provider: "namespace",
+          reason: "TokenService.CreateRevokableToken gave no token",
+        });
+      }
+      return Redacted.make(made.bearerToken);
+    });
+
   return {
     create,
     wait,
@@ -542,5 +638,6 @@ export const makeNamespaceApi = (deps: {
     sshConfig,
     ensureImageExpiry,
     checkToken,
+    makeToken,
   };
 };

@@ -45,7 +45,7 @@ pnpm build
 pnpm link --global
 ```
 
-Then, for the `namespace` Provider, log in first: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. The `docker` Provider needs Docker.
+Then, for the `namespace` Provider, log in first: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. For CI, make that token while logged in with the browser: `proofbox auth token namespace --name ci --expires 30d` prints it once (at most `1y`). The `docker` Provider needs Docker.
 
 ## Example
 
@@ -76,6 +76,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `auth login <provider>` | Logs in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
 | `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. |
 | `auth logout <provider>` | Removes the saved login and lists the Sandboxes that still run. |
+| `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. |
@@ -112,7 +113,7 @@ Windows, mobile, the accessibility tree, and an MCP server.
 ```sh
 pnpm test             # fake Provider, no cloud
 pnpm test:docker      # needs Docker
-pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN; uses real Namespace minutes
+pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN (make one with `proofbox auth token namespace --name dev --expires 1d`); uses real Namespace minutes
 pnpm lint && pnpm typecheck
 ```
 

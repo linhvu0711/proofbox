@@ -85,6 +85,7 @@ const fakeApi = (
     ensureImageExpiry: (image, hours) =>
       note(`ensureImageExpiry ${image} ${hours}`),
     checkToken: () => Effect.die("unused"),
+    makeToken: () => Effect.die("unused"),
   };
 };
 

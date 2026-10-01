@@ -72,6 +72,7 @@ const makeMac = (
       sshConfig: () => Effect.die("unused"),
       ensureImageExpiry: () => Effect.die("unused"),
       checkToken: () => Effect.die("unused"),
+      makeToken: () => Effect.die("unused"),
     };
     const reply = (line: string) => {
       const found = answer(line) ?? defaultAnswer(line) ?? {};
