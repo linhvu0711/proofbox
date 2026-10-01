@@ -96,6 +96,8 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action.
 
+A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
+
 A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Safety
