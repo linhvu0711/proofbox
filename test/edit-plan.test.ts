@@ -332,9 +332,7 @@ describe("edit-plan", () => {
     // When
     const plan = planEdit(input);
     // Then
-    expect(plan.unusedWaits).toEqual([
-      { reason: "second reason", step: 1 },
-    ]);
+    expect(plan.unusedWaits).toEqual([{ reason: "second reason", step: 1 }]);
   });
 
   it("a Still part across a Step mark that a Caller action ends has no label on either side", () => {

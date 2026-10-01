@@ -476,15 +476,7 @@ describe("Recording and the Proof video", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     await runCli(env, ["record", "start", id]);
-    await runCli(env, [
-      "exec",
-      id,
-      "--",
-      "xdotool",
-      "mousemove",
-      "720",
-      "450",
-    ]);
+    await runCli(env, ["exec", id, "--", "xdotool", "mousemove", "720", "450"]);
     const reason = String.raw`it's "quoted" \ done`;
     // When
     const marked = await runCli(env, ["mark", id, reason, "--wait"]);

@@ -19,7 +19,9 @@ export const setMark = Effect.fn("mark.setMark")(function* (options: {
   const marked = yield* runHelper(
     options.id,
     RECORD_HELPER,
-    options.wait ? ["wait", JSON.stringify(options.label)] : ["mark", options.label],
+    options.wait
+      ? ["wait", JSON.stringify(options.label)]
+      : ["mark", options.label],
     { outcome: options.wait ? "no Wait mark was set" : "no Step mark was set" },
   );
   if (marked.code === 5) {
