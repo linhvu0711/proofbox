@@ -523,7 +523,10 @@ export const makeNamespaceApi = (deps: {
       if (response.status !== 200) {
         const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
           response.body,
-        ).pipe(Effect.option, Effect.map(Option.getOrUndefined));
+        ).pipe(
+          Effect.option,
+          Effect.map((body) => Option.getOrUndefined(body)),
+        );
         return yield* httpError("GetSSHConfig", response.status, errorBody, {
           region,
           instanceId,
