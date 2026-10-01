@@ -413,7 +413,17 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             ),
           ),
         );
-        return withAnswerLimit(events, options?.limit, Effect.void);
+        // The give-up frame leaves before the stream's release destroys
+        // the socket, so the Keeper knows the Caller gave up, not left.
+        return withAnswerLimit(
+          events,
+          options?.limit,
+          writeLine(
+            socket.value,
+            id.provider.name,
+            encodeInput({ giveUp: true }),
+          ).pipe(Effect.ignore),
+        );
       });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {

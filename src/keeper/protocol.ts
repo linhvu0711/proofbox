@@ -29,9 +29,12 @@ export const ReplyFrame = Schema.Union(
 );
 export type ReplyFrame = typeof ReplyFrame.Type;
 
+// What the Caller sends after a command's request: its stdin, the end of
+// it, or that it gives up waiting (the Keeper ends the command, ADR 0019).
 export const InputFrame = Schema.Union(
   Schema.Struct({ in: Schema.String }),
   Schema.Struct({ end: Schema.Literal(true) }),
+  Schema.Struct({ giveUp: Schema.Literal(true) }),
 );
 export type InputFrame = typeof InputFrame.Type;
 

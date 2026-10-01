@@ -19,6 +19,7 @@ import {
   Effect,
   Fiber,
   Ref,
+  Stream,
   TestClock,
   TestServices,
 } from "effect";
@@ -28,11 +29,13 @@ import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { liveCreates, markCreate, unmarkCreate } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { startKeeper } from "./support/keeper.ts";
+import { sleepsFrom } from "./support/clock.ts";
+import { eventually, startKeeper } from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,6 +132,14 @@ const capturedOut = Effect.gen(function* () {
   const output = yield* CliOutput;
   return Chunk.toReadonlyArray(yield* Ref.get(output.captured.out)).join("");
 });
+
+// Whether a process whose command line holds `pattern` runs on this machine.
+const running = (pattern: string) =>
+  Effect.sync(() => spawnSync("pgrep", ["-f", pattern]).status === 0);
+
+// A sleep length no other run of these tests uses, so a command left over
+// from an earlier run never counts.
+const nap = `61.${process.pid}`;
 
 describe("Keeper", () => {
   afterEach(cleanupEnvs);
@@ -765,6 +776,65 @@ describe("Keeper", () => {
       }).pipe(runtimeConfig(env));
     },
   );
+
+  it.scoped(
+    "a Caller who leaves ends the command and its Deadline push",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a command that runs for a minute through a warm Keeper
+        const keeper = yield* warmKeeper(env);
+        yield* TestClock.adjust("10 minutes");
+        const caller = yield* Effect.fork(
+          Effect.scoped(
+            Effect.flatMap(KeeperClient, (client) =>
+              Effect.flatMap(client.exec(keeper.id, ["sleep", nap]), (events) =>
+                Stream.runDrain(events),
+              ),
+            ),
+          ).pipe(Effect.provide(keeper.layers)),
+        );
+        yield* eventually(running(`sleep ${nap}`));
+        // When: the Caller leaves, as Ctrl-C does
+        yield* Fiber.interrupt(caller);
+        yield* eventually(Effect.map(running(`sleep ${nap}`), (on) => !on));
+        yield* TestClock.adjust("14 minutes");
+        // Then
+        expect({
+          deadline: yield* keeper.deadline,
+          running: yield* running(`sleep ${nap}`),
+        }).toEqual({ deadline: "1970-01-01T00:25:00.000Z", running: false });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped("a Caller who gives up ends the command in the Keeper", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a helper call that runs for a minute through a warm Keeper
+      const keeper = yield* warmKeeper(env, { desktop: true });
+      yield* TestClock.adjust("10 minutes");
+      const caller = yield* Effect.fork(
+        runHelper(
+          keeper.id,
+          { feature: "desktop", paths: { linux: "sleep" } },
+          [nap],
+          {
+            outcome: "click",
+            limit: { _tag: "Act", name: "click", extra: Duration.zero },
+          },
+        ).pipe(Effect.provide(keeper.layers), Effect.flip),
+      );
+      yield* eventually(running(`sleep ${nap}`));
+      yield* sleepsFrom(720_000);
+      // When: its time limit passes
+      yield* TestClock.adjust("121 seconds");
+      yield* Fiber.join(caller);
+      yield* eventually(Effect.map(running(`sleep ${nap}`), (on) => !on));
+      // Then
+      expect(yield* running(`sleep ${nap}`)).toBe(false);
+    }).pipe(runtimeConfig(env));
+  });
 });
 
 const ownsPid1 = () => {

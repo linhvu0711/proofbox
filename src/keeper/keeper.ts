@@ -7,7 +7,7 @@ import {
   type Socket,
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
-import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
+import { Effect, Fiber, Mailbox, Runtime, Schedule, Stream } from "effect";
 import { withRunningPush } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
@@ -80,6 +80,15 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         let inputEnded = false;
         let execDone = false;
         let closeSocket = false;
+        // The command's own fiber, so a Caller who leaves or gives up ends
+        // it, and with it the ssh or docker exec and the Deadline push.
+        let running: Fiber.RuntimeFiber<void> | undefined;
+        let execEnded = false;
+        const endExec = () => {
+          if (running !== undefined && !execEnded) {
+            void Runtime.runPromiseExit(runtime)(Fiber.interrupt(running));
+          }
+        };
 
         const runExec = (argv: ReadonlyArray<string>, options?: ExecOptions) =>
           withRunningPush(connection)(connection.exec(argv, options))
@@ -107,6 +116,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               ),
               Effect.ensuring(
                 Effect.sync(() => {
+                  execEnded = true;
                   // A command may exit before its input ends (tar -x
                   // stops at the end-of-archive marker); drain the
                   // remaining input frames so the client can finish
@@ -146,20 +156,31 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
             });
             if ("info" in request) {
               mode = "plain";
+              closeSocket = true;
               yield* writeFrame(socket, encodeReply({ info: connection.info }));
             } else if (request.stdin === true) {
               mode = "stdin";
               mailbox = yield* Mailbox.make<Uint8Array, ProviderError>(16);
               // forkDaemon: the exec must outlive this line-handler fiber
               // (a plain fork would be interrupted when the handler ends).
-              yield* Effect.forkDaemon(
+              running = yield* Effect.forkDaemon(
                 runExec(request.exec, {
                   stdin: Mailbox.toStream(mailbox),
                 }),
               );
             } else {
               mode = "plain";
-              yield* runExec(request.exec);
+              // Forked as stdin mode is, so the socket keeps reading while
+              // the command runs and sees the Caller leave.
+              running = yield* Effect.forkDaemon(runExec(request.exec));
+            }
+          } else if (mode === "plain") {
+            // Only a give-up frame means anything after a plain request.
+            const frame = yield* Effect.option(
+              Effect.try(() => decodeInput(JSON.parse(line))),
+            );
+            if (frame._tag === "Some" && "giveUp" in frame.value) {
+              endExec();
             }
           } else if (mode === "stdin" && mailbox !== undefined && !inputEnded) {
             const frame = yield* Effect.try({
@@ -170,7 +191,9 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                   reason: "bad input frame",
                 }),
             });
-            if ("in" in frame) {
+            if ("giveUp" in frame) {
+              endExec();
+            } else if ("in" in frame) {
               if (!execDone) {
                 yield* mailbox.offer(
                   new Uint8Array(Buffer.from(frame.in, "base64")),
@@ -220,7 +243,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               ),
               Effect.ensuring(
                 Effect.sync(() => {
-                  if (mode === "plain" || closeSocket) {
+                  if (closeSocket) {
                     socket.end();
                     socket.destroy();
                   } else {
@@ -233,6 +256,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         });
 
         socket.once("close", () => {
+          endExec();
           if (mailbox !== undefined && !inputEnded) {
             inputEnded = true;
             void Runtime.runPromiseExit(runtime)(
