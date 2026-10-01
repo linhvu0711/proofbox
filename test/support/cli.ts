@@ -129,6 +129,9 @@ export const runCli = (
     // Sees stderr as it comes, while the command still runs; `interrupt`
     // sends it SIGINT, as Ctrl-C does.
     readonly onStderr?: (chunk: string, interrupt: () => void) => void;
+    // Gets `interrupt` as soon as the command starts, for a test that
+    // sends Ctrl-C on a signal of its own rather than on output.
+    readonly onSpawn?: (interrupt: () => void) => void;
   } = {},
 ): Promise<CliResult> =>
   new Promise((resolve) => {
@@ -165,6 +168,7 @@ export const runCli = (
     if (options.input !== undefined) {
       child.stdin?.end(options.input);
     }
+    options.onSpawn?.(() => child.kill("SIGINT"));
     const onStderr = options.onStderr;
     if (onStderr !== undefined) {
       child.stderr?.on("data", (chunk: Buffer | string) =>

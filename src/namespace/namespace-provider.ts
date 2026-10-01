@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  Cause,
   Chunk,
   Clock,
   Config,
@@ -695,27 +696,44 @@ export const makeNamespaceProvider = (deps: {
                 )
               : Effect.succeed(made.value),
           ),
-          // A failed create can leave a half-made host (a timed-out call
-          // may have registered it). A limit makes nothing, so skip the
-          // sweep there.
-          Effect.tapError((error) =>
-            error instanceof ProviderLimitError
+          // A failed or interrupted create can leave a half-made host (a
+          // timed-out call may have registered it, and Ctrl-C can land
+          // before the host id is known). A limit makes nothing, so skip
+          // the sweep there. A failure already has its one error line; an
+          // interrupt has none, so a sweep it cannot finish says where to
+          // look.
+          Effect.onError((cause) =>
+            Option.exists(
+              Cause.failureOption(cause),
+              (error) => error instanceof ProviderLimitError,
+            )
               ? Effect.void
               : Effect.gen(function* () {
-                  const left = yield* api
-                    .list(region, [
-                      { name: "proofbox.create-token", value: createToken },
-                    ])
-                    .pipe(Effect.orElseSucceed(() => []));
-                  yield* Effect.forEach(
+                  const left = yield* api.list(region, [
+                    { name: "proofbox.create-token", value: createToken },
+                  ]);
+                  yield* Effect.validateAll(
                     left,
                     (instance) =>
                       api
                         .destroy(region, instance.id)
-                        .pipe(Effect.orElseSucceed(() => undefined)),
+                        .pipe(
+                          Effect.catchTag(
+                            "SandboxGoneError",
+                            () => Effect.void,
+                          ),
+                        ),
                     { discard: true },
                   );
-                }),
+                }).pipe(
+                  Effect.catchAll(() =>
+                    Cause.isInterruptedOnly(cause)
+                      ? progress.warn(
+                          "could not delete the host this create started; it may be left. Run: proofbox list",
+                        )
+                      : Effect.void,
+                  ),
+                ),
           ),
         );
         const ref: SandboxRef = { name: instanceId, region };
