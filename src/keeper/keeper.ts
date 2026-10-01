@@ -1,4 +1,5 @@
-import { rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { rename, rm, writeFile } from "node:fs/promises";
 import {
   createConnection,
   createServer,
@@ -248,9 +249,20 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           }
         });
       };
+      // Write a unique temp file and rename it over the pid file, so a
+      // reader never sees it empty.
+      const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
       yield* Effect.acquireRelease(
         Effect.tryPromise({
-          try: () => writeFile(paths.pid, `${process.pid}\n`),
+          try: async () => {
+            try {
+              await writeFile(temp, `${process.pid}\n`);
+              await rename(temp, paths.pid);
+            } catch (cause) {
+              await rm(temp, { force: true });
+              throw cause;
+            }
+          },
           catch: (cause) =>
             new ProviderError({
               provider: id.provider.name,

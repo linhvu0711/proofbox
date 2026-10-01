@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -400,6 +401,42 @@ describe("Keeper", () => {
           provider: "fake",
           reason: expect.stringContaining("EISDIR"),
         });
+      }),
+  );
+
+  it.effect(
+    "the Keeper leaves no temp file when it cannot write its pid file",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Sandbox, and a folder where the Keeper's pid file goes
+        const env = makeEnv();
+        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const info = yield* fake
+          .create({
+            os: "linux",
+            idle: Duration.minutes(5),
+            maxLife: Duration.hours(1),
+          })
+          .pipe(Effect.provideService(Progress, noProgress));
+        mkdirSync(join(env.runtime, `fake-${info.name}.pid`));
+        // When
+        yield* runKeeper(`fake:${info.name}`).pipe(
+          Effect.provideService(
+            Providers,
+            new Map([["fake", providerEntry(fake)]]),
+          ),
+          Effect.provide(NodeContext.layer),
+          Effect.withConfigProvider(
+            ConfigProvider.fromMap(
+              new Map([["PROOFBOX_RUNTIME_DIR", env.runtime]]),
+            ),
+          ),
+          Effect.flip,
+        );
+        // Then
+        expect(
+          readdirSync(env.runtime).filter((file) => file.endsWith(".tmp")),
+        ).toEqual([]);
       }),
   );
 
