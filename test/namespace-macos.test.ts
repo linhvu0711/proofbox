@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
   ConfigProvider,
@@ -15,7 +17,8 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { countMemoryKills } from "../src/namespace/mac-host.ts";
+import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import { macKillCount } from "../src/namespace/mac-host.ts";
 import type {
   CreateReq,
   NamespaceApi,
@@ -36,6 +39,8 @@ interface Answer {
   readonly exitCode?: number;
   readonly stdout?: string | Uint8Array;
   readonly stderr?: string;
+  // What a `stream` call sends, in place of its stdout and exit code.
+  readonly events?: ReadonlyArray<ExecEvent>;
 }
 
 // A Namespace Mac behind fakes: the Compute API records its calls, the
@@ -103,6 +108,10 @@ const makeMac = (
       stream: (line) =>
         Stream.fromEffect(note(commands, line)).pipe(
           Stream.flatMap(() => {
+            const given = (answer(line) ?? defaultAnswer(line))?.events;
+            if (given !== undefined) {
+              return Stream.fromIterable(given);
+            }
             const { exitCode, stdout } = reply(line);
             const bytes =
               typeof stdout === "string"
@@ -614,56 +623,81 @@ describe("Namespace macOS Provider", () => {
       }).pipe(withRuntime(runtimeDir())),
   );
 
-  it("countMemoryKills counts kernel kills and skips idle-daemon kills", () => {
-    // Given: JETSAM_LINES
-    // When
-    const count = countMemoryKills(JETSAM_LINES);
-    // Then
-    expect(count).toBe(2);
-  });
+  it.effect("the host kill count skips idle-daemon kills", () =>
+    Effect.sync(() => {
+      // Given
+      const log = join(runtimeDir(), "memory-kills.log");
+      writeFileSync(log, `${JETSAM_LINES}\n`);
+      // When
+      const count = execFileSync("sh", ["-c", macKillCount(log)], {
+        encoding: "utf8",
+      });
+      // Then
+      expect(count).toBe("2\n");
+    }),
+  );
 
-  it.effect("memoryKills on a Mac counts the watcher's log", () => {
+  it.scoped("a warm exec on a Mac makes one call over the link", () => {
     const runtime = runtimeDir();
     writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+    const text = (bytes: string): ExecEvent => ({
+      _tag: "Stderr",
+      bytes: new TextEncoder().encode(bytes),
+    });
     return Effect.gen(function* () {
       // Given
       const mac = yield* makeMac((line) =>
-        line.includes("grep 'memorystatus: killing_'")
-          ? { stdout: `${JETSAM_LINES}\n` }
-          : undefined,
+        line.startsWith("cat /var/lib/proofbox/labels.json")
+          ? {
+              stdout: `${JSON.stringify({
+                "proofbox.name": "abc123def4567",
+                "proofbox.os": "macos",
+                "proofbox.created-at": "1970-01-01T00:00:00Z",
+                "proofbox.idle-seconds": "300",
+                "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+              })}\n300\n`,
+            }
+          : line.includes("proofbox-start")
+            ? {
+                events: [
+                  text(CHECKS_START),
+                  {
+                    _tag: "Stdout",
+                    bytes: new TextEncoder().encode("26.0\n"),
+                  },
+                  text(checksTrailer(1, 1)),
+                  { _tag: "Exit", code: 0 },
+                ],
+              }
+            : undefined,
       );
-      // When
-      const kills = yield* mac.provider.memoryKills({
+      const connection = yield* mac.provider.connect({
         name: "abc123def4567",
         region: "us",
       });
+      const before = (yield* Ref.get(mac.commands)).length;
+      // When
+      const events = yield* Stream.runCollect(
+        connection.exec(["sw_vers", "-productVersion"]),
+      );
       // Then
-      expect(kills).toBe(2);
-    }).pipe(withRuntime(runtime));
+      expect(
+        [...events].map((event) =>
+          event._tag === "Exit"
+            ? event
+            : { _tag: event._tag, text: new TextDecoder().decode(event.bytes) },
+        ),
+      ).toEqual([
+        { _tag: "Stdout", text: "26.0\n" },
+        { _tag: "Exit", code: 0, kills: { before: 1, after: 1 } },
+      ]);
+      const lines = (yield* Ref.get(mac.commands)).slice(before);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("launchctl asuser 501");
+      // The watcher starts again if it stopped, so the command is watched.
+      expect(lines[0]).toContain("/var/run/proofbox-memory-watch.pid");
+    }).pipe(Effect.provide(NodeContext.layer), withRuntime(runtime));
   });
-
-  it.effect(
-    "memoryKills on a Mac starts the watcher again when it stopped",
-    () => {
-      const runtime = runtimeDir();
-      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
-      return Effect.gen(function* () {
-        // Given: the watcher's pid is not running
-        const mac = yield* makeMac();
-        // When
-        yield* mac.provider.memoryKills({
-          name: "abc123def4567",
-          region: "us",
-        });
-        // Then
-        const [line] = yield* Ref.get(mac.commands);
-        expect(line).toMatch(
-          /^ps -p "\$\(cat \/var\/run\/proofbox-memory-watch\.pid 2>\/dev\/null\)" >\/dev\/null 2>&1 \|\| sudo -n sh -c .*\/usr\/bin\/log stream/,
-        );
-        expect(line).toContain("grep 'memorystatus: killing_'");
-      }).pipe(withRuntime(runtime));
-    },
-  );
 
   it.effect(
     "a Mac Live view sets the VNC password and forwards port 5900",

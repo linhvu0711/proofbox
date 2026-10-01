@@ -411,18 +411,6 @@ export const makeDockerProvider = (options: {
       };
     });
 
-  const memoryKills = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      yield* get(sandbox);
-      const read = yield* client.execText(containerOf(sandbox.name), "root", [
-        "sh",
-        "-c",
-        "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
-      ]);
-      const match = /^oom_kill (\d+)$/m.exec(read.stdout);
-      return match === null ? 0 : Number(match[1]);
-    });
-
   return {
     name: "docker",
     idPrefix: "docker",
@@ -441,6 +429,5 @@ export const makeDockerProvider = (options: {
     stateDir: () => "/var/lib/proofbox",
     secretsDir: () => "/run/proofbox/secrets",
     connect,
-    memoryKills,
   };
 };

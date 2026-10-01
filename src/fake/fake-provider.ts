@@ -527,6 +527,5 @@ export const makeFakeProvider = (options: {
     // is; its Secrets folder (mode 0700) is on disk, not a tmpfs, until delete.
     secretsDir: (name) => join(root, name, "secrets"),
     connect,
-    memoryKills: () => Effect.succeed(0),
   };
 };

@@ -25,7 +25,6 @@ describe("Sandbox id", () => {
         stateDir: () => "",
         secretsDir: () => "",
         connect: () => Effect.die("unused"),
-        memoryKills: () => Effect.die("unused"),
       };
       // When
       const resolved = yield* resolveSandboxId(

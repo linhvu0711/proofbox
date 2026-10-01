@@ -356,20 +356,6 @@ export interface Provider {
     | TokenPermissionError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
-  readonly memoryKills: (
-    sandbox: SandboxRef,
-  ) => Effect.Effect<
-    number,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
-  >;
 }
 
 // What a Provider's list gives: the Sandboxes it reached, and each place

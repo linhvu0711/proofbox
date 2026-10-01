@@ -22,7 +22,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { checksArgv, splitChecks } from "../command-checks.ts";
+import { checksArgv, checksScript, splitChecks } from "../command-checks.ts";
 import { parseSpan, pushedDeadline } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
@@ -61,10 +61,9 @@ import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import { pushHostLife } from "./host-life.ts";
 import {
   MAC_SECRETS_DIR,
-  macExec,
+  macChecks,
   prepareMac,
   readMac,
-  readMemoryKills,
   writeMacDeadline,
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
@@ -107,6 +106,8 @@ const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
 const exec = promisify(execFile);
+
+const MAC_SCRIPT = checksScript(macChecks());
 
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
@@ -903,33 +904,38 @@ export const makeNamespaceProvider = (deps: {
           }
           return seconds;
         });
-      if ((yield* osOf(ref)) === "macos") {
-        return {
-          info: yield* readMac(link, ref),
-          get: get(ref),
-          extend: (deadline: Date) => extend(ref, deadline),
-          exec: macExec(link),
-        };
-      }
-      const info = yield* getWith(link, ref);
-      const docker = deps.dockerFor(link);
-      const container = containerOf(ref);
+      const mac = (yield* osOf(ref)) === "macos";
+      // The gone-watch reads over the Keeper's own link: no new link, and
+      // no extend-main, every 2 s.
+      const read = mac ? readMac(link, ref) : getWith(link, ref);
+      const info = yield* read;
+      const script = mac ? MAC_SCRIPT : LINUX_SCRIPT;
+      // A Mac runs the script over the link itself; Linux in its container.
+      const call = mac
+        ? (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+            link.stream(shellJoin(argv), options)
+        : (() => {
+            const docker = deps.dockerFor(link);
+            const container = containerOf(ref);
+            return (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+              docker.execStream(container, argv, options, "root");
+          })();
       const pushNow = Effect.flatMap(pushedDeadline(info), pushHost);
       return {
         info,
-        // The gone-watch reads over the Keeper's own link: no new link, and
-        // no extend-main, every 2 s.
-        get: getWith(link, ref),
+        get: read,
         extend: (deadline: Date) =>
           Effect.gen(function* () {
             const seconds = yield* pushHost(deadline);
             yield* checkWritten(
               ref,
-              yield* writeLinuxDeadline(link, ref, seconds),
+              yield* mac
+                ? writeMacDeadline(link, seconds)
+                : writeLinuxDeadline(link, ref, seconds),
             );
           }),
-        // One `docker exec` over the link per command: the script pushes the
-        // container's Deadline and counts kills around it (ADR 0015). The
+        // One call over the link per command: the script pushes the
+        // Sandbox's Deadline and counts kills around it (ADR 0015). The
         // host side of each push stays here.
         exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
           Stream.unwrap(
@@ -937,12 +943,7 @@ export const makeNamespaceProvider = (deps: {
               const nowMillis = yield* Clock.currentTimeMillis;
               yield* pushNow;
               return splitChecks(
-                docker.execStream(
-                  container,
-                  checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
-                  options,
-                  "root",
-                ),
+                call(checksArgv(script, info, nowMillis, argv), options),
                 () => gone(ref),
               ).pipe(
                 Stream.tap((event) =>
@@ -952,25 +953,6 @@ export const makeNamespaceProvider = (deps: {
             }),
           ),
       };
-    });
-
-  const memoryKills = (ref: SandboxRef) =>
-    Effect.gen(function* () {
-      if ((yield* osOf(ref)) === "macos") {
-        return yield* withCliLink(ref, readMemoryKills);
-      }
-      yield* get(ref);
-      const read = yield* withCliLink(ref, (link) =>
-        deps
-          .dockerFor(link)
-          .execText(containerOf(ref), "root", [
-            "sh",
-            "-c",
-            "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
-          ]),
-      );
-      const match = /^oom_kill (\d+)$/m.exec(read.stdout);
-      return match === null ? 0 : Number(match[1]);
     });
 
   const liveView = (ref: SandboxRef) =>
@@ -1163,6 +1145,5 @@ export const makeNamespaceProvider = (deps: {
     secretsDir: (_name, os) =>
       os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
     connect,
-    memoryKills,
   };
 };
