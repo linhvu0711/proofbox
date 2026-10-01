@@ -944,7 +944,11 @@ export const makeNamespaceProvider = (deps: {
               yield* pushNow;
               return splitChecks(
                 call(checksArgv(script, info, nowMillis, argv), options),
-                () => gone(ref),
+                {
+                  gone: () => gone(ref),
+                  pushFailed: (detail) =>
+                    fail(`could not write the Deadline: ${detail}`),
+                },
               ).pipe(
                 Stream.tap((event) =>
                   event._tag === "Exit" ? pushNow : Effect.void,

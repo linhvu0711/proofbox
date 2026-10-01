@@ -99,10 +99,15 @@ export const runKeeper = (rawId: string) =>
                     error instanceof SandboxGoneError
                       ? { gone: error.id }
                       : {
+                          // The client wraps the text in its own
+                          // ProviderError, so a ProviderError sends only
+                          // its reason.
                           fail:
-                            error instanceof Error
-                              ? error.message
-                              : String(error),
+                            error instanceof ProviderError
+                              ? error.reason
+                              : error instanceof Error
+                                ? error.message
+                                : String(error),
                         },
                   ).pipe(Effect.orElseSucceed(() => undefined)),
                 ),

@@ -15,7 +15,11 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import {
+  CHECKS_START,
+  checksTrailer,
+  pushFailedTrailer,
+} from "../src/command-checks.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
@@ -996,5 +1000,29 @@ describe("Namespace Provider through the Keeper", () => {
         "Provider namespace failed: lost the link to the Namespace host: the ssh link dropped mid-command",
       );
     }).pipe(runtimeConfig()),
+  );
+
+  it.scoped(
+    "a failed Deadline write ends the command with the write's error",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const ns = yield* warmNamespace(() =>
+          Stream.fromIterable<ExecEvent>([
+            stderrEvent(CHECKS_START),
+            stderrEvent(pushFailedTrailer("mv: Read-only file system")),
+            { _tag: "Exit", code: 1 },
+          ]),
+        );
+        // When
+        const error = yield* execInSandbox(NS_ID, ["true"]).pipe(
+          Effect.provide(ns.layers),
+          Effect.flip,
+        );
+        // Then
+        expect(error.message).toBe(
+          "Provider namespace failed: could not write the Deadline: mv: Read-only file system",
+        );
+      }).pipe(runtimeConfig()),
   );
 });

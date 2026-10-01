@@ -1,5 +1,5 @@
 import { Effect, Stream } from "effect";
-import type { SandboxGoneError } from "./errors.ts";
+import type { ProviderError, SandboxGoneError } from "./errors.ts";
 import type { ExecEvent, SandboxInfo } from "./provider.ts";
 
 // One remote call runs a command with its checks around it (ADR 0015): the
@@ -22,22 +22,31 @@ export interface ChecksShell {
   readonly run: string;
 }
 
+export const pushFailedTrailer = (detail: string) =>
+  `\n\x1fproofbox-fail ${detail}\n`;
+
+// The most of a failed push's own error the fail trailer carries.
+const FAIL_DETAIL_MAX = 200;
+
 // Runs as `sh -c <script> sh <idleSeconds> <leftSeconds> <argv...>`. The
 // Deadline is set on the Sandbox's own clock, as `extend` does. A failed
-// push or count does not stop the command, and says nothing on stderr.
+// push ends the script with the fail trailer in place of the counts, as a
+// failed push ended `exec` before the Keeper did it: before the command,
+// the command does not run. A failed count reads as 0.
 export const checksScript = (shell: ChecksShell) =>
   [
     "idle=$1",
     "cap=$(( $(date +%s) + $2 ))",
     "shift 2",
-    `push() { d=$(( $(date +%s) + idle )); [ "$d" -gt "$cap" ] && d=$cap; { ${shell.push}; } 2>/dev/null; }`,
+    `push() { d=$(( $(date +%s) + idle )); [ "$d" -gt "$cap" ] && d=$cap; pe=$( { ${shell.push}; } 2>&1 ); }`,
+    `pushfail() { printf '\\n\\037proofbox-fail %s\\n' "$(printf %s "$pe" | tr '\\n' ' ' | cut -c1-${FAIL_DETAIL_MAX})" >&2; exit 1; }`,
     "printf '\\037proofbox-start\\n' >&2",
-    "push",
+    "push || pushfail",
     `k1=$( { ${shell.kills}; } 2>/dev/null)`,
     shell.run,
     "code=$?",
     `k2=$( { ${shell.kills}; } 2>/dev/null)`,
-    "push",
+    "push || pushfail",
     `printf '\\n\\037proofbox-checks %s %s\\n' "\${k1:-0}" "\${k2:-0}" >&2`,
     "exit $code",
   ].join("; ");
@@ -66,15 +75,21 @@ export const checksArgv = (
 // What Docker prints when the container is not there, as `getWith` reads it.
 const GONE = /no such container|no such object|is not running/i;
 const TRAILER_HEAD = "\n\x1fproofbox-checks ";
+const FAIL_HEAD = "\n\x1fproofbox-fail ";
 // Longer than any trailer, so a tail past this can never start one.
-const TRAILER_MAX = TRAILER_HEAD.length + 2 * 20 + 2;
+const TRAILER_MAX = FAIL_HEAD.length + FAIL_DETAIL_MAX + 1;
+
+// True when `text` is `head` and then text that `rest` accepts, or the
+// first part of that.
+const couldStart = (text: string, head: string, rest: RegExp) =>
+  text.length <= head.length
+    ? head.startsWith(text)
+    : text.startsWith(head) && rest.test(text.slice(head.length));
 
 // True when `text` is a trailer or the first part of one.
 const couldStartTrailer = (text: string) =>
-  text.length <= TRAILER_HEAD.length
-    ? TRAILER_HEAD.startsWith(text)
-    : text.startsWith(TRAILER_HEAD) &&
-      /^(\d*|\d+ \d*|\d+ \d+\n)$/.test(text.slice(TRAILER_HEAD.length));
+  couldStart(text, TRAILER_HEAD, /^(\d*|\d+ \d*|\d+ \d+\n)$/) ||
+  couldStart(text, FAIL_HEAD, /^[^\n]*\n?$/);
 
 // Where in `bytes` a held tail starts: the first place from which the rest
 // could be the trailer, or the end.
@@ -96,21 +111,28 @@ const tailStart = (bytes: Buffer) => {
 const stderr = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stderr", bytes });
 
 // Turns the events of a `checksScript` call into the Caller's: the start
-// mark and the trailer go, and the two counts land on the Exit event.
+// mark and the trailer go, and the two counts land on the Exit event. A
+// fail trailer fails with `pushFailed()` and the push's own error.
 // Stderr before the start mark is the runtime's own: with no mark (the
 // script never started), a gone container there fails with `gone()`; any
 // other text goes out as it is. After the mark, only a stderr tail that
 // could start the trailer is held back, until the next chunk or the Exit.
 export const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
-  gone: () => SandboxGoneError,
-): Stream.Stream<ExecEvent, E | SandboxGoneError> =>
+  on: {
+    readonly gone: () => SandboxGoneError;
+    readonly pushFailed: (detail: string) => ProviderError;
+  },
+): Stream.Stream<ExecEvent, E | SandboxGoneError | ProviderError> =>
   Stream.suspend(() => {
     let started = false;
     let held = Buffer.alloc(0);
     const step = (
       event: ExecEvent,
-    ): Effect.Effect<ReadonlyArray<ExecEvent>, SandboxGoneError> => {
+    ): Effect.Effect<
+      ReadonlyArray<ExecEvent>,
+      SandboxGoneError | ProviderError
+    > => {
       switch (event._tag) {
         case "Stdout":
           return Effect.succeed([event]);
@@ -138,13 +160,20 @@ export const splitChecks = <E>(
           held = Buffer.alloc(0);
           if (!started) {
             if (GONE.test(rest.toString("utf8"))) {
-              return Effect.fail(gone());
+              return Effect.fail(on.gone());
             }
             return Effect.succeed(
               rest.length === 0 ? [event] : [stderr(rest), event],
             );
           }
           const text = rest.toString("latin1");
+          if (text.startsWith(FAIL_HEAD) && text.endsWith("\n")) {
+            const detail = rest
+              .subarray(FAIL_HEAD.length, rest.length - 1)
+              .toString("utf8")
+              .trim();
+            return Effect.fail(on.pushFailed(detail || "the write failed"));
+          }
           const trailer = text.startsWith(TRAILER_HEAD)
             ? /^(\d+) (\d+)\n$/.exec(text.slice(TRAILER_HEAD.length))
             : null;

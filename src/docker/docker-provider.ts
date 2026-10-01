@@ -404,7 +404,11 @@ export const makeDockerProvider = (options: {
                   options,
                   "root",
                 ),
-                () => gone(sandbox.name),
+                {
+                  gone: () => gone(sandbox.name),
+                  pushFailed: (detail) =>
+                    fail(`could not write the Deadline: ${detail}`),
+                },
               ),
             ),
           ),

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -9,9 +9,10 @@ import {
   CHECKS_START,
   checksScript,
   checksTrailer,
+  pushFailedTrailer,
   splitChecks,
 } from "../src/command-checks.ts";
-import { SandboxGoneError } from "../src/errors.ts";
+import { ProviderError, SandboxGoneError } from "../src/errors.ts";
 import type { ExecEvent } from "../src/provider.ts";
 
 const tempRoots: string[] = [];
@@ -35,10 +36,14 @@ const exit = (code: number): ExecEvent => ({ _tag: "Exit", code });
 
 // The split events, with each chunk's bytes as text.
 const split = (...events: ReadonlyArray<ExecEvent>) =>
-  splitChecks(
-    Stream.fromIterable(events),
-    () => new SandboxGoneError({ id: "docker:abc123" }),
-  ).pipe(
+  splitChecks(Stream.fromIterable(events), {
+    gone: () => new SandboxGoneError({ id: "docker:abc123" }),
+    pushFailed: (detail) =>
+      new ProviderError({
+        provider: "docker",
+        reason: `could not write the Deadline: ${detail}`,
+      }),
+  }).pipe(
     Stream.runCollect,
     Effect.map((collected) =>
       Chunk.toReadonlyArray(collected).map((event) =>
@@ -200,23 +205,71 @@ describe("command checks", () => {
       }),
   );
 
-  it.effect(
-    "a failed Deadline write leaves stderr and the exit code alone",
-    () =>
-      Effect.sync(() => {
-        // Given: the Deadline file's folder is not there
-        // When
-        const run = spawnSync(
-          "sh",
-          ["-c", script, "sh", "900", "900", "sh", "-c", "exit 5"],
-          {
-            env: { ...process.env, DL: "/nonexistent/proofbox/deadline" },
-            encoding: "utf8",
-          },
-        );
-        // Then
-        expect(run.stderr).toBe(CHECKS_START + checksTrailer(4, 4));
-        expect(run.status).toBe(5);
-      }),
+  it.effect("a failed Deadline write before the command stops it", () =>
+    Effect.sync(() => {
+      // Given: the Deadline file's folder is not there
+      const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+      tempRoots.push(root);
+      const ran = join(root, "ran");
+      // When
+      const run = spawnSync(
+        "sh",
+        ["-c", script, "sh", "900", "900", "touch", ran],
+        {
+          env: { ...process.env, DL: "/nonexistent/proofbox/deadline" },
+          encoding: "utf8",
+        },
+      );
+      // Then
+      expect(run.stderr.startsWith(`${CHECKS_START}\n\x1fproofbox-fail `)).toBe(
+        true,
+      );
+      expect(run.stderr).toContain("/nonexistent/proofbox/deadline");
+      expect(run.stderr.endsWith("\n")).toBe(true);
+      expect(existsSync(ran)).toBe(false);
+      expect(run.status).toBe(1);
+    }),
+  );
+
+  it.effect("a failed Deadline write after the command ends the run", () =>
+    Effect.sync(() => {
+      // Given: the first push writes, the second fails
+      const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+      tempRoots.push(root);
+      const once = checksScript({
+        push: 'if [ -e "$PUSHED" ]; then echo "disk full" >&2; false; else touch "$PUSHED"; fi',
+        kills: "echo 4",
+        run: '"$@"',
+      });
+      // When
+      const run = spawnSync(
+        "sh",
+        ["-c", once, "sh", "900", "900", "printf", "out"],
+        {
+          env: { ...process.env, PUSHED: join(root, "pushed") },
+          encoding: "utf8",
+        },
+      );
+      // Then
+      expect(run.stdout).toBe("out");
+      expect(run.stderr).toBe(CHECKS_START + pushFailedTrailer("disk full"));
+      expect(run.status).toBe(1);
+    }),
+  );
+
+  it.effect("a fail trailer fails with the push's own error", () =>
+    Effect.gen(function* () {
+      // Given / When: the trailer split over two chunks
+      const error = yield* split(
+        err(CHECKS_START),
+        err("\n\x1fproofbox-fail mv: cannot move: Read-only"),
+        err(" file system \n"),
+        exit(1),
+      ).pipe(Effect.flip);
+      // Then
+      expect(error.message).toBe(
+        "Provider docker failed: could not write the Deadline: mv: cannot move: Read-only file system",
+      );
+    }),
   );
 });
