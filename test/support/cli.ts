@@ -14,7 +14,6 @@ export interface CliEnv {
     readonly PROOFBOX_RUNTIME_DIR: string;
     readonly PROOFBOX_FAKE_TOKEN: string;
     readonly DOCKER_HOST?: string;
-    readonly PROOFBOX_NSC?: string;
     readonly PROOFBOX_NAMESPACE_COMPUTE_URL?: string;
     readonly PROOFBOX_NAMESPACE_IAM_URL?: string;
     readonly PROOFBOX_NAMESPACE_TOKEN_URL?: string;
@@ -50,12 +49,11 @@ export const makeEnv = (
       ...(options.docker === true
         ? {}
         : { DOCKER_HOST: "unix:///nonexistent/proofbox-test.sock" }),
-      // Plain tests must not touch the real nsc binary or the real
-      // Compute API either: port 9 never answers.
+      // Plain tests must not touch the real Compute API: port 9
+      // never answers.
       ...(options.namespace === true
         ? {}
         : {
-            PROOFBOX_NSC: "/nonexistent/proofbox-test-nsc",
             PROOFBOX_NAMESPACE_COMPUTE_URL: "http://127.0.0.1:9/{region}",
             PROOFBOX_NAMESPACE_IAM_URL: "http://127.0.0.1:9",
             PROOFBOX_NAMESPACE_TOKEN_URL: "http://127.0.0.1:9",

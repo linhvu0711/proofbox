@@ -65,7 +65,6 @@ import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
 import { tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
-import type { NscClient } from "./nsc-client.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import {
   pullSnapshot,
@@ -106,7 +105,6 @@ const exec = promisify(execFile);
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
   readonly login: ProviderLogin;
-  readonly nsc: NscClient;
   readonly openLink: OpenLink;
   readonly forward: SshForward;
   readonly dockerFor: (link: Link) => DockerClient;
@@ -116,7 +114,6 @@ export const makeNamespaceProvider = (deps: {
     args: ReadonlyArray<string>,
   ) => Effect.Effect<void, ProviderError>;
 }): Provider => {
-  const nsc = deps.nsc;
   const api = deps.api;
   const forward = deps.forward;
   const fail = (reason: string) =>
@@ -145,7 +142,7 @@ export const makeNamespaceProvider = (deps: {
     });
 
   // Link bring-up can outlast a short host Deadline, so every open first
-  // bumps the host's own lifetime — detached, since nsc needs no link.
+  // bumps the host's own lifetime — detached, since the API call needs no link.
   const openLink = (ref: SandboxRef, owner: "cli" | "keeper") =>
     Effect.gen(function* () {
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
@@ -185,7 +182,7 @@ export const makeNamespaceProvider = (deps: {
   // costs registry space, so it warns and goes on.
   const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
     snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) => nsc.ensureImageExpiry(ref, SNAPSHOT_KEEP_HOURS)),
+      Effect.flatMap((ref) => api.ensureImageExpiry(ref, SNAPSHOT_KEEP_HOURS)),
       Effect.catchAll((error) =>
         progress.warn(`could not set the Snapshot expiry (${error.message})`),
       ),
@@ -303,7 +300,7 @@ export const makeNamespaceProvider = (deps: {
           mode: 0o600,
         }).catch(() => {}),
       );
-      // The host side first and detached: the nsc call needs no link, and the
+      // The host side first and detached: the API call needs no link, and the
       // link write below can spend a while in bring-up.
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
         ref.region ?? "",
@@ -418,7 +415,7 @@ export const makeNamespaceProvider = (deps: {
       const entries = await readdir(dir).catch(() => [] as string[]);
       // Only files at least ten minutes old are pruned: an ns-new-* staging
       // key belongs to a create in flight, and a host registered moments ago
-      // can still be ahead of the nsc list snapshot.
+      // can still be ahead of the ListInstances answer.
       const stale = async (file: string) => {
         const info = await stat(join(dir, file)).catch(() => null);
         return info !== null && Date.now() - info.mtimeMs > 600_000;
@@ -720,7 +717,7 @@ export const makeNamespaceProvider = (deps: {
           catch: (cause) =>
             fail(`could not store the host key: ${describe(cause)}`),
         });
-        // The host's own Deadline starts when nsc finishes creating it, so
+        // The host's own Deadline starts when Namespace finishes creating it, so
         // it can sit later than the Max life; a detached process destroys
         // the host at the absolute Max life.
         yield* deps.spawnDetached("namespace", "namespace/expire-main", [

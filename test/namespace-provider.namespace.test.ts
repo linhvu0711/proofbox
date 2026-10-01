@@ -19,21 +19,9 @@ import {
   runCli,
   trackTempDir,
 } from "./support/cli.ts";
+import { destroyHost, liveInstances } from "./support/namespace-live.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
-
-const nscBin = () => process.env.PROOFBOX_NSC ?? "nsc";
-
-const nsc = (args: ReadonlyArray<string>): Promise<string> =>
-  new Promise((resolve, reject) => {
-    execFile(nscBin(), args, (error, stdout, stderr) => {
-      if (error === null) {
-        resolve(stdout);
-      } else {
-        reject(new Error(stderr.trim() || stdout.trim() || error.message));
-      }
-    });
-  });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,18 +48,6 @@ const sleepUntil = async (start: number, ms: number) => {
   }
 };
 
-const liveList = async (): Promise<ReadonlyArray<Record<string, unknown>>> => {
-  const out = await nsc(["list", "-o", "json"]);
-  const parsed: unknown = JSON.parse(out);
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-  return parsed.filter(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === "object" && entry !== null,
-  );
-};
-
 const tempFile = (name: string, content: string, mode = 0o644) => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-file-"));
   trackTempDir(dir);
@@ -82,14 +58,14 @@ const tempFile = (name: string, content: string, mode = 0o644) => {
 };
 
 const liveIds = async (): Promise<ReadonlyArray<string>> =>
-  (await liveList()).map((entry) => String(entry.cluster_id ?? ""));
+  (await liveInstances()).map((entry) => entry.id);
 
 describe("Namespace Provider", () => {
-  const hosts: string[] = [];
+  const hosts: Array<{ region: string; name: string }> = [];
 
   afterEach(async () => {
-    for (const id of hosts.splice(0)) {
-      await nsc(["destroy", id, "--force"]).catch(() => {});
+    for (const host of hosts.splice(0)) {
+      await destroyHost(host.region, host.name);
     }
     cleanupEnvs();
   });
@@ -104,14 +80,15 @@ describe("Namespace Provider", () => {
       ...extra,
     ]);
     const id = result.stdout.trim();
+    const parts = id.split(":");
     if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
-      hosts.push(id.split(":").at(-1) ?? "");
+      hosts.push({ region: parts[1] ?? "", name: parts[2] ?? "" });
     }
     return result;
   };
 
   it("create prints an ns Sandbox id with the desktop up", async () => {
-    // Given: a real Namespace account (nsc auth check-login exits 0)
+    // Given: a real Namespace account (PROOFBOX_NAMESPACE_TOKEN)
     const env = makeEnv({ docker: true, namespace: true });
     // When
     const created = await create(env);
@@ -237,12 +214,11 @@ describe("Namespace Provider", () => {
     const created = await create(env);
     const host = created.stdout.trim().split(":").at(-1) ?? "";
     // Then
-    const entry = (await liveList()).find((item) => item.cluster_id === host);
-    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
-    expect(shape.virtual_cpu).toBe(4);
-    expect(shape.memory_megabytes).toBe(8192);
-    expect(shape.machine_arch).toBe("amd64");
-    expect(shape.os).toBe("linux");
+    const entry = (await liveInstances()).find((item) => item.id === host);
+    expect(entry?.shape?.virtualCpu).toBe(4);
+    expect(entry?.shape?.memoryMegabytes).toBe(8192);
+    expect(entry?.shape?.machineArch).toBe("amd64");
+    expect(entry?.shape?.os).toBe("linux");
   });
 
   it("create --size 8x16 makes an 8x16 host", async () => {
@@ -252,10 +228,9 @@ describe("Namespace Provider", () => {
     const created = await create(env, ["--size", "8x16"]);
     const host = created.stdout.trim().split(":").at(-1) ?? "";
     // Then
-    const entry = (await liveList()).find((item) => item.cluster_id === host);
-    const shape = (entry?.shape ?? {}) as Record<string, unknown>;
-    expect(shape.virtual_cpu).toBe(8);
-    expect(shape.memory_megabytes).toBe(16384);
+    const entry = (await liveInstances()).find((item) => item.id === host);
+    expect(entry?.shape?.virtualCpu).toBe(8);
+    expect(entry?.shape?.memoryMegabytes).toBe(16384);
   });
 
   it("a command killed for memory on 4x8 says Try --size 8x16", async () => {
@@ -445,7 +420,7 @@ describe("Namespace Provider", () => {
         );
       });
       // When
-      const entry = (await liveList()).find((item) => item.cluster_id === host);
+      const entry = (await liveInstances()).find((item) => item.id === host);
       const ctl = join(env.runtime, `ns-${stem}.ctl`);
       const key = join(env.runtime, `ns-${stem}.sshkey`);
       expect(await waitUntil(async () => existsSync(ctl), 30_000)).toBe(true);

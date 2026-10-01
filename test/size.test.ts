@@ -73,8 +73,8 @@ describe("--size", () => {
   });
 
   it("a size Namespace does not offer is refused with its list", async () => {
-    // Given: makeEnv points PROOFBOX_NSC at no file, so the refusal must
-    // happen before any nsc call
+    // Given: makeEnv points the Compute API at port 9, so the refusal
+    // must happen before any Namespace call
     const env = makeEnv();
     // When
     const result = await runCli(env, [
@@ -97,8 +97,8 @@ describe("--size", () => {
   });
 
   it("a size Namespace does not offer on macOS is refused with its list", async () => {
-    // Given: makeEnv points PROOFBOX_NSC at no file, so the refusal must
-    // happen before any nsc call
+    // Given: makeEnv points the Compute API at port 9, so the refusal
+    // must happen before any Namespace call
     const env = makeEnv();
     // When
     const result = await runCli(env, [

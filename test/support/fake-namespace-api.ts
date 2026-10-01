@@ -23,16 +23,17 @@ const STATUS = new Map([
   ["unauthenticated", 401],
   ["permission_denied", 403],
   ["not_found", 404],
+  ["failed_precondition", 400],
   ["resource_exhausted", 429],
   ["unavailable", 503],
   ["deadline_exceeded", 504],
 ]);
 
 // <region>/namespace.cloud.compute.v1beta.ComputeService/<method>, or the
-// sign-in service's and the token service's /<service>/<method> (those
+// sign-in, token, and registry services' /<service>/<method> (those
 // calls' region is "").
 const PATH =
-  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|(nsl\.signin\.SigninService|namespace\.cloud\.iam\.v1beta\.TokenService))\/([^/]+)$/;
+  /^\/(?:([^/]+)\/namespace\.cloud\.compute\.v1beta\.ComputeService|(nsl\.signin\.SigninService|namespace\.cloud\.iam\.v1beta\.TokenService|namespace\.cloud\.registry\.v1beta\.ContainerRegistryService))\/([^/]+)$/;
 
 const LOGIN_PAGE = /^\/login\/([^/]+)$/;
 

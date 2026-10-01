@@ -6,6 +6,7 @@ import {
   createGlobalTransport,
   createIAMClient,
   createRegionTransport,
+  createRegistryClient,
 } from "@namespacelabs/sdk/api";
 import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
 import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
@@ -124,6 +125,10 @@ export interface NamespaceApi {
     region: string,
     instanceId: string,
   ) => Effect.Effect<SshConfig, ApiError | ApiLoginError>;
+  readonly ensureImageExpiry: (
+    image: string,
+    hours: number,
+  ) => Effect.Effect<void, ApiError | ApiLoginError>;
   readonly checkToken: (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,
@@ -163,6 +168,8 @@ export const fromConnect =
   (
     call: string,
     host?: { readonly region: string; readonly instanceId: string },
+    service = "ComputeService",
+    need?: string,
   ) =>
   (cause: unknown): ApiError => {
     if (!(cause instanceof ConnectError)) {
@@ -174,7 +181,8 @@ export const fromConnect =
     if (cause.code === Code.PermissionDenied) {
       return new TokenPermissionError({
         provider: "namespace",
-        call: `ComputeService.${call}`,
+        call: `${service}.${call}`,
+        ...(need === undefined ? {} : { need }),
       });
     }
     if (cause.code === Code.ResourceExhausted) {
@@ -201,7 +209,7 @@ export const fromConnect =
     }
     return new ProviderError({
       provider: "namespace",
-      reason: `ComputeService.${call} failed: ${cause.rawMessage}`,
+      reason: `${service}.${call} failed: ${cause.rawMessage}`,
     });
   };
 
@@ -261,6 +269,11 @@ const computeUrlTemplate = Config.string("PROOFBOX_NAMESPACE_COMPUTE_URL").pipe(
   Config.withDefault("https://{region}.compute.namespaceapis.com"),
 );
 
+// The Registry is global, so its base URL takes no {region}.
+const registryUrlTemplate = Config.string(
+  "PROOFBOX_NAMESPACE_REGISTRY_URL",
+).pipe(Config.withDefault("https://global.namespaceapis.com"));
+
 // The IAM API base URL for the token calls; it is a global endpoint,
 // not the private sign-in host PROOFBOX_NAMESPACE_IAM_URL names.
 const tokenUrl = Config.string("PROOFBOX_NAMESPACE_TOKEN_URL").pipe(
@@ -286,8 +299,10 @@ const ROBOT_GRANTS = [
 export const makeNamespaceApi = (deps: {
   readonly login: ProviderLogin;
   readonly computeUrl?: Config.Config<string>;
+  readonly registryUrl?: Config.Config<string>;
 }): NamespaceApi => {
   const template = deps.computeUrl ?? computeUrlTemplate;
+  const registryTemplate = deps.registryUrl ?? registryUrlTemplate;
 
   const clientFor = (region: string, token: Redacted.Redacted<string>) =>
     template.pipe(
@@ -310,6 +325,26 @@ export const makeNamespaceApi = (deps: {
   // freshest env or saved login.
   const loggedClient = (region: string) =>
     Effect.flatMap(deps.login, (hand) => clientFor(region, hand.token));
+
+  const registryFor = (token: Redacted.Redacted<string>) =>
+    registryTemplate.pipe(
+      Effect.map((baseUrl) =>
+        createRegistryClient({
+          tokenSource: fromBearerToken(Redacted.value(token)),
+          transport: createGlobalTransport({
+            tokenSource: fromBearerToken(Redacted.value(token)),
+            baseUrl,
+          }),
+        }),
+      ),
+      Effect.mapError(
+        (error) =>
+          new ProviderError({ provider: "namespace", reason: error.message }),
+      ),
+    );
+
+  const loggedRegistry = () =>
+    Effect.flatMap(deps.login, (hand) => registryFor(hand.token));
 
   const list = (region: string, labels: ReadonlyArray<LabelEntry>) =>
     Effect.gen(function* () {
@@ -511,9 +546,34 @@ export const makeNamespaceApi = (deps: {
       } satisfies SshConfig;
     });
 
+  // `<repo>@sha256:<digest>` splits at the first `@` into the Registry's
+  // `repository` and `digest`, without host and tenant.
+  const ensureImageExpiry = (image: string, hours: number) =>
+    Effect.gen(function* () {
+      const client = yield* loggedRegistry();
+      const at = image.indexOf("@");
+      yield* Effect.tryPromise({
+        try: () =>
+          client.registry.updateImageLifetime({
+            repository: image.slice(0, at),
+            digest: image.slice(at + 1),
+            ensureMinimumRemaining: {
+              seconds: BigInt(hours * 3600),
+              nanos: 0,
+            },
+          }),
+        catch: fromConnect(
+          "UpdateImageLifetime",
+          undefined,
+          "ContainerRegistryService",
+          "update registry images",
+        ),
+      });
+    });
+
   // A tenant token mints a revokable robot token over the public IAM
-  // endpoint: name, description, expiry, and the grants, like
-  // `nsc token create` without a `--user`.
+  // endpoint: name, description, expiry, and the grants, the same
+  // request Namespace's own CLI sends for a token with no user.
   const makeToken = (
     tenant: Redacted.Redacted<string>,
     request: TokenRequest,
@@ -576,6 +636,7 @@ export const makeNamespaceApi = (deps: {
     extend,
     list,
     sshConfig,
+    ensureImageExpiry,
     checkToken,
     makeToken,
   };

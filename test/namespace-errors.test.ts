@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -264,6 +264,134 @@ describe("Namespace errors", () => {
     // Then
     expect(result.stderr).toBe(
       "ssh is not installed; install an OpenSSH client\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(millis).toBeLessThan(5000);
+  });
+
+  it("exec when GetSSHConfig fails names the Sandbox", async () => {
+    // Given: the Compute API refuses GetSSHConfig for the Sandbox
+    const ns = await fakeNamespace((call) =>
+      call.method === "GetSSHConfig"
+        ? {
+            error: {
+              code: "failed_precondition",
+              message: "instance is not ready",
+            },
+          }
+        : { json: {} },
+    );
+    const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
+    trackTempDir(binDir);
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      {
+        set: {
+          PATH: binDir,
+          ...nsEnv(ns),
+        },
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Provider namespace failed: could not get SSH access to Sandbox ns:us:abc123def4567 (ComputeService.GetSSHConfig failed: instance is not ready); try again in a minute\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("exec when ssh cannot connect names the Sandbox", async () => {
+    // Given: an ssh that cannot resolve the gateway, and the Compute API
+    // answers GetSSHConfig and ListInstances
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "GetSSHConfig") {
+        return {
+          json: {
+            username: "abc123def4567",
+            endpoint: "ssh.invalid",
+            sshPrivateKey: Buffer.from("key").toString("base64"),
+            sshHostKeys: [Buffer.from("host-key").toString("base64")],
+          },
+        };
+      }
+      return call.method === "ListInstances"
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} };
+    });
+    const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
+    trackTempDir(binDir);
+    writeFileSync(
+      join(binDir, "ssh"),
+      '#!/bin/sh\necho "ssh: Could not resolve hostname ssh.invalid: Name or service not known" >&2\nexit 255\n',
+      { mode: 0o755 },
+    );
+    const env = makeEnv();
+    // When
+    const start = performance.now();
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      {
+        set: {
+          PATH: binDir,
+          PROOFBOX_NS_LINK_WAIT: "0s",
+          ...nsEnv(ns),
+        },
+      },
+    );
+    const millis = performance.now() - start;
+    // Then
+    expect(result.stderr).toBe(
+      "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh: Could not resolve hostname ssh.invalid: Name or service not known). Try again in a minute.\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(millis).toBeLessThan(5000);
+  });
+
+  it("exec when the Sandbox host key does not match refuses at once", async () => {
+    // Given: an ssh whose host key check fails, and the Compute API
+    // answers GetSSHConfig and ListInstances
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "GetSSHConfig") {
+        return {
+          json: {
+            username: "abc123def4567",
+            endpoint: "ssh.invalid",
+            sshPrivateKey: Buffer.from("key").toString("base64"),
+            sshHostKeys: [Buffer.from("host-key").toString("base64")],
+          },
+        };
+      }
+      return call.method === "ListInstances"
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} };
+    });
+    const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
+    trackTempDir(binDir);
+    writeFileSync(
+      join(binDir, "ssh"),
+      '#!/bin/sh\necho "Host key verification failed." >&2\nexit 255\n',
+      { mode: 0o755 },
+    );
+    const env = makeEnv();
+    // When
+    const start = performance.now();
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      {
+        set: {
+          PATH: binDir,
+          ...nsEnv(ns),
+        },
+      },
+    );
+    const millis = performance.now() - start;
+    // Then
+    expect(result.stderr).toBe(
+      "Refused to connect to Sandbox ns:us:abc123def4567: its SSH host key does not match the key Namespace gave. Run: proofbox delete ns:us:abc123def4567\n",
     );
     expect(result.exitCode).toBe(125);
     expect(millis).toBeLessThan(5000);

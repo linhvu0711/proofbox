@@ -39,9 +39,9 @@ export const pushSnapshot = (link: Link, container: string, tag: string) =>
     }
   });
 
-// The pushed image as `<repo>@sha256:<digest>`, the form
-// `nsc registry update-image-expiration` takes, without the registry host
-// and tenant.
+// The pushed image as `<repo>@sha256:<digest>`, split at `@` into the
+// Registry API's `repository` and `digest`, without the registry host and
+// tenant.
 export const snapshotRef = (link: Link, tag: string) =>
   Effect.gen(function* () {
     const result = yield* link.run(

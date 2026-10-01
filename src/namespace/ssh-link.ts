@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { Command, CommandExecutor } from "@effect/platform";
 import {
   Chunk,
+  Config,
   Data,
   Deferred,
   Effect,
@@ -14,6 +15,7 @@ import {
   Stream,
 } from "effect";
 import { commandEvents } from "../command-events.ts";
+import { parseSpan } from "../deadline.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
@@ -58,17 +60,43 @@ const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
     "utf8",
   );
 
-const tail = (text: string, lines: number) =>
-  text.trim().split("\n").slice(-lines).join("\n");
+// Verbose ssh writes debug lines past the real error, so the last
+// non-debug line is the one that says what failed.
+const lastLine = (text: string) => {
+  const lines = text.trim().split("\n");
+  return (
+    lines.filter((line) => !line.startsWith("debug")).pop() ?? lines.pop() ?? ""
+  );
+};
+
+// A dead SSH gateway gets this long to come back before an exec or a
+// connect fails; 0s makes a test's first failure the final answer.
+const linkWaitText = Config.string("PROOFBOX_NS_LINK_WAIT").pipe(
+  Config.withDefault("120s"),
+);
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
-const linkLost = (detail: string) =>
+const linkLost = (ref: SandboxRef, detail: string) =>
   new ProviderUnavailableError({
     provider: "namespace",
-    reason: `lost the link to the Namespace host: ${detail}`,
+    reason: `Could not connect to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} over SSH (${detail}). Try again in a minute.`,
   });
+
+// A host key that does not match what GetSSHConfig gave is a wrong or
+// recycled host, not a dead link — refuse at once rather than retry.
+const hostKeyRefused = (ref: SandboxRef) => {
+  const id = formatSandboxId({
+    provider: "ns",
+    region: ref.region,
+    name: ref.name,
+  });
+  return new ProviderUnavailableError({
+    provider: "namespace",
+    reason: `Refused to connect to Sandbox ${id}: its SSH host key does not match the key Namespace gave. Run: proofbox delete ${id}`,
+  });
+};
 
 // Bring-up failures that mean "the link is not ready yet" — the SSH
 // gateway still coming up, a handshake that dropped. Only these are
@@ -168,7 +196,9 @@ export const makeOpenLink = (
             );
             const stderr = toText(errBytes);
             if (exitCode === 255) {
-              return yield* linkLost(tail(stderr, 3));
+              return stderr.includes("Host key verification failed")
+                ? yield* hostKeyRefused(ref)
+                : yield* linkLost(ref, lastLine(stderr));
             }
             return {
               exitCode,
@@ -190,7 +220,9 @@ export const makeOpenLink = (
                 new ProviderError({ provider: "namespace", reason }),
               exit: (code) =>
                 code === 255
-                  ? Effect.fail(linkLost("the ssh link dropped mid-command"))
+                  ? Effect.fail(
+                      linkLost(ref, "the ssh link dropped mid-command"),
+                    )
                   : Effect.succeed(code),
             },
           );
@@ -223,7 +255,16 @@ export const makeOpenLink = (
           } satisfies Link;
         }
       }
-      const cfg = yield* api.sshConfig(region, instanceId);
+      const cfg = yield* api.sshConfig(region, instanceId).pipe(
+        Effect.catchTag("ProviderError", (error) =>
+          Effect.fail(
+            new ProviderError({
+              provider: "namespace",
+              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
+            }),
+          ),
+        ),
+      );
       const target = `${cfg.username}@${cfg.endpoint}`;
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
         const ssh = sshBase(paths.control, keeperKey, paths.knownHosts, target);
@@ -344,7 +385,11 @@ export const makeOpenLink = (
               Effect.orElseSucceed(() => 255),
               Effect.zipRight(Ref.get(masterLog)),
               Effect.flatMap((text) =>
-                Effect.fail(down(tail(text === "" ? "ssh exited" : text, 3))),
+                Effect.fail(
+                  text.includes("Host key verification failed")
+                    ? hostKeyRefused(ref)
+                    : down(lastLine(text === "" ? "ssh exited" : text)),
+                ),
               ),
             ),
           );
@@ -389,14 +434,34 @@ export const makeOpenLink = (
             ),
         ),
       );
+      const linkWait = yield* parseSpan(
+        "PROOFBOX_NS_LINK_WAIT",
+        yield* linkWaitText.pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: "namespace",
+                reason: error.message,
+              }),
+          ),
+        ),
+        {
+          units: ["ms", "s", "m"],
+          zero: true,
+          example: "120s",
+        },
+      ).pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      );
       yield* Effect.retry(attempt, {
         while: (error) => error instanceof LinkDownError,
-        schedule: Schedule.spaced("1 second").pipe(
-          Schedule.upTo("120 seconds"),
-        ),
+        schedule: Schedule.spaced("1 second").pipe(Schedule.upTo(linkWait)),
       }).pipe(
         Effect.catchTag("LinkDownError", (error) =>
-          Effect.fail(linkLost(error.detail)),
+          Effect.fail(linkLost(ref, error.detail)),
         ),
       );
       return { ssh, run, stream } satisfies Link;
@@ -404,10 +469,9 @@ export const makeOpenLink = (
 };
 
 // The Live view's local port: `ssh -L` through the same GetSSHConfig
-// gateway the links use. nsc's `instance port-forward` cannot carry it —
-// its per-connection dial rides the same websocket the token's grant does
-// not cover, and it dies with `websocket: bad handshake` (verified live
-// 2026-09-30). Scoped: the forward lives until the scope closes; `gone`
+// gateway the links use. GetVNCConfig answers a WebSocket behind an
+// ingress auth header that no VNC app sends (docs/test-decisions.md 14).
+// Scoped: the forward lives until the scope closes; `gone`
 // resolves with the failure if the ssh process exits after the port is
 // up. `ref` names the Sandbox the forward serves.
 export type SshForward = (
@@ -433,7 +497,16 @@ export const makeSshForward = (
     Effect.gen(function* () {
       const region = ref.region ?? "";
       const instanceId = ref.name;
-      const cfg = yield* api.sshConfig(region, instanceId);
+      const cfg = yield* api.sshConfig(region, instanceId).pipe(
+        Effect.catchTag("ProviderError", (error) =>
+          Effect.fail(
+            new ProviderError({
+              provider: "namespace",
+              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
+            }),
+          ),
+        ),
+      );
       const target = `${cfg.username}@${cfg.endpoint}`;
       const dir = (yield* keeperPaths({ provider: "ns", name: ref.name })).dir;
       const pid = process.pid;
@@ -564,7 +637,7 @@ export const makeSshForward = (
               api.list(region, []).pipe(
                 Effect.catchAll(() =>
                   Effect.fail(
-                    fail(`the Live view's forward died: ${tail(text, 3)}`),
+                    fail(`the Live view's forward died: ${lastLine(text)}`),
                   ),
                 ),
                 Effect.flatMap(
@@ -574,7 +647,7 @@ export const makeSshForward = (
                     instances.some((instance) => instance.id === instanceId)
                       ? Effect.fail(
                           fail(
-                            `the Live view's forward died: ${tail(text, 3)}`,
+                            `the Live view's forward died: ${lastLine(text)}`,
                           ),
                         )
                       : Effect.fail(

@@ -28,7 +28,6 @@ import type {
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
-import type { NscClient } from "../src/namespace/nsc-client.ts";
 import type { Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
@@ -83,15 +82,12 @@ const fakeApi = (
       );
     },
     sshConfig: () => Effect.die("unused"),
+    ensureImageExpiry: (image, hours) =>
+      note(`ensureImageExpiry ${image} ${hours}`),
     checkToken: () => Effect.die("unused"),
     makeToken: () => Effect.die("unused"),
   };
 };
-
-const fakeNsc = (calls: Ref.Ref<ReadonlyArray<string>>): NscClient => ({
-  ensureImageExpiry: (image, hours) =>
-    Ref.update(calls, (all) => [...all, `ensureImageExpiry ${image} ${hours}`]),
-});
 
 const fakeDocker = (options: {
   readonly tokenFile?: number;
@@ -265,7 +261,6 @@ const makeProvider = (
       token: Redacted.make("token"),
       region: Option.fromNullable(options?.region),
     }),
-    nsc: fakeNsc(calls),
     openLink: () =>
       Effect.succeed<Link>({
         ssh: [],
@@ -298,7 +293,6 @@ describe("Namespace Provider", () => {
         const provider = makeNamespaceProvider({
           api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
           login: Effect.die("unused"),
-          nsc: fakeNsc(yield* Ref.make<ReadonlyArray<string>>([])),
           openLink: () => Effect.succeed(link),
           forward: () => Effect.die("unused"),
           dockerFor: () => {
