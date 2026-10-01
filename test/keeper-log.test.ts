@@ -96,4 +96,24 @@ describe("Keeper log", () => {
       }).toEqual({ old: 1_048_576, lines: 1 });
     }),
   );
+
+  it.effect("two writes at a full log keep both lines and the old file", () =>
+    Effect.gen(function* () {
+      // Given: a full log
+      const path = tempLog();
+      writeFileSync(path, "x".repeat(1_048_576));
+      // When: two requests end together
+      yield* Effect.all(
+        [writeKeeperLog(path, entry), writeKeeperLog(path, entry)],
+        {
+          concurrency: "unbounded",
+        },
+      );
+      // Then
+      expect({
+        old: statSync(`${path}.1`).size,
+        lines: readFileSync(path, "utf8").split("\n").length - 1,
+      }).toEqual({ old: 1_048_576, lines: 2 });
+    }),
+  );
 });

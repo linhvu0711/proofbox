@@ -35,21 +35,42 @@ export const programOf = (argv: ReadonlyArray<string>) => {
     : basename(program);
 };
 
-// A log that cannot be written never fails the command it describes.
+// One write at a time per log, so two requests that end together never
+// both rotate it: the second rename would move the first's new file over
+// the old one.
+const writers = new Map<string, Effect.Semaphore>();
+const writerOf = (path: string) => {
+  const known = writers.get(path);
+  if (known !== undefined) {
+    return known;
+  }
+  const made = Effect.unsafeMakeSemaphore(1);
+  writers.set(path, made);
+  return made;
+};
+
+// A log that cannot be written never fails the command it describes, and
+// a rotation that fails still lets the line be written.
 export const writeKeeperLog = Effect.fn("keeperLog.write")(function* (
   path: string,
   entry: KeeperLogEntry,
 ) {
-  const size = yield* Effect.tryPromise(() =>
-    stat(path).then(
-      (info) => info.size,
-      () => 0,
-    ),
-  );
-  if (size >= ROTATE_AT) {
-    yield* Effect.tryPromise(() => rename(path, `${path}.1`));
-  }
-  yield* Effect.tryPromise(() =>
-    appendFile(path, keeperLogLine(entry), { mode: 0o600 }),
+  yield* writerOf(path).withPermits(1)(
+    Effect.gen(function* () {
+      const size = yield* Effect.promise(() =>
+        stat(path).then(
+          (info) => info.size,
+          () => 0,
+        ),
+      );
+      if (size >= ROTATE_AT) {
+        yield* Effect.ignore(
+          Effect.tryPromise(() => rename(path, `${path}.1`)),
+        );
+      }
+      yield* Effect.tryPromise(() =>
+        appendFile(path, keeperLogLine(entry), { mode: 0o600 }),
+      );
+    }),
   );
 }, Effect.ignore);
