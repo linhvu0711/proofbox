@@ -144,6 +144,7 @@ describe("Namespace Provider", () => {
     )?.[1];
     const started = Date.now();
     const second = await create(env, ["--work", folder, "--setup", script]);
+    const ended = Date.now();
     const expiry = fp === undefined ? undefined : await snapshotExpiry(fp);
     const id = second.stdout.trim();
     const runs = await runCli(env, ["exec", id, "--", "cat", "runs.txt"]);
@@ -171,6 +172,9 @@ describe("Namespace Provider", () => {
       keptTwoWeeks:
         expiry !== undefined &&
         expiry.getTime() >= started + 336 * 3_600_000 - 60_000,
+      notKeptLonger:
+        expiry !== undefined &&
+        expiry.getTime() <= ended + 336 * 3_600_000 + 60_000,
     }).toEqual({
       saved: true,
       reused: true,
@@ -180,6 +184,7 @@ describe("Namespace Provider", () => {
       expiryWarned: false,
       expirySet: true,
       keptTwoWeeks: true,
+      notKeptLonger: true,
     });
   });
 
