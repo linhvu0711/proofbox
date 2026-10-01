@@ -147,20 +147,55 @@ export class SandboxInfo extends Schema.Class<SandboxInfo>("SandboxInfo")({
   size: Schema.optional(Size),
 }) {}
 
+// The Sandbox's memory-kill count read just before and just after one
+// command, in the same remote call as the command.
+export interface MemoryKills {
+  readonly before: number;
+  readonly after: number;
+}
+
 export type ExecEvent =
   | { readonly _tag: "Stdout"; readonly bytes: Uint8Array }
   | { readonly _tag: "Stderr"; readonly bytes: Uint8Array }
-  | { readonly _tag: "Exit"; readonly code: number };
+  | {
+      readonly _tag: "Exit";
+      readonly code: number;
+      readonly kills?: MemoryKills;
+    };
 
 export interface ExecOptions {
   readonly stdin?: Stream.Stream<Uint8Array, ProviderError>;
 }
 
+// What a read or a Deadline push of one Sandbox can fail with.
+export type SandboxCallError =
+  | BadLoginsFileError
+  | LoginExpiredError
+  | NotLoggedInError
+  | SandboxGoneError
+  | ProviderError
+  | ProviderLimitError
+  | ProviderUnavailableError
+  | TokenRejectedError
+  | TokenPermissionError;
+
 export interface Connection {
+  // The Sandbox as `connect` read it.
+  readonly info: SandboxInfo;
+  // Reads the Sandbox again over this connection: the Keeper's gone-watch.
+  readonly get: Effect.Effect<SandboxInfo, SandboxCallError>;
+  // One Deadline push over this connection, with no command.
+  readonly extend: (deadline: Date) => Effect.Effect<void, SandboxCallError>;
+  // Runs a command with its checks in the same remote call (ADR 0015): the
+  // Deadline pushed by the idle time before and after it, and the
+  // memory-kill counts around it on the Exit event.
   readonly exec: (
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
-  ) => Stream.Stream<ExecEvent, ProviderError | ProviderUnavailableError>;
+  ) => Stream.Stream<
+    ExecEvent,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
 }
 
 export interface Provider {
@@ -320,20 +355,6 @@ export interface Provider {
     | TokenRejectedError
     | TokenPermissionError,
     Scope.Scope | CommandExecutor.CommandExecutor
-  >;
-  readonly memoryKills: (
-    sandbox: SandboxRef,
-  ) => Effect.Effect<
-    number,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
   >;
 }
 

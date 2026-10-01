@@ -7,12 +7,13 @@ import {
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
 import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
-import { ProviderError } from "../errors.ts";
+import { withRunningPush } from "../deadline.ts";
+import { ProviderError, SandboxGoneError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
-import { decodeInput, decodeRequest } from "./protocol.ts";
+import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
 
 const socketAnswers = (path: string) =>
   Effect.async<boolean>((resume) => {
@@ -40,7 +41,12 @@ const frameOf = (event: ExecEvent) => {
     case "Stderr":
       return { err: Buffer.from(event.bytes).toString("base64") };
     case "Exit":
-      return { exit: event.code };
+      return event.kills === undefined
+        ? { exit: event.code }
+        : {
+            exit: event.code,
+            kills: [event.kills.before, event.kills.after],
+          };
   }
 };
 
@@ -80,8 +86,7 @@ export const runKeeper = (rawId: string) =>
             argv: ReadonlyArray<string>,
             options?: ExecOptions,
           ) =>
-            connection
-              .exec(argv, options)
+            withRunningPush(connection)(connection.exec(argv, options))
               .pipe(
                 Stream.runForEach((event) =>
                   writeFrame(socket, frameOf(event)),
@@ -89,22 +94,36 @@ export const runKeeper = (rawId: string) =>
               )
               .pipe(
                 Effect.catchAll((error) =>
-                  writeFrame(socket, {
-                    fail:
-                      error instanceof Error ? error.message : String(error),
-                  }).pipe(Effect.orElseSucceed(() => undefined)),
+                  writeFrame(
+                    socket,
+                    error instanceof SandboxGoneError
+                      ? { gone: error.id }
+                      : {
+                          // The client wraps the text in its own
+                          // ProviderError, so a ProviderError sends only
+                          // its reason.
+                          fail:
+                            error instanceof ProviderError
+                              ? error.reason
+                              : error instanceof Error
+                                ? error.message
+                                : String(error),
+                        },
+                  ).pipe(Effect.orElseSucceed(() => undefined)),
                 ),
                 Effect.ensuring(
                   Effect.sync(() => {
                     // A command may exit before its input ends (tar -x
                     // stops at the end-of-archive marker); drain the
                     // remaining input frames so the client can finish
-                    // writing before the socket closes. Ending the
-                    // Mailbox wakes an offer parked on a full one.
+                    // writing before the socket closes. Shutting the
+                    // Mailbox down wakes an offer parked on a full one and
+                    // drops input no one will read; `end` would leave that
+                    // offer parked until a take that never comes.
                     if (mode === "stdin" && !inputEnded) {
                       execDone = true;
                       void Runtime.runPromiseExit(runtime)(
-                        mailbox === undefined ? Effect.void : mailbox.end,
+                        mailbox === undefined ? Effect.void : mailbox.shutdown,
                       );
                     } else {
                       socket.end();
@@ -130,7 +149,13 @@ export const runKeeper = (rawId: string) =>
                   try: () => decodeRequest(JSON.parse(line)),
                   catch: () => new Error("bad request"),
                 });
-                if (request.stdin === true) {
+                if ("info" in request) {
+                  mode = "plain";
+                  yield* writeFrame(
+                    socket,
+                    encodeReply({ info: connection.info }),
+                  );
+                } else if (request.stdin === true) {
                   mode = "stdin";
                   mailbox = yield* Mailbox.make<Uint8Array, ProviderError>(16);
                   // forkDaemon: the exec must outlive this line-handler fiber
@@ -271,14 +296,11 @@ export const runKeeper = (rawId: string) =>
               ]).then(() => {}),
             ),
         );
-        yield* Effect.never;
+        // The gone-watch reads over the Keeper's own link; a gone Sandbox
+        // fails it and ends the Keeper.
+        yield* Effect.repeat(connection.get, Schedule.spaced("2 seconds"));
       }),
     );
 
-    const watchGone = Effect.repeat(
-      provider.get(id),
-      Schedule.spaced("2 seconds"),
-    ).pipe(Effect.asVoid);
-
-    yield* Effect.raceFirst(serve, watchGone);
+    yield* serve;
   });

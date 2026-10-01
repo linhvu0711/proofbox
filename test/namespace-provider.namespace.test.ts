@@ -212,7 +212,7 @@ describe("Namespace Provider", () => {
     );
   });
 
-  it("a warm exec takes under 3 s", async () => {
+  it("a warm exec takes under 2 s", async () => {
     // Given: a created ns: Sandbox whose Keeper already holds the link
     const env = makeEnv({ docker: true, namespace: true });
     const created = await create(env);
@@ -225,7 +225,7 @@ describe("Namespace Provider", () => {
     // Then
     expect(cold.exitCode).toBe(0);
     expect(warm.exitCode).toBe(0);
-    expect(millis).toBeLessThan(3000);
+    expect(millis).toBeLessThan(2000);
   });
 
   it("create with no --size makes a 4x8 host", async () => {

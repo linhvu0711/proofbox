@@ -3,19 +3,31 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { ConfigProvider, Duration, Effect } from "effect";
+import {
+  Chunk,
+  ConfigProvider,
+  Duration,
+  Effect,
+  Ref,
+  TestClock,
+} from "effect";
 import { afterEach, describe, expect } from "vitest";
+import { CliOutput } from "../src/cli-output.ts";
+import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { Progress } from "../src/progress.ts";
-import { Providers, providerEntry } from "../src/provider.ts";
+import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { startKeeper } from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,6 +50,71 @@ const alive = (pid: number) => {
     return false;
   }
 };
+
+const runtimeConfig = (env: { runtime: string }) =>
+  Effect.withConfigProvider(
+    ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", env.runtime]])),
+  );
+
+// A fake Sandbox made at t=0 with a Keeper run in this process, and the
+// layers a command needs to reach it. The Provider counts the `get` and
+// `extend` calls made to it from the CLI side; the Keeper's own checks go
+// through its Connection and are not counted.
+const warmKeeper = (
+  env: { root: string; runtime: string },
+  options: {
+    readonly maxLife?: Duration.Duration;
+    readonly desktop?: boolean;
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const fake = makeFakeProvider({ root: env.root, watch: "none" });
+    const info = yield* fake
+      .create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: options.maxLife ?? Duration.hours(3),
+      })
+      .pipe(Effect.provideService(Progress, noProgress));
+    const calls = { get: 0, extend: 0 };
+    const linux = fake.offers.linux;
+    const counted: Provider = {
+      ...fake,
+      offers:
+        options.desktop === true && linux !== undefined
+          ? {
+              linux: {
+                ...linux,
+                features: new Set([...linux.features, "desktop"]),
+              },
+            }
+          : fake.offers,
+      get: (ref) =>
+        Effect.suspend(() => {
+          calls.get += 1;
+          return fake.get(ref);
+        }),
+      extend: (ref, deadline) =>
+        Effect.suspend(() => {
+          calls.extend += 1;
+          return fake.extend(ref, deadline);
+        }),
+    };
+    const id = `fake:${info.name}`;
+    const layers = yield* startKeeper(id, counted);
+    calls.get = 0;
+    calls.extend = 0;
+    const deadline = Effect.map(
+      fake.get({ name: info.name, region: undefined }),
+      (read) => read.deadline.toISOString(),
+    );
+    return { id, name: info.name, calls, layers, deadline };
+  });
+
+const capturedOut = Effect.gen(function* () {
+  const output = yield* CliOutput;
+  return Chunk.toReadonlyArray(yield* Ref.get(output.captured.out)).join("");
+});
 
 describe("Keeper", () => {
   afterEach(cleanupEnvs);
@@ -322,5 +399,106 @@ describe("Keeper", () => {
           reason: expect.stringContaining("EISDIR"),
         });
       }),
+  );
+
+  it.scoped(
+    "a command through a warm Keeper asks the Provider nothing from the CLI",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const keeper = yield* warmKeeper(env);
+        // When
+        const out = yield* execInSandbox(keeper.id, [
+          "sh",
+          "-c",
+          "echo hi",
+        ]).pipe(
+          Effect.zipRight(capturedOut),
+          Effect.zip(Effect.flatMap(CliOutput, (output) => output.exitCode)),
+          Effect.provide(keeper.layers),
+        );
+        // Then
+        expect(out).toEqual(["hi\n", 0]);
+        expect(keeper.calls).toEqual({ get: 0, extend: 0 });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command through the Keeper pushes the Deadline by the idle time",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const keeper = yield* warmKeeper(env);
+        yield* TestClock.adjust("10 minutes");
+        // When
+        yield* execInSandbox(keeper.id, ["true"]).pipe(
+          Effect.provide(keeper.layers),
+        );
+        // Then
+        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped("a command through the Keeper never pushes past Max life", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given
+      const keeper = yield* warmKeeper(env, {
+        maxLife: Duration.minutes(20),
+      });
+      yield* TestClock.adjust("10 minutes");
+      // When
+      yield* execInSandbox(keeper.id, ["true"]).pipe(
+        Effect.provide(keeper.layers),
+      );
+      // Then
+      expect(yield* keeper.deadline).toBe("1970-01-01T00:20:00.000Z");
+    }).pipe(runtimeConfig(env));
+  });
+
+  it.scoped(
+    "a Sandbox gone under a warm Keeper fails with the same message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const keeper = yield* warmKeeper(env);
+        rmSync(join(env.root, keeper.name), { recursive: true, force: true });
+        // When
+        const error = yield* execInSandbox(keeper.id, ["true"]).pipe(
+          Effect.provide(keeper.layers),
+          Effect.flip,
+        );
+        // Then
+        expect(error.message).toBe(`Sandbox ${keeper.id} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a Pixel helper through a warm Keeper asks the Provider nothing from the CLI",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a desktop Sandbox whose helper is `echo`
+        const keeper = yield* warmKeeper(env, { desktop: true });
+        yield* TestClock.adjust("10 minutes");
+        // When
+        const result = yield* runHelper(
+          keeper.id,
+          { feature: "desktop", paths: { linux: "echo" } },
+          ["clicked"],
+          { outcome: "click" },
+        ).pipe(Effect.provide(keeper.layers));
+        // Then
+        expect(result.stdout.toString("utf8")).toBe("clicked\n");
+        expect(keeper.calls).toEqual({ get: 0, extend: 0 });
+        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
+      }).pipe(runtimeConfig(env));
+    },
   );
 });

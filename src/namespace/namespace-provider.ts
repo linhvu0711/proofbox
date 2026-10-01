@@ -16,11 +16,14 @@ import {
   Duration,
   Effect,
   Either,
+  Fiber,
   Option,
+  Ref,
   Schedule,
   Stream,
 } from "effect";
-import { parseSpan } from "../deadline.ts";
+import { checksArgv, checksScript, splitChecks } from "../command-checks.ts";
+import { parseSpan, pushedDeadline } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -28,6 +31,7 @@ import {
 } from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
 import {
+  LINUX_SCRIPT,
   makeDockerProvider,
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
@@ -42,6 +46,7 @@ import {
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import {
+  type ExecOptions,
   type ListResult,
   type Os,
   type Provider,
@@ -53,12 +58,12 @@ import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
+import { pushHostLife } from "./host-life.ts";
 import {
   MAC_SECRETS_DIR,
-  macExec,
+  macChecks,
   prepareMac,
   readMac,
-  readMemoryKills,
   writeMacDeadline,
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
@@ -102,6 +107,8 @@ const describe = (cause: unknown) =>
 
 const exec = promisify(execFile);
 
+const MAC_SCRIPT = checksScript(macChecks());
+
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
   readonly login: ProviderLogin;
@@ -142,14 +149,19 @@ export const makeNamespaceProvider = (deps: {
     });
 
   // Link bring-up can outlast a short host Deadline, so every open first
-  // bumps the host's own lifetime — detached, since the API call needs no link.
+  // bumps the host's own lifetime: detached for a CLI link, a fiber of the
+  // Keeper for its own.
   const openLink = (ref: SandboxRef, owner: "cli" | "keeper") =>
     Effect.gen(function* () {
-      yield* deps.spawnDetached("namespace", "namespace/extend-main", [
-        ref.region ?? "",
-        ref.name,
-        "120",
-      ]);
+      if (owner === "keeper") {
+        yield* Effect.forkScoped(pushHostLife(api, ref, 120));
+      } else {
+        yield* deps.spawnDetached("namespace", "namespace/extend-main", [
+          ref.region ?? "",
+          ref.name,
+          "120",
+        ]);
+      }
       return yield* deps.openLink(ref, yield* refPaths(ref), owner);
     });
 
@@ -286,6 +298,32 @@ export const makeNamespaceProvider = (deps: {
       return yield* getAs(yield* osOf(ref), ref);
     });
 
+  // The local record of the Deadline, which the detached host-expiry reads.
+  const recordDeadline = (file: string, deadline: Date) =>
+    Effect.promise(() =>
+      writeFile(file, String(Math.ceil(deadline.getTime() / 1000)), {
+        mode: 0o600,
+      }).catch(() => {}),
+    );
+
+  // The container's Deadline file, `seconds` from the host's own clock.
+  const writeLinuxDeadline = (link: Link, ref: SandboxRef, seconds: number) =>
+    link.run(
+      `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
+    );
+
+  const checkWritten = (
+    ref: SandboxRef,
+    written: { readonly exitCode: number; readonly stderr: string },
+  ) =>
+    written.exitCode === 0
+      ? Effect.void
+      : written.stderr.toLowerCase().includes("no such container")
+        ? Effect.fail(gone(ref))
+        : Effect.fail(
+            fail(`could not write the Deadline: ${written.stderr.trim()}`),
+          );
+
   const extend = (ref: SandboxRef, deadline: Date) =>
     Effect.gen(function* () {
       const seconds = Math.ceil(
@@ -294,12 +332,7 @@ export const makeNamespaceProvider = (deps: {
       // The detached host-expiry destroys the host at this instant: the
       // record lands before the push so a link that is slow or dead cannot
       // leave the host living past the Sandbox's Deadline.
-      const dir = yield* refPaths(ref);
-      yield* Effect.promise(() =>
-        writeFile(dir.deadline, String(Math.ceil(deadline.getTime() / 1000)), {
-          mode: 0o600,
-        }).catch(() => {}),
-      );
+      yield* recordDeadline((yield* refPaths(ref)).deadline, deadline);
       // The host side first and detached: the API call needs no link, and the
       // link write below can spend a while in bring-up.
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
@@ -311,18 +344,9 @@ export const makeNamespaceProvider = (deps: {
       const written = yield* withCliLink(ref, (link) =>
         os === "macos"
           ? writeMacDeadline(link, seconds)
-          : link.run(
-              `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
-            ),
+          : writeLinuxDeadline(link, ref, seconds),
       );
-      if (written.exitCode !== 0) {
-        if (written.stderr.toLowerCase().includes("no such container")) {
-          return yield* gone(ref);
-        }
-        return yield* fail(
-          `could not write the Deadline: ${written.stderr.trim()}`,
-        );
-      }
+      yield* checkWritten(ref, written);
     });
 
   // Each OS is its own label, so a host is listed with the OS it runs.
@@ -850,38 +874,89 @@ export const makeNamespaceProvider = (deps: {
   const connect = (ref: SandboxRef) =>
     Effect.gen(function* () {
       const link = yield* openLink(ref, "keeper");
-      if ((yield* osOf(ref)) === "macos") {
-        yield* readMac(link, ref);
-        return { exec: macExec(link) };
-      }
-      yield* getWith(link, ref);
-      const docker = deps.dockerFor(link);
-      const container = containerOf(ref);
-      return {
-        exec: (
-          argv: ReadonlyArray<string>,
-          options?: Parameters<DockerClient["execStream"]>[2],
-        ) => docker.execStream(container, argv, options),
-      };
-    });
-
-  const memoryKills = (ref: SandboxRef) =>
-    Effect.gen(function* () {
-      if ((yield* osOf(ref)) === "macos") {
-        return yield* withCliLink(ref, readMemoryKills);
-      }
-      yield* get(ref);
-      const read = yield* withCliLink(ref, (link) =>
-        deps
-          .dockerFor(link)
-          .execText(containerOf(ref), "root", [
-            "sh",
-            "-c",
-            "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
-          ]),
+      const deadlineFile = (yield* refPaths(ref)).deadline;
+      const scope = yield* Effect.scope;
+      const lastHostPush = yield* Ref.make(
+        Option.none<Fiber.RuntimeFiber<void>>(),
       );
-      const match = /^oom_kill (\d+)$/m.exec(read.stdout);
-      return match === null ? 0 : Number(match[1]);
+      // The host side of one Deadline push, from the Keeper: the local
+      // record first, as `extend` does, then the host's own lifetime in a
+      // fiber of the Keeper that no one waits on. A newer push takes the
+      // place of the last one. Gives the seconds from now to `deadline`.
+      const pushHost = (deadline: Date) =>
+        Effect.gen(function* () {
+          const seconds = Math.ceil(
+            (deadline.getTime() - (yield* Clock.currentTimeMillis)) / 1000,
+          );
+          yield* recordDeadline(deadlineFile, deadline);
+          if (seconds > 0) {
+            const pushing = yield* Effect.forkIn(
+              pushHostLife(api, ref, seconds),
+              scope,
+            );
+            const last = yield* Ref.getAndSet(
+              lastHostPush,
+              Option.some(pushing),
+            );
+            if (Option.isSome(last)) {
+              yield* Fiber.interruptFork(last.value);
+            }
+          }
+          return seconds;
+        });
+      const mac = (yield* osOf(ref)) === "macos";
+      // The gone-watch reads over the Keeper's own link: no new link, and
+      // no extend-main, every 2 s.
+      const read = mac ? readMac(link, ref) : getWith(link, ref);
+      const info = yield* read;
+      const script = mac ? MAC_SCRIPT : LINUX_SCRIPT;
+      // A Mac runs the script over the link itself; Linux in its container.
+      const call = mac
+        ? (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+            link.stream(shellJoin(argv), options)
+        : (() => {
+            const docker = deps.dockerFor(link);
+            const container = containerOf(ref);
+            return (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+              docker.execStream(container, argv, options, "root");
+          })();
+      const pushNow = Effect.flatMap(pushedDeadline(info), pushHost);
+      return {
+        info,
+        get: read,
+        extend: (deadline: Date) =>
+          Effect.gen(function* () {
+            const seconds = yield* pushHost(deadline);
+            yield* checkWritten(
+              ref,
+              yield* mac
+                ? writeMacDeadline(link, seconds)
+                : writeLinuxDeadline(link, ref, seconds),
+            );
+          }),
+        // One call over the link per command: the script pushes the
+        // Sandbox's Deadline and counts kills around it (ADR 0015). The
+        // host side of each push stays here.
+        exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const nowMillis = yield* Clock.currentTimeMillis;
+              yield* pushNow;
+              return splitChecks(
+                call(checksArgv(script, info, nowMillis, argv), options),
+                {
+                  gone: () => gone(ref),
+                  pushFailed: (detail) =>
+                    fail(`could not write the Deadline: ${detail}`),
+                },
+              ).pipe(
+                Stream.tap((event) =>
+                  event._tag === "Exit" ? pushNow : Effect.void,
+                ),
+              );
+            }),
+          ),
+      };
     });
 
   const liveView = (ref: SandboxRef) =>
@@ -1074,6 +1149,5 @@ export const makeNamespaceProvider = (deps: {
     secretsDir: (_name, os) =>
       os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
     connect,
-    memoryKills,
   };
 };

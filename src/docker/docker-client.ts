@@ -36,10 +36,12 @@ export interface DockerClient {
     user: string,
     argv: ReadonlyArray<string>,
   ) => Effect.Effect<DockerExecResult, DockerError>;
+  // `user` is `app` unless a caller drops to it itself.
   readonly execStream: (
     container: string,
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
+    user?: "app" | "root",
   ) => Stream.Stream<ExecEvent, DockerError>;
   readonly inspect: (
     container: string,
@@ -253,12 +255,13 @@ export const makeDockerClient = (
     container: string,
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
+    user: "app" | "root" = "app",
   ): Stream.Stream<ExecEvent, DockerError> => {
     const dockerExec = [
       "exec",
       ...(options?.stdin === undefined ? [] : ["-i"]),
       "-u",
-      "app",
+      user,
       "-w",
       "/home/app",
       container,

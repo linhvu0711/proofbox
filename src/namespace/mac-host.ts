@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
+import type { ChecksShell } from "../command-checks.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
@@ -12,7 +13,7 @@ import {
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import { type ExecOptions, SandboxInfo, type SandboxRef } from "../provider.ts";
+import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
@@ -275,25 +276,21 @@ const makeSecretsDisk = (link: Link, ref: SandboxRef) =>
     }
   });
 
-// Kills of real work: macOS also kills idle daemons under pressure, and
-// those are not the command.
-export const countMemoryKills = (text: string): number =>
-  text
-    .split("\n")
-    .filter(
-      (line) =>
-        /memorystatus: killing_\w+ pid \d+/.test(line) &&
-        !line.includes("killing_idle_process"),
-    ).length;
+// The shell that counts kills of real work in the watcher's log: macOS
+// also kills idle daemons under pressure, and those are not the command.
+export const macKillCount = (log: string) =>
+  `grep -E 'memorystatus: killing_[[:alnum:]_]+ pid [0-9]+' ${log} 2>/dev/null | grep -vc killing_idle_process`;
 
-// Starts the watcher again if it stopped, so the command about to run is
-// watched; exec reads the count before and after each command.
-export const readMemoryKills = (link: Link) =>
-  link
-    .run(
-      `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; grep 'memorystatus: killing_' ${MEMORY_KILLS} 2>/dev/null; true`,
-    )
-    .pipe(Effect.map((result) => countMemoryKills(result.stdout)));
+// The checks around a command on a Mac (ADR 0015): the Deadline file
+// `readMac` reads; the kill count, with the watcher started again if it
+// stopped, so the command is watched; and the command in the `runner`
+// desktop session, through a login shell so PATH is the one ssh gives, in
+// the Work folder.
+export const macChecks = (): ChecksShell => ({
+  push: `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${DEADLINE}`,
+  kills: `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; ${macKillCount(MEMORY_KILLS)}`,
+  run: `sudo -n launchctl asuser 501 sudo -n -u runner -H /bin/zsh -lc ${shellJoin([`cd ${MAC_WORK_DIR} && exec "$@"`])} zsh "$@"`,
+});
 
 // The screen as it is now, saved next to the host's other files, so a
 // failed prepare shows what was in the way. No path when the screen could
@@ -430,28 +427,3 @@ export const writeMacDeadline = (link: Link, seconds: number) =>
   link.run(
     `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
   );
-
-// User code and Pixel actions run in the `runner` desktop session, through
-// a login shell so PATH is the one ssh gives, in the Work folder.
-export const macExec =
-  (link: Link) => (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-    link.stream(
-      shellJoin([
-        "sudo",
-        "-n",
-        "launchctl",
-        "asuser",
-        "501",
-        "sudo",
-        "-n",
-        "-u",
-        "runner",
-        "-H",
-        "/bin/zsh",
-        "-lc",
-        `cd ${MAC_WORK_DIR} && exec "$@"`,
-        "zsh",
-        ...argv,
-      ]),
-      options,
-    );

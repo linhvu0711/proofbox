@@ -63,7 +63,11 @@ const blockedMac = (root: string, blocked: string): Provider => {
         features: new Set(["desktop", "recording"]),
       },
     },
-    connect: () => Effect.succeed({ exec: (argv) => answer(argv) }),
+    connect: (sandbox) =>
+      Effect.map(base.connect(sandbox), (connection) => ({
+        ...connection,
+        exec: (argv) => answer(argv),
+      })),
   };
 };
 

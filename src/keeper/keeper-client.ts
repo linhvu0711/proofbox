@@ -2,11 +2,12 @@ import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { promisify } from "node:util";
-import { Effect, Layer, Ref, Schedule, Stream } from "effect";
+import { Effect, Layer, Option, Ref, Schedule, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
+import { withRunningPush } from "../deadline.ts";
 import {
   ProviderError,
-  type ProviderUnavailableError,
+  SandboxGoneError,
   type UploadFailedError,
   type WorkFileGrewError,
 } from "../errors.ts";
@@ -15,12 +16,18 @@ import {
   type ExecOptions,
   type Provider,
   Providers,
+  type SandboxCallError,
   type SandboxRef,
 } from "../provider.ts";
 import { fileStem, formatSandboxId, resolveSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
 import { keeperPaths } from "./paths.ts";
-import { decodeReply, encodeInput, encodeRequest } from "./protocol.ts";
+import {
+  decodeReply,
+  encodeInput,
+  encodeRequest,
+  type ReplyFrame,
+} from "./protocol.ts";
 
 const codeOf = (cause: unknown) =>
   typeof cause === "object" && cause !== null && "code" in cause
@@ -40,8 +47,7 @@ export interface KeeperExecOptions {
 }
 
 export type KeeperExecError =
-  | ProviderError
-  | ProviderUnavailableError
+  | SandboxCallError
   | UploadFailedError
   | WorkFileGrewError;
 
@@ -79,22 +85,22 @@ const execDirect = (
               Stream.tapError((error) => Ref.set(stdinError, error)),
             ),
           };
-    const events: Stream.Stream<ExecEvent, KeeperExecError> = connection
-      .exec(argv, narrowStdin(fed))
-      .pipe(
-        Stream.catchAll((execError) =>
-          Stream.unwrap(
-            Ref.get(stdinError).pipe(
-              Effect.map(
-                (error): Stream.Stream<never, KeeperExecError> =>
-                  error === undefined
-                    ? Stream.fail(execError)
-                    : Stream.fail(error),
-              ),
+    const events: Stream.Stream<ExecEvent, KeeperExecError> = withRunningPush(
+      connection,
+    )(connection.exec(argv, narrowStdin(fed))).pipe(
+      Stream.catchAll((execError) =>
+        Stream.unwrap(
+          Ref.get(stdinError).pipe(
+            Effect.map(
+              (error): Stream.Stream<never, KeeperExecError> =>
+                error === undefined
+                  ? Stream.fail(execError)
+                  : Stream.fail(error),
             ),
           ),
         ),
-      );
+      ),
+    );
     return events;
   });
 
@@ -148,7 +154,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       });
 
       const frames = (socket: Socket, provider: string) =>
-        Stream.asyncPush<ExecEvent, ProviderError>((emit) =>
+        Stream.asyncPush<ExecEvent, ProviderError | SandboxGoneError>((emit) =>
           Effect.acquireRelease(
             Effect.sync(() => {
               let pending = "";
@@ -173,13 +179,33 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                         bytes: new Uint8Array(Buffer.from(frame.err, "base64")),
                       });
                     } else if ("exit" in frame) {
-                      emit.single({ _tag: "Exit", code: frame.exit });
+                      emit.single(
+                        frame.kills === undefined
+                          ? { _tag: "Exit", code: frame.exit }
+                          : {
+                              _tag: "Exit",
+                              code: frame.exit,
+                              kills: {
+                                before: frame.kills[0],
+                                after: frame.kills[1],
+                              },
+                            },
+                      );
                       done = true;
                       emit.end();
+                    } else if ("gone" in frame) {
+                      done = true;
+                      emit.fail(new SandboxGoneError({ id: frame.gone }));
                     } else {
                       done = true;
                       emit.fail(
-                        new ProviderError({ provider, reason: frame.fail }),
+                        new ProviderError({
+                          provider,
+                          reason:
+                            "fail" in frame
+                              ? frame.fail
+                              : "the Keeper sent Sandbox info for a command",
+                        }),
                       );
                     }
                   } catch (cause) {
@@ -323,10 +349,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             Stream.catchAll((frameError) =>
               Stream.unwrap(
                 Ref.get(feederError).pipe(
-                  Effect.map((fed) =>
-                    fed === undefined
-                      ? Stream.fail(frameError)
-                      : Stream.fail(fed),
+                  Effect.map(
+                    (fed): Stream.Stream<never, KeeperExecError> =>
+                      fed === undefined
+                        ? Stream.fail(frameError)
+                        : Stream.fail(fed),
                   ),
                 ),
               ),
@@ -371,7 +398,82 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         );
       });
 
-      return { start, exec, stop };
+      // The one reply to a request that is not a command.
+      const oneReply = (socket: Socket, provider: string) =>
+        Effect.async<ReplyFrame, ProviderError>((resume) => {
+          let pending = "";
+          let done = false;
+          const finish = (result: Effect.Effect<ReplyFrame, ProviderError>) => {
+            if (!done) {
+              done = true;
+              socket.destroy();
+              resume(result);
+            }
+          };
+          const fail = (reason: string) =>
+            finish(Effect.fail(new ProviderError({ provider, reason })));
+          socket.on("data", (chunk) => {
+            pending += chunk.toString("utf8");
+            const newline = pending.indexOf("\n");
+            if (newline === -1) {
+              return;
+            }
+            try {
+              finish(
+                Effect.succeed(
+                  decodeReply(JSON.parse(pending.slice(0, newline))),
+                ),
+              );
+            } catch (cause) {
+              fail(cause instanceof Error ? cause.message : String(cause));
+            }
+          });
+          socket.once("close", () =>
+            fail("Keeper closed the connection before it answered"),
+          );
+          socket.once("error", (error) => fail(error.message));
+        });
+
+      // The Sandbox as the warm Keeper read it at connect, with no remote
+      // call. With no Keeper up, the Provider reads it, as before the
+      // Keeper did the checks; the command after starts the Keeper.
+      const info = Effect.fn("KeeperClient.info")(function* (rawId: string) {
+        const id = yield* resolveSandboxId(rawId, providers);
+        const paths = yield* keeperPaths({
+          provider: id.prefix,
+          name: fileStem(id),
+        });
+        const socket = yield* connectSocket(
+          paths.socket,
+          id.provider.name,
+        ).pipe(Effect.option);
+        if (Option.isNone(socket)) {
+          return yield* id.provider.get(id);
+        }
+        yield* writeLine(
+          socket.value,
+          id.provider.name,
+          encodeRequest({ info: true }),
+        );
+        const reply = yield* oneReply(socket.value, id.provider.name);
+        if ("info" in reply) {
+          return reply.info;
+        }
+        // A Keeper from an older build cannot read the request and would
+        // run commands with no Deadline push: stop it, so the next command
+        // starts a new one.
+        if ("fail" in reply && reply.fail === "bad request") {
+          yield* stop(rawId);
+          return yield* id.provider.get(id);
+        }
+        return yield* new ProviderError({
+          provider: id.provider.name,
+          reason:
+            "fail" in reply ? reply.fail : "the Keeper sent no Sandbox info",
+        });
+      });
+
+      return { start, exec, info, stop };
     }),
   },
 ) {
@@ -382,6 +484,10 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       return new KeeperClient({
         start: () => Effect.void,
         stop: () => Effect.void,
+        info: (rawId: string) =>
+          Effect.flatMap(resolveSandboxId(rawId, providers), (id) =>
+            id.provider.get(id),
+          ),
         exec: (
           rawId: string,
           argv: ReadonlyArray<string>,

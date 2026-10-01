@@ -79,7 +79,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
-| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. |
+| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. |
 | `screenshot <id> --out <file>` | Saves a PNG of the screen. |
 | `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
 | `type <id> <text>` | Types text. |
@@ -96,7 +96,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action.
 
-A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
+A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Safety
 

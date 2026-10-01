@@ -1,4 +1,10 @@
-import { Clock, Duration, Effect, Option, Schema } from "effect";
+import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
+import {
+  type ChecksShell,
+  checksArgv,
+  checksScript,
+  splitChecks,
+} from "../command-checks.ts";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -42,6 +48,18 @@ export interface ProviderBrand {
   readonly provider: string;
   readonly id: (name: string) => string;
 }
+
+// The checks around a command in a Linux container, run as root: the
+// Deadline file `get` reads, the cgroup's OOM-kill count, and the command
+// as `app` in `/home/app`, as `docker exec -u app` ran it.
+export const LINUX_CHECKS: ChecksShell = {
+  push: 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" /run/proofbox/deadline',
+  kills:
+    "{ cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control; } | sed -n 's/^oom_kill //p'",
+  run: 'unset PWD OLDPWD; HOME=/home/app setpriv --reuid=app --regid=app --init-groups "$@"',
+};
+
+export const LINUX_SCRIPT = checksScript(LINUX_CHECKS);
 
 const DOCKER_BRAND: ProviderBrand = {
   provider: "docker",
@@ -137,10 +155,8 @@ export const makeDockerProvider = (options: {
       );
     });
 
-  const extend = (sandbox: SandboxRef, deadline: Date) =>
+  const writeDeadline = (name: string, deadline: Date) =>
     Effect.gen(function* () {
-      const name = sandbox.name;
-      yield* get(sandbox);
       const written = yield* client.execText(containerOf(name), "root", [
         "sh",
         "-c",
@@ -154,6 +170,9 @@ export const makeDockerProvider = (options: {
         );
       }
     });
+
+  const extend = (sandbox: SandboxRef, deadline: Date) =>
+    Effect.zipRight(get(sandbox), writeDeadline(sandbox.name, deadline));
 
   const list = Effect.gen(function* () {
     const names = yield* client.listNames;
@@ -367,24 +386,33 @@ export const makeDockerProvider = (options: {
 
   const connect = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
-      yield* get(sandbox);
+      const info = yield* get(sandbox);
       const container = containerOf(sandbox.name);
       return {
+        info,
+        get: get(sandbox),
+        extend: (deadline: Date) => writeDeadline(sandbox.name, deadline),
+        // One root `docker exec` per command: the script pushes, counts, and
+        // drops to `app` around it (ADR 0015).
         exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-          client.execStream(container, argv, options),
+          Stream.unwrap(
+            Effect.map(Clock.currentTimeMillis, (nowMillis) =>
+              splitChecks(
+                client.execStream(
+                  container,
+                  checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
+                  options,
+                  "root",
+                ),
+                {
+                  gone: () => gone(sandbox.name),
+                  pushFailed: (detail) =>
+                    fail(`could not write the Deadline: ${detail}`),
+                },
+              ),
+            ),
+          ),
       };
-    });
-
-  const memoryKills = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      yield* get(sandbox);
-      const read = yield* client.execText(containerOf(sandbox.name), "root", [
-        "sh",
-        "-c",
-        "cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control",
-      ]);
-      const match = /^oom_kill (\d+)$/m.exec(read.stdout);
-      return match === null ? 0 : Number(match[1]);
     });
 
   return {
@@ -405,6 +433,5 @@ export const makeDockerProvider = (options: {
     stateDir: () => "/var/lib/proofbox",
     secretsDir: () => "/run/proofbox/secrets",
     connect,
-    memoryKills,
   };
 };

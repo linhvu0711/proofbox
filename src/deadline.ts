@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Schedule } from "effect";
+import { Clock, Duration, Effect, Fiber, Schedule, Stream } from "effect";
 import {
   type BadLoginsFileError,
   BadSpanError,
@@ -11,7 +11,14 @@ import {
   type TokenPermissionError,
   type TokenRejectedError,
 } from "./errors.ts";
-import type { Os, Provider, SandboxInfo, SandboxRef } from "./provider.ts";
+import type {
+  Connection,
+  Os,
+  Provider,
+  SandboxCallError,
+  SandboxInfo,
+  SandboxRef,
+} from "./provider.ts";
 
 export const idleDefault = (os: Os): Duration.Duration =>
   os === "macos" ? Duration.minutes(5) : Duration.minutes(15);
@@ -105,6 +112,16 @@ export const nextDeadline = (options: {
   return pushed < options.maxLifeAt ? pushed : options.maxLifeAt;
 };
 
+// The Deadline one push sets now: idle from now, capped at max life.
+export const pushedDeadline = (info: SandboxInfo): Effect.Effect<Date> =>
+  Effect.map(Clock.currentTimeMillis, (millis) =>
+    nextDeadline({
+      now: new Date(millis),
+      idle: Duration.seconds(info.idleSeconds),
+      maxLifeAt: info.maxLifeAt,
+    }),
+  );
+
 // One push of the Sandbox Deadline: idle from `now`, capped at max life.
 export const deadlinePush = (
   provider: Provider,
@@ -122,15 +139,8 @@ export const deadlinePush = (
   | TokenRejectedError
   | TokenPermissionError
 > =>
-  Effect.flatMap(Clock.currentTimeMillis, (millis) =>
-    provider.extend(
-      sandbox,
-      nextDeadline({
-        now: new Date(millis),
-        idle: Duration.seconds(info.idleSeconds),
-        maxLifeAt: info.maxLifeAt,
-      }),
-    ),
+  Effect.flatMap(pushedDeadline(info), (deadline) =>
+    provider.extend(sandbox, deadline),
   );
 
 export const withDeadlinePush =
@@ -171,3 +181,31 @@ export const withDeadlinePush =
       yield* push;
       return result;
     });
+
+// Keeps the Deadline pushed while a command runs, every third of the idle
+// time. The command's own call pushes before and after it, so this only
+// covers a long run; it stops with the command, never on a timer of its
+// own. A failed push ends the run.
+export const withRunningPush =
+  (connection: Connection) =>
+  <A, E, R>(
+    events: Stream.Stream<A, E, R>,
+  ): Stream.Stream<A, E | SandboxCallError, R> => {
+    const every = Duration.millis(
+      Duration.toMillis(Duration.seconds(connection.info.idleSeconds)) / 3,
+    );
+    const push = Effect.flatMap(
+      pushedDeadline(connection.info),
+      connection.extend,
+    );
+    // The command's stream stays on the fiber that reads it: a stdin feed
+    // that drains after the command exits depends on that.
+    return Stream.unwrapScoped(
+      Effect.map(
+        Effect.forkScoped(
+          Effect.forever(Effect.zipRight(Effect.sleep(every), push)),
+        ),
+        (pushing) => Stream.interruptWhen(events, Fiber.join(pushing)),
+      ),
+    );
+  };

@@ -169,6 +169,52 @@ describe("Docker Provider", () => {
     expect(uidPwd.stdout).toBe("1000\n/home/app\n");
   });
 
+  it("exec through the Keeper moves the Deadline file to idle from now", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env, ["--idle", "10m"]);
+    const id = created.stdout.trim();
+    const t0 = Math.floor(Date.now() / 1000);
+    // When
+    const run = await runCli(env, ["exec", id, "--", "true"]);
+    // Then
+    expect(run.exitCode).toBe(0);
+    const deadline = await docker([
+      "exec",
+      containerOf(id),
+      "cat",
+      "/run/proofbox/deadline",
+    ]);
+    const pushed = Number(deadline.trim()) - t0;
+    expect(pushed).toBeGreaterThanOrEqual(600);
+    expect(pushed).toBeLessThanOrEqual(602);
+  });
+
+  it("a removed container is gone in the 2 s before the gone-watch sees it", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await docker(["rm", "-f", containerOf(id)]);
+    // When
+    const run = await runCli(env, ["exec", id, "--", "true"]);
+    // Then
+    expect(run.stderr).toBe(`Sandbox ${id} is gone\n`);
+    expect(run.exitCode).toBe(125);
+  });
+
+  it("a command that is not there exits 127", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const run = await runCli(env, ["exec", id, "--", "nosuchcmd"]);
+    // Then
+    expect(run.exitCode).toBe(127);
+    expect(run.stderr).toBe("sh: 1: exec: nosuchcmd: not found\n");
+  });
+
   it("upload sends the Work folder into a docker Sandbox", async () => {
     // Given: a docker Sandbox and the git folder fixture
     const env = makeEnv({ docker: true });

@@ -20,7 +20,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { nextDeadline } from "../deadline.ts";
+import { nextDeadline, pushedDeadline } from "../deadline.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
@@ -450,56 +450,74 @@ export const makeFakeProvider = (options: {
     Effect.gen(function* () {
       const executor = yield* CommandExecutor.CommandExecutor;
       const home = join(root, sandbox.name, "home");
-      yield* get(sandbox);
-      const connection: Connection = {
-        exec: (argv, options) =>
-          Stream.unwrapScoped(
-            Effect.gen(function* () {
-              const process = yield* Command.start(
-                Command.make("sh", "-c", shellJoin(argv)).pipe(
-                  Command.workingDirectory(home),
-                ),
-              ).pipe(
-                Effect.provideService(
-                  CommandExecutor.CommandExecutor,
-                  executor,
-                ),
+      const info = yield* get(sandbox);
+      // The fake's commands run on the Caller's machine and its Deadline is
+      // a JSON file, so its checks run in-process. It sees no memory kills, so
+      // its Exit carries no counts.
+      const push = Effect.flatMap(pushedDeadline(info), (deadline) =>
+        extend(sandbox, deadline),
+      );
+      const run = (
+        argv: ReadonlyArray<string>,
+        options: Parameters<Connection["exec"]>[1],
+      ) =>
+        Stream.unwrapScoped(
+          Effect.gen(function* () {
+            const process = yield* Command.start(
+              Command.make("sh", "-c", shellJoin(argv)).pipe(
+                Command.workingDirectory(home),
+              ),
+            ).pipe(
+              Effect.provideService(CommandExecutor.CommandExecutor, executor),
+              Effect.mapError((error) => fail(error.message)),
+            );
+            const feed =
+              options?.stdin === undefined
+                ? undefined
+                : Stream.run(options.stdin, process.stdin).pipe(
+                    // A command may exit before its stdin reports "finish"
+                    // (tar -x stops at the end-of-archive marker); when the
+                    // process is gone the feed is done by definition.
+                    Effect.raceFirst(
+                      process.exitCode.pipe(Effect.orElseSucceed(() => {})),
+                    ),
+                    Effect.mapError((error) => fail(error.message)),
+                  );
+            const outputs = Stream.merge(
+              process.stdout.pipe(
+                Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
+              ),
+              process.stderr.pipe(
+                Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
+              ),
+            ).pipe(Stream.mapError((error) => fail(error.message)));
+            const events =
+              feed === undefined
+                ? outputs
+                : Stream.merge(
+                    outputs,
+                    Stream.fromEffect(feed).pipe(Stream.drain),
+                  );
+            const exit = Stream.fromEffect(
+              process.exitCode.pipe(
                 Effect.mapError((error) => fail(error.message)),
-              );
-              const feed =
-                options?.stdin === undefined
-                  ? undefined
-                  : Stream.run(options.stdin, process.stdin).pipe(
-                      // A command may exit before its stdin reports "finish"
-                      // (tar -x stops at the end-of-archive marker); when the
-                      // process is gone the feed is done by definition.
-                      Effect.raceFirst(
-                        process.exitCode.pipe(Effect.orElseSucceed(() => {})),
-                      ),
-                      Effect.mapError((error) => fail(error.message)),
-                    );
-              const outputs = Stream.merge(
-                process.stdout.pipe(
-                  Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
-                ),
-                process.stderr.pipe(
-                  Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
-                ),
-              ).pipe(Stream.mapError((error) => fail(error.message)));
-              const events =
-                feed === undefined
-                  ? outputs
-                  : Stream.merge(
-                      outputs,
-                      Stream.fromEffect(feed).pipe(Stream.drain),
-                    );
-              const exit = Stream.fromEffect(
-                process.exitCode.pipe(
-                  Effect.mapError((error) => fail(error.message)),
-                ),
-              ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
-              return Stream.concat(events, exit);
-            }),
+              ),
+            ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
+            return Stream.concat(events, exit);
+          }),
+        );
+      const connection: Connection = {
+        info,
+        get: get(sandbox),
+        extend: (deadline) => extend(sandbox, deadline),
+        exec: (argv, options) =>
+          Stream.concat(
+            Stream.fromEffect(push).pipe(Stream.drain),
+            run(argv, options).pipe(
+              Stream.tap((event) =>
+                event._tag === "Exit" ? push : Effect.void,
+              ),
+            ),
           ),
       };
       return connection;
@@ -544,6 +562,5 @@ export const makeFakeProvider = (options: {
     // is; its Secrets folder (mode 0700) is on disk, not a tmpfs, until delete.
     secretsDir: (name) => join(root, name, "secrets"),
     connect,
-    memoryKills: () => Effect.succeed(0),
   };
 };

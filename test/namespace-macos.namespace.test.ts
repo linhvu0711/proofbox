@@ -62,6 +62,19 @@ describe("Namespace macOS Provider", () => {
     expect(version.stdout).toMatch(/^26\./);
   });
 
+  it("a warm exec takes under 2 s", async () => {
+    // Given: the Mac from beforeAll, its Keeper holding the link
+    const cold = await runCli(env, ["exec", id, "--", "true"]);
+    // When
+    const start = performance.now();
+    const warm = await runCli(env, ["exec", id, "--", "true"]);
+    const millis = performance.now() - start;
+    // Then
+    expect(cold.exitCode).toBe(0);
+    expect(warm.exitCode).toBe(0);
+    expect(millis).toBeLessThan(2000);
+  });
+
   it("the Tool bundle on the Mac has the pinned hashes", async () => {
     // Given: the Mac from beforeAll
     // When
