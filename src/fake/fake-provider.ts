@@ -27,6 +27,7 @@ import {
   SandboxGoneError,
   TokenRejectedError,
 } from "../errors.ts";
+import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import {
   type Connection,
@@ -79,6 +80,11 @@ export const makeFakeProvider = (options: {
   readonly unreached?: string | undefined;
   // When set, `list` itself fails unreachable — the reason it gives.
   readonly listDown?: string | undefined;
+  // When set, create leaves a Max life file in the runtime dir, as Namespace
+  // does, so auth logout finds the Sandboxes this machine started.
+  readonly marksLocal?: boolean | undefined;
+  // When set, delete of the Sandbox with this name fails unreachable.
+  readonly deleteDown?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -255,6 +261,17 @@ export const makeFakeProvider = (options: {
         snapshot: entry === undefined ? undefined : req.snapshot,
       });
       yield* writeFileInfo(name, file);
+      if (options.marksLocal === true) {
+        const maxLife = (yield* keeperPaths({ provider: "fake", name }))
+          .maxLife;
+        yield* Effect.tryPromise({
+          try: () =>
+            writeFile(maxLife, String(Math.floor(maxLifeAt.getTime() / 1000)), {
+              mode: 0o600,
+            }),
+          catch: (cause) => fail(describe(cause)),
+        });
+      }
       yield* Effect.tryPromise({
         try: async () => {
           await mkdir(join(dir, "home"));
@@ -345,17 +362,35 @@ export const makeFakeProvider = (options: {
   const del = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
       const name = sandbox.name;
+      if (name === options.deleteDown) {
+        return yield* new ProviderUnavailableError({
+          provider: "fake",
+          reason: `fake Sandbox ${name} did not answer`,
+        });
+      }
+      // The Max life file goes with the Sandbox, whether it was still
+      // there or already gone, as Namespace drops its runtime files.
+      const unmark =
+        options.marksLocal === true
+          ? Effect.flatMap(keeperPaths({ provider: "fake", name }), (paths) =>
+              Effect.promise(() =>
+                rm(paths.maxLife, { force: true }).catch(() => {}),
+              ),
+            )
+          : Effect.void;
       const alive = yield* readFileInfo(name).pipe(
         Effect.map(() => true),
         Effect.catchTag("SandboxGoneError", () => Effect.succeed(false)),
       );
       if (!alive) {
+        yield* unmark;
         return "gone" as const;
       }
       yield* Effect.tryPromise({
         try: () => rm(join(root, name), { recursive: true, force: true }),
         catch: (cause) => fail(describe(cause)),
       });
+      yield* unmark;
       return "deleted" as const;
     });
 

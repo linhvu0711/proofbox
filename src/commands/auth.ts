@@ -4,6 +4,7 @@ import { text } from "node:stream/consumers";
 import {
   Clock,
   Config,
+  ConfigProvider,
   Duration,
   Effect,
   Either,
@@ -27,7 +28,8 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { KeeperClient } from "../keeper/keeper-client.ts";
+import { keeperPaths, localSandboxes } from "../keeper/paths.ts";
 import {
   changeLogins,
   readLogins,
@@ -308,8 +310,10 @@ export const showAuthStatus = Effect.gen(function* () {
   }
 });
 
-// Logout lists the still-running Sandboxes as the result, removes the
-// saved slot whatever `list` gives, and says what it did on stderr.
+// Logout deletes the Sandboxes this machine started, since their
+// host-expiry needs the login it is about to remove (ADR 0016), then
+// removes the saved slot and says what it did on stderr. The deleted ids
+// are the result on stdout.
 export const logoutOfProvider = (name: string) =>
   Effect.gen(function* () {
     const { provider } = yield* loginPartFor(name);
@@ -319,7 +323,51 @@ export const logoutOfProvider = (name: string) =>
       yield* output.err(`No saved login for ${provider.name}.\n`);
       return;
     }
-    const listed = yield* Effect.either(provider.list);
+    // Logout acts with the saved login it removes, never the env token: a
+    // token for another account would not see this machine's Sandboxes,
+    // and delete would take them for gone.
+    const hidden = envTokenName(provider.name);
+    const withSavedLogin = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.configProviderWith((current) =>
+        Effect.withConfigProvider(
+          effect,
+          ConfigProvider.mapInputPath(current, (path) =>
+            path === hidden ? `${hidden}_HIDDEN_BY_LOGOUT` : path,
+          ),
+        ),
+      );
+    const listed = yield* Effect.either(withSavedLogin(provider.list));
+    const keeper = yield* KeeperClient;
+    const idOf = (ref: {
+      readonly name: string;
+      readonly region?: string | undefined;
+    }) =>
+      formatSandboxId({
+        provider: provider.idPrefix,
+        region: ref.region,
+        name: ref.name,
+      });
+    // A runtime dir it cannot read must not keep the login: the failure is
+    // named and the login still goes.
+    const scanned = yield* Effect.either(localSandboxes(provider.idPrefix));
+    const local = Either.isRight(scanned) ? scanned.right : [];
+    const localIds = new Set(local.map(idOf));
+    const deleted: Array<string> = [];
+    const failed: Array<string> = Either.isLeft(scanned)
+      ? [`Could not check this machine's Sandboxes: ${scanned.left.reason}`]
+      : [];
+    for (const ref of local) {
+      const id = idOf(ref);
+      // "gone" counts too: the host is already down, and delete dropped
+      // its files.
+      const result = yield* Effect.either(withSavedLogin(provider.delete(ref)));
+      yield* keeper.stop(id);
+      if (Either.isRight(result)) {
+        deleted.push(id);
+      } else {
+        failed.push(`Could not delete ${id}: ${result.left.message}`);
+      }
+    }
     const before = yield* changeLogins((saved) => {
       const rest = { ...saved };
       delete rest[provider.name];
@@ -333,43 +381,67 @@ export const logoutOfProvider = (name: string) =>
       // Older versions kept a bearer-token file per token, and the session
       // trade keeps a tenant-token file per session, in the runtime dir;
       // those die with the login.
-      const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" }))
-        .dir;
-      yield* Effect.tryPromise({
-        try: async () => {
-          for (const file of await readdir(dir)) {
-            if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
-              await rm(join(dir, file), { force: true });
-            }
-          }
-        },
-        catch: (cause) =>
-          new ProviderError({
-            provider: "namespace",
-            reason: String(cause),
-          }),
-      });
-    }
-    if (Either.isLeft(listed)) {
-      yield* output.err(
-        `Logged out of ${provider.name}. Could not check for running Sandboxes. Any left stop at their Deadline.\n`,
+      // A failure here is named like the others; the login is gone already.
+      const cleared = yield* Effect.either(
+        Effect.gen(function* () {
+          const dir = (yield* keeperPaths({
+            provider: "ns",
+            name: "__probe__",
+          })).dir;
+          yield* Effect.tryPromise({
+            try: async () => {
+              for (const file of await readdir(dir)) {
+                if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
+                  await rm(join(dir, file), { force: true });
+                }
+              }
+            },
+            catch: (cause) =>
+              new ProviderError({
+                provider: "namespace",
+                reason: String(cause),
+              }),
+          });
+        }),
       );
-      return;
+      if (Either.isLeft(cleared)) {
+        failed.push(
+          `Could not remove the cached Namespace tokens: ${cleared.left.reason}`,
+        );
+      }
     }
-    const infos = listed.right.infos;
     const note =
-      infos.length === 0
+      deleted.length === 0
         ? ""
-        : infos.length === 1
-          ? " 1 Sandbox still runs. It stops at its Deadline."
-          : ` ${infos.length} Sandboxes still run. They stop at their Deadline.`;
+        : deleted.length === 1
+          ? " Deleted 1 Sandbox."
+          : ` Deleted ${deleted.length} Sandboxes.`;
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
-    for (const miss of listed.right.unreached) {
-      yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
+    // A Sandbox from another machine stops by that machine's login; it
+    // stays.
+    // Without a scan there is no telling local from elsewhere: say neither.
+    if (Either.isRight(listed) && Either.isRight(scanned)) {
+      for (const id of listed.right.infos.map(idOf)) {
+        if (!localIds.has(id)) {
+          yield* output.err(`${id} still runs, started elsewhere.\n`);
+        }
+      }
     }
-    for (const info of infos) {
-      yield* output.out(
-        `${formatSandboxId({ provider: provider.idPrefix, region: info.region, name: info.name })}\n`,
-      );
+    // Failures last, and each one fails the command: a Sandbox this
+    // machine started may still run.
+    const unchecked = Either.isRight(listed)
+      ? listed.right.unreached
+      : [{ where: provider.name, reason: listed.left.message }];
+    for (const miss of unchecked) {
+      failed.push(`Could not check ${miss.where}: ${miss.reason}`);
+    }
+    for (const line of failed) {
+      yield* output.err(`${line}\n`);
+    }
+    if (failed.length > 0) {
+      yield* output.setExitCode(125);
+    }
+    for (const id of deleted) {
+      yield* output.out(`${id}\n`);
     }
   });

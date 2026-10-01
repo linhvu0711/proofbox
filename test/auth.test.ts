@@ -32,6 +32,7 @@ import {
   makeRobotToken,
 } from "../src/commands/auth.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { changeLogins } from "../src/login/logins-file.ts";
 import {
   type ProviderEntry,
@@ -80,6 +81,36 @@ const readSaved = (home: string) =>
   JSON.parse(readFileSync(loginsFile(home), "utf8")) as unknown;
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A fake Sandbox id is `fake:<name>`; its files are named by the name.
+const nameOf = (id: string) => id.slice("fake:".length);
+
+// A fake login in its own HOME, then `count` Sandboxes made through the CLI
+// on this machine. `extra` env goes on every run.
+const fakeLoginWith = async (
+  count: number,
+  extra: Readonly<Record<string, string>> = {},
+) => {
+  const env = makeEnv();
+  const home = makeHome();
+  const set = { HOME: home, ...extra };
+  const unset = ["PROOFBOX_FAKE_TOKEN"];
+  await runCli(env, ["auth", "login", "fake", "--token"], {
+    input: "t0k\n",
+    set,
+    unset,
+  });
+  const ids: Array<string> = [];
+  for (let i = 0; i < count; i++) {
+    const made = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    ids.push(made.stdout.trim());
+  }
+  return { env, home, set, unset, ids };
+};
 
 const ADA =
   '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}';
@@ -820,27 +851,69 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("auth logout removes the login and names the Sandboxes that still run", async () => {
+  it("auth logout deletes the Sandboxes this machine started", async () => {
     // Given
-    const env = makeEnv();
-    const home = makeHome();
-    const set = { HOME: home };
-    const unset = ["PROOFBOX_FAKE_TOKEN"];
-    await runCli(env, ["auth", "login", "fake", "--token"], {
-      input: "t0k\n",
+    const { env, home, set, unset, ids } = await fakeLoginWith(2);
+    const [name1 = "", name2 = ""] = ids.map(nameOf);
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
       unset,
     });
-    const first = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
-    const second = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 2 Sandboxes.\n");
+    expect(new Set(result.stdout.trim().split("\n"))).toEqual(new Set(ids));
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({});
+    expect(existsSync(join(env.root, name1))).toBe(false);
+    expect(existsSync(join(env.root, name2))).toBe(false);
+    expect(existsSync(join(env.runtime, `fake-${name1}.max-life`))).toBe(false);
+    expect(existsSync(join(env.runtime, `fake-${name2}.max-life`))).toBe(false);
+  });
+
+  it("auth logout names one deleted Sandbox in the singular", async () => {
+    // Given
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout counts a Sandbox whose host is already gone as deleted", async () => {
+    // Given: the host is gone, its Max life file stays
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    const name = nameOf(ids[0] ?? "");
+    rmSync(join(env.root, name), { recursive: true, force: true });
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(env.runtime, `fake-${name}.max-life`))).toBe(false);
+  });
+
+  it("auth logout leaves a Sandbox started elsewhere and names it", async () => {
+    // Given: one Sandbox from this machine, one from another machine (its
+    // own runtime dir) on the same fake account
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    const other = mkdtempSync(join("/tmp", "proofbox-runtime-"));
+    trackTempDir(other);
+    const theirs = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"], {
+        set: { ...set, PROOFBOX_RUNTIME_DIR: other },
+        unset,
+      })
+    ).stdout.trim();
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
@@ -848,69 +921,40 @@ describe("auth", () => {
     });
     // Then
     expect(result.stderr).toBe(
-      "Logged out of fake. 2 Sandboxes still run. They stop at their Deadline.\n",
+      `Logged out of fake. Deleted 1 Sandbox.\n${theirs} still runs, started elsewhere.\n`,
     );
-    expect(new Set(result.stdout.trim().split("\n"))).toEqual(
-      new Set([first.stdout.trim(), second.stdout.trim()]),
-    );
+    expect(result.stdout).toBe(`${ids[0]}\n`);
     expect(result.exitCode).toBe(0);
-    expect(
-      JSON.parse(
-        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
-      ),
-    ).toEqual({});
+    expect(existsSync(join(env.root, nameOf(theirs)))).toBe(true);
   });
 
-  it("auth logout names one Sandbox in the singular", async () => {
+  it("auth logout deletes the rest when one delete fails", async () => {
     // Given
-    const env = makeEnv();
-    const home = makeHome();
-    const set = { HOME: home };
-    const unset = ["PROOFBOX_FAKE_TOKEN"];
-    await runCli(env, ["auth", "login", "fake", "--token"], {
-      input: "t0k\n",
-      set,
-      unset,
-    });
-    const sandbox = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
+    const { env, home, set, unset, ids } = await fakeLoginWith(2);
+    const [first = "", second = ""] = ids;
+    const name1 = nameOf(first);
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
-      set,
+      set: { ...set, PROOFBOX_FAKE_DELETE_DOWN: name1 },
       unset,
     });
     // Then
     expect(result.stderr).toBe(
-      "Logged out of fake. 1 Sandbox still runs. It stops at its Deadline.\n",
+      "Logged out of fake. Deleted 1 Sandbox.\n" +
+        `Could not delete ${first}: fake Sandbox ${name1} did not answer\n`,
     );
-    expect(result.stdout).toBe(sandbox.stdout);
-    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(`${second}\n`);
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+    expect(existsSync(join(env.root, name1))).toBe(true);
+    expect(existsSync(join(env.runtime, `fake-${name1}.pid`))).toBe(false);
   });
 
-  it("auth logout names the Sandboxes of every region and the region it could not check", async () => {
+  it("auth logout names the region it could not check and still deletes", async () => {
     // Given: a fake login, two Sandboxes, and a fake region that does not answer
-    const env = makeEnv();
-    const home = makeHome();
-    const set = { HOME: home, PROOFBOX_FAKE_UNREACHED: "eu" };
-    const unset = ["PROOFBOX_FAKE_TOKEN"];
-    await runCli(env, ["auth", "login", "fake", "--token"], {
-      input: "t0k\n",
-      set,
-      unset,
+    const { env, set, unset, ids } = await fakeLoginWith(2, {
+      PROOFBOX_FAKE_UNREACHED: "eu",
     });
-    const first = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
-    const second = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake"],
-      { set, unset },
-    );
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
@@ -918,13 +962,11 @@ describe("auth", () => {
     });
     // Then
     expect(result.stderr).toBe(
-      "Logged out of fake. 2 Sandboxes still run. They stop at their Deadline.\n" +
+      "Logged out of fake. Deleted 2 Sandboxes.\n" +
         "Could not check fake region eu: fake region eu did not answer\n",
     );
-    expect(new Set(result.stdout.trim().split("\n"))).toEqual(
-      new Set([first.stdout.trim(), second.stdout.trim()]),
-    );
-    expect(result.exitCode).toBe(0);
+    expect(new Set(result.stdout.trim().split("\n"))).toEqual(new Set(ids));
+    expect(result.exitCode).toBe(125);
   });
 
   it("auth logout namespace removes the nsc token files", async () => {
@@ -948,6 +990,70 @@ describe("auth", () => {
     expect(existsSync(tokenFile)).toBe(false);
   });
 
+  it("auth logout namespace destroys a host this machine started and drops its Max life file", async () => {
+    // Given: a saved namespace login, a host this machine made (its Max
+    // life file in the runtime dir), and a Namespace that lists it
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const maxLife = join(env.runtime, "ns-us:abc123def4567.max-life");
+    writeFileSync(maxLife, "4102444800");
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: { HOME: home, PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe("ns:us:abc123def4567\n");
+    expect(
+      ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.region),
+    ).toEqual(["us"]);
+    expect(existsSync(maxLife)).toBe(false);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout deletes with the saved login even when an env token is set", async () => {
+    // Given: a host made with the saved login, and an env token for
+    // another account, which does not see that host
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const maxLife = join(env.runtime, "ns-us:abc123def4567.max-life");
+    writeFileSync(maxLife, "4102444800");
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances" &&
+      call.authorization === `Bearer ${TOKEN}`
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        PROOFBOX_NAMESPACE_TOKEN: "nsct_other-account",
+      },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(
+      ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.authorization),
+    ).toEqual([`Bearer ${TOKEN}`]);
+    expect(result.stdout).toBe("ns:us:abc123def4567\n");
+    expect(readSaved(home)).toEqual({});
+  });
+
   it("auth logout with no Sandboxes only logs out", async () => {
     // Given
     const env = makeEnv();
@@ -965,30 +1071,68 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("auth logout still removes the login when it cannot list Sandboxes", async () => {
+  it("auth logout still deletes and removes the login when it cannot list Sandboxes", async () => {
     // Given
-    const env = makeEnv();
-    const home = makeHome(
-      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2999-01-01T00:00:00.000Z"}}',
+    const { env, home, set, unset, ids } = await fakeLoginWith(1);
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { ...set, PROOFBOX_FAKE_LIST_DOWN: "fake API is down" },
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. Deleted 1 Sandbox.\nCould not check fake: fake API is down\n",
     );
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout still removes the login when it cannot read the runtime dir", async () => {
+    // Given: a Sandbox this machine started, then the runtime dir becomes
+    // a regular file, so logout cannot tell which Sandboxes are local
+    const { env, home, set, unset } = await fakeLoginWith(1);
     const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
     trackTempDir(dirname(file));
     writeFileSync(file, "x");
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
-      set: { HOME: home, PROOFBOX_FAKE_ROOT: file },
+      set: { ...set, PROOFBOX_RUNTIME_DIR: file },
+      unset,
+    });
+    // Then: no Sandbox is called started elsewhere
+    expect(result.stderr).toMatch(
+      /^Logged out of fake\.\nCould not check this machine's Sandboxes: .+\n$/,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout namespace still reports when it cannot read the runtime dir", async () => {
+    // Given: a saved namespace login and a runtime dir that is a regular file
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
+    trackTempDir(dirname(file));
+    writeFileSync(file, "x");
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        PROOFBOX_RUNTIME_DIR: file,
+      },
       unset: ["PROOFBOX_FAKE_TOKEN"],
     });
     // Then
-    expect(result.stderr).toBe(
-      "Logged out of fake. Could not check for running Sandboxes. Any left stop at their Deadline.\n",
+    expect(result.stderr).toMatch(
+      /^Logged out of namespace\.\n(?:.+\n)*Could not check this machine's Sandboxes: .+\n(?:.+\n)*Could not remove the cached Namespace tokens: .+\n/,
     );
-    expect(result.exitCode).toBe(0);
-    expect(
-      JSON.parse(
-        readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
-      ),
-    ).toEqual({});
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
   });
 
   it("auth logout with no saved login says so", async () => {
@@ -1166,6 +1310,8 @@ describe("auth", () => {
         // Given
         const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
         trackTempDir(root);
+        const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+        trackTempDir(runtime);
         const home = makeHome(ADA);
         const listing = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -1214,9 +1360,20 @@ describe("auth", () => {
             },
           });
         }).pipe(
-          Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+          Effect.provide(
+            Layer.mergeAll(
+              CliOutput.Test,
+              providers,
+              KeeperClient.Direct.pipe(Layer.provide(providers)),
+            ),
+          ),
           Effect.withConfigProvider(
-            ConfigProvider.fromMap(new Map([["HOME", home]])),
+            ConfigProvider.fromMap(
+              new Map([
+                ["HOME", home],
+                ["PROOFBOX_RUNTIME_DIR", runtime],
+              ]),
+            ),
           ),
         );
       }),
