@@ -7,7 +7,11 @@ import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { openEventsPage, readEvents } from "./support/events.ts";
+import {
+  openEventsPage,
+  readEvents,
+  readHeldModifiers,
+} from "./support/events.ts";
 import { destroyHost, liveInstances } from "./support/namespace-live.ts";
 
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
@@ -305,6 +309,33 @@ describe("Namespace macOS Provider", () => {
         (event) => event.type === "input",
       );
       expect(inputs.at(-1)).toEqual({ type: "input", value: "hello mac" });
+    });
+
+    it("type after a cmd combo enters the text", async () => {
+      // Given: the input focused
+      await runCli(env, ["click", id, "640", "400", "--pace", "fast"]);
+      // When
+      await runCli(env, ["key", id, "cmd+a"]);
+      const result = await runCli(env, ["type", id, "after"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const inputs = (await readEvents(env, id)).filter(
+        (event) => event.type === "input",
+      );
+      expect(inputs.at(-1)).toEqual({ type: "input", value: "after" });
+    });
+
+    it("key leaves no modifier held", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, [
+        "key",
+        id,
+        "cmd+a ctrl+a shift+End alt+Left",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readHeldModifiers(env, id)).toBe("none");
     });
 
     it("key sends a combo and a named key", async () => {

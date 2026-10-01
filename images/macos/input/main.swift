@@ -91,6 +91,15 @@ let modifiers: [String: CGEventFlags] = [
   "super": .maskCommand, "cmd": .maskCommand, "meta": .maskCommand,
 ]
 
+// The key each modifier is, pressed around the combo so the system does
+// not think it stays held after.
+let modifierKeys: [String: Int] = [
+  "ctrl": kVK_Control, "control": kVK_Control,
+  "shift": kVK_Shift,
+  "alt": kVK_Option, "option": kVK_Option,
+  "super": kVK_Command, "cmd": kVK_Command, "meta": kVK_Command,
+]
+
 let named: [String: Int] = [
   "Return": kVK_Return, "Tab": kVK_Tab, "space": kVK_Space,
   "BackSpace": kVK_Delete, "Escape": kVK_Escape, "Delete": kVK_ForwardDelete,
@@ -112,21 +121,35 @@ let named: [String: Int] = [
   "bracketleft": kVK_ANSI_LeftBracket, "bracketright": kVK_ANSI_RightBracket,
 ]
 
-// Each space-separated combo is "mod+mod+key", as xdotool takes it.
+func press(_ code: Int, down: Bool, flags: CGEventFlags) {
+  let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(code), keyDown: down)
+  event?.flags = flags
+  post(event)
+}
+
+// Each space-separated combo is "mod+mod+key", as xdotool takes it. The
+// modifier keys go down first and up last, so no modifier stays held for
+// the next command.
 func key(_ keys: String) {
   for combo in keys.split(separator: " ") {
     let parts = combo.split(separator: "+").map(String.init)
     guard let last = parts.last else { continue }
-    var flags: CGEventFlags = []
+    var held: [(code: Int, flag: CGEventFlags)] = []
     for name in parts.dropLast() {
-      guard let flag = modifiers[name] else { die("unknown modifier \(name)") }
-      flags.insert(flag)
+      guard let flag = modifiers[name], let code = modifierKeys[name] else { die("unknown modifier \(name)") }
+      held.append((code, flag))
     }
     guard let code = named[last] else { die("unknown key \(last)") }
-    for down in [true, false] {
-      let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(code), keyDown: down)
-      event?.flags = flags
-      post(event)
+    var flags: CGEventFlags = []
+    for modifier in held {
+      flags.insert(modifier.flag)
+      press(modifier.code, down: true, flags: flags)
+    }
+    press(code, down: true, flags: flags)
+    press(code, down: false, flags: flags)
+    for modifier in held.reversed() {
+      flags.remove(modifier.flag)
+      press(modifier.code, down: false, flags: flags)
     }
     pause(30)
   }
