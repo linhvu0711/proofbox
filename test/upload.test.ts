@@ -18,7 +18,11 @@ import { readWorkFolder, sendWorkFolder } from "../src/commands/upload.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type ProviderEntry,
+  Providers,
+  providerEntry,
+} from "../src/provider.ts";
 import {
   type CliEnv,
   cleanupEnvs,
@@ -51,8 +55,11 @@ const grewMessage =
 const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
   const providers = Layer.succeed(
     Providers,
-    new Map<string, Provider>([
-      ["fake", makeFakeProvider({ root: env.root, watch: "none" })],
+    new Map<string, ProviderEntry>([
+      [
+        "fake",
+        providerEntry(makeFakeProvider({ root: env.root, watch: "none" })),
+      ],
     ]),
   );
   const base = Layer.mergeAll(

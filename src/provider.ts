@@ -2,7 +2,7 @@ import type { CommandExecutor } from "@effect/platform";
 import {
   Context,
   type Duration,
-  type Effect,
+  Effect,
   type Option,
   type Redacted,
   Schema,
@@ -347,9 +347,24 @@ export interface ListResult {
   }>;
 }
 
+// A Provider the registry knows by name and id prefix. Its code loads the
+// first time a command asks for it.
+export interface ProviderEntry {
+  readonly name: string;
+  readonly idPrefix: string;
+  readonly load: Effect.Effect<Provider, ProviderError>;
+}
+
+// The entry for a Provider that is already built.
+export const providerEntry = (provider: Provider): ProviderEntry => ({
+  name: provider.name,
+  idPrefix: provider.idPrefix,
+  load: Effect.succeed(provider),
+});
+
 export class Providers extends Context.Tag("proofbox/Providers")<
   Providers,
-  ReadonlyMap<string, Provider>
+  ReadonlyMap<string, ProviderEntry>
 >() {}
 
 // The OS is named only for a Provider with more than one OS, where the

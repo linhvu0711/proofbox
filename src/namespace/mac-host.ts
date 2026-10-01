@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
+import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
   ProviderError,
@@ -20,9 +20,7 @@ import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { Link } from "./ssh-link.ts";
 
 // proofbox's own Mac files: the input helper and the Pixel script.
-export const MACOS_DIR = fileURLToPath(
-  new URL("../../images/macos/", import.meta.url),
-);
+export const MACOS_DIR = packagePath("images/macos/");
 
 // A Namespace Mac has no container: the Sandbox is the Mac itself, and
 // every login lands as `runner` (uid 501) with passwordless sudo. The

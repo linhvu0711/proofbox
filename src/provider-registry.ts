@@ -1,42 +1,68 @@
 import { CommandExecutor } from "@effect/platform";
 import { Config, Effect, Layer, Option } from "effect";
-import { makeDockerClient } from "./docker/docker-client.ts";
-import { makeDockerProvider } from "./docker/docker-provider.ts";
 import { ProviderError } from "./errors.ts";
 import { loginFor } from "./login/provider-login.ts";
-import { makeNamespaceApi } from "./namespace/namespace-api.ts";
-import { namespaceLogin } from "./namespace/namespace-login.ts";
-import { makeNamespaceProvider } from "./namespace/namespace-provider.ts";
-import { makeOpenLink, makeSshForward } from "./namespace/ssh-link.ts";
-import { type Provider, Providers } from "./provider.ts";
+import { type ProviderEntry, Providers } from "./provider.ts";
 import { spawnDetached } from "./spawn-detached.ts";
+
+// Each Provider's code, and the libraries it needs, loads only when a
+// command first asks for that Provider.
+const importFor = <A>(provider: string, load: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: load,
+    catch: (cause) => new ProviderError({ provider, reason: String(cause) }),
+  });
 
 export const ProvidersLive = Layer.effect(
   Providers,
   Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
-    const namespaceApi = makeNamespaceApi({ login: namespaceLogin });
-    const providers = new Map<string, Provider>([
-      ["docker", makeDockerProvider({ client: makeDockerClient(executor) })],
-      [
-        "namespace",
-        makeNamespaceProvider({
-          api: namespaceApi,
-          login: namespaceLogin,
-          openLink: makeOpenLink(namespaceApi, executor),
-          forward: makeSshForward(namespaceApi, executor),
-          dockerFor: (link) => makeDockerClient(executor, { ssh: link.ssh }),
-          spawnDetached,
+    const docker = yield* Effect.cached(
+      importFor("docker", () =>
+        Promise.all([
+          import("./docker/docker-client.ts"),
+          import("./docker/docker-provider.ts"),
+        ]),
+      ).pipe(
+        Effect.map(([client, provider]) =>
+          provider.makeDockerProvider({
+            client: client.makeDockerClient(executor),
+          }),
+        ),
+      ),
+    );
+    const namespace = yield* Effect.cached(
+      importFor("namespace", () =>
+        Promise.all([
+          import("./docker/docker-client.ts"),
+          import("./namespace/namespace-api.ts"),
+          import("./namespace/namespace-login.ts"),
+          import("./namespace/namespace-provider.ts"),
+          import("./namespace/ssh-link.ts"),
+        ]),
+      ).pipe(
+        Effect.map(([client, api, login, provider, link]) => {
+          const namespaceApi = api.makeNamespaceApi({
+            login: login.namespaceLogin,
+          });
+          return provider.makeNamespaceProvider({
+            api: namespaceApi,
+            login: login.namespaceLogin,
+            openLink: link.makeOpenLink(namespaceApi, executor),
+            forward: link.makeSshForward(namespaceApi, executor),
+            dockerFor: (sandbox) =>
+              client.makeDockerClient(executor, { ssh: sandbox.ssh }),
+            spawnDetached,
+          });
         }),
-      ],
+      ),
+    );
+    const providers = new Map<string, ProviderEntry>([
+      ["docker", { name: "docker", idPrefix: "docker", load: docker }],
+      ["namespace", { name: "namespace", idPrefix: "ns", load: namespace }],
     ]);
     const fakeRoot = yield* Config.option(Config.string("PROOFBOX_FAKE_ROOT"));
     if (Option.isSome(fakeRoot)) {
-      const fake = yield* Effect.tryPromise({
-        try: () => import("./fake/fake-provider.ts"),
-        catch: (cause) =>
-          new ProviderError({ provider: "fake", reason: String(cause) }),
-      });
       const snapshotsRoot = yield* Config.option(
         Config.string("PROOFBOX_FAKE_SNAPSHOTS"),
       );
@@ -49,22 +75,26 @@ export const ProvidersLive = Layer.effect(
       const listDown = yield* Config.option(
         Config.string("PROOFBOX_FAKE_LIST_DOWN"),
       );
-      providers.set(
-        "fake",
-        fake.makeFakeProvider({
-          root: fakeRoot.value,
-          watch: "process",
-          login: loginFor("fake"),
-          unreached: Option.getOrUndefined(unreached),
-          listDown: Option.getOrUndefined(listDown),
-          snapshots: Option.isSome(snapshotsRoot)
-            ? {
-                root: snapshotsRoot.value,
-                fail: Option.getOrUndefined(snapshotFail),
-              }
-            : undefined,
-        }),
+      const fake = yield* Effect.cached(
+        importFor("fake", () => import("./fake/fake-provider.ts")).pipe(
+          Effect.map((module) =>
+            module.makeFakeProvider({
+              root: fakeRoot.value,
+              watch: "process",
+              login: loginFor("fake"),
+              unreached: Option.getOrUndefined(unreached),
+              listDown: Option.getOrUndefined(listDown),
+              snapshots: Option.isSome(snapshotsRoot)
+                ? {
+                    root: snapshotsRoot.value,
+                    fail: Option.getOrUndefined(snapshotFail),
+                  }
+                : undefined,
+            }),
+          ),
+        ),
       );
+      providers.set("fake", { name: "fake", idPrefix: "fake", load: fake });
     }
     return providers;
   }),

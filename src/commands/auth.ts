@@ -42,13 +42,14 @@ import { formatSandboxId } from "../sandbox-id.ts";
 const loginPartFor = (name: string) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
-    const provider = providers.get(name);
-    if (provider === undefined) {
+    const entry = providers.get(name);
+    if (entry === undefined) {
       return yield* new NoSuchProviderError({
         provider: name,
         known: [...providers.keys()],
       });
     }
+    const provider = yield* entry.load;
     const part = provider.login;
     if (part._tag === "None") {
       return yield* new NoLoginNeededError({ provider: provider.name });
@@ -250,7 +251,8 @@ export const showAuthStatus = Effect.gen(function* () {
   const logins = yield* Effect.cached(readLogins);
   const output = yield* CliOutput;
   const now = yield* Clock.currentTimeMillis;
-  for (const provider of providers.values()) {
+  for (const entry of providers.values()) {
+    const provider = yield* entry.load;
     const part = provider.login;
     let line: string;
     if (part._tag === "None") {

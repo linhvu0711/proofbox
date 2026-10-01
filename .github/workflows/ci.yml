@@ -26,6 +26,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: node dist/main.js --help
 
   docker:
     runs-on: ubuntu-24.04

@@ -14,7 +14,8 @@ One rule per line. A rule a tool checks names the tool in brackets. Effect examp
 
 - A command goes in `src/commands/<command>.ts`.
 - A subsystem with more than one file gets its own folder, like `src/keeper/` and `src/fake/`.
-- The entry file of a process that proofbox spawns is `<name>-main.ts`.
+- The entry file of a process that proofbox spawns is `<name>-main.ts`. `pnpm build` bundles each one as its own entry, `dist/<path>-main.js`.
+- A Provider's code loads only when a command asks for it: `src/provider-registry.ts` imports it inside the entry's `load`, never at the top.
 - All expected-failure classes are in `src/errors.ts`.
 - Relative imports end in `.ts`.
   Node runs `src/` directly with type stripping, so a `.js` path fails at run time. The CLI tests catch it.
