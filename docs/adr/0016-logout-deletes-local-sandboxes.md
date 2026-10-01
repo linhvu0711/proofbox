@@ -4,7 +4,7 @@ On Namespace, the host's own Deadline drifts: every ssh session through the gate
 
 "Started on this machine" means the Sandbox has local files under the Keeper dir. `list` returns every proofbox Sandbox in the Provider account, CI's included, but a Sandbox started elsewhere has its expire process on that machine, with that machine's login. Logout leaves those alone and names them as still running, started elsewhere.
 
-The login always goes, even when a region cannot be checked or a delete fails, so the Caller can always remove their credentials: offline, on a lost laptop, or with an expired login. In that case logout stops the local Keepers, so no ssh session keeps a host alive, names each failure, and exits 1. A missed host then stops at its own Deadline a few minutes later.
+The login always goes, even when a region cannot be checked or a delete fails, so the Caller can always remove their credentials: offline, on a lost laptop, or with an expired login. In that case logout stops the local Keepers, so no ssh session keeps a host alive, names each failure, and exits 125, like any proofbox failure. A missed host then stops at its own Deadline a few minutes later.
 
 ## Considered options
 
