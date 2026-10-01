@@ -17,6 +17,7 @@ import {
   Effect,
   Ref,
   TestClock,
+  TestServices,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
@@ -401,6 +402,41 @@ describe("Keeper", () => {
         });
       }),
   );
+
+  it.scoped("the pid file names the Keeper once its socket exists", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a Sandbox and its Keeper starting in this process
+      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const info = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const socket = join(env.runtime, `fake-${info.name}.sock`);
+      yield* Effect.forkScoped(
+        runKeeper(`fake:${info.name}`).pipe(
+          Effect.provideService(
+            Providers,
+            new Map([["fake", providerEntry(fake)]]),
+          ),
+          Effect.provide(NodeContext.layer),
+        ),
+      );
+      // When: the socket shows up, the pid file is read at once
+      let pid: number | undefined;
+      for (let i = 0; i < 5000 && pid === undefined; i++) {
+        pid = yield* Effect.sync(() =>
+          existsSync(socket) ? keeperPid(env, info.name) : undefined,
+        );
+        yield* TestServices.provideLive(Effect.sleep("1 millis"));
+      }
+      // Then
+      expect(alive(pid ?? Number.NaN)).toBe(true);
+    }).pipe(runtimeConfig(env));
+  });
 
   it.scoped(
     "a command through a warm Keeper asks the Provider nothing from the CLI",

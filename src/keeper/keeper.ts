@@ -249,6 +249,23 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         });
       };
       yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => writeFile(paths.pid, `${process.pid}\n`),
+          catch: (cause) =>
+            new ProviderError({
+              provider: id.provider.name,
+              reason: cause instanceof Error ? cause.message : String(cause),
+            }),
+        }),
+        () =>
+          Effect.promise(() =>
+            Promise.all([
+              rm(paths.socket, { force: true }).catch(() => {}),
+              rm(paths.pid, { force: true }).catch(() => {}),
+            ]).then(() => {}),
+          ),
+      );
+      yield* Effect.acquireRelease(
         Effect.async<Server, ProviderError>((resume) => {
           const server = createServer(handleClient);
           server.once("error", (error) =>
@@ -266,23 +283,6 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         (server) =>
           Effect.promise(
             () => new Promise<void>((done) => server.close(() => done())),
-          ),
-      );
-      yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () => writeFile(paths.pid, `${process.pid}\n`),
-          catch: (cause) =>
-            new ProviderError({
-              provider: id.provider.name,
-              reason: cause instanceof Error ? cause.message : String(cause),
-            }),
-        }),
-        () =>
-          Effect.promise(() =>
-            Promise.all([
-              rm(paths.socket, { force: true }).catch(() => {}),
-              rm(paths.pid, { force: true }).catch(() => {}),
-            ]).then(() => {}),
           ),
       );
       // The gone-watch reads over the Keeper's own link; a gone Sandbox
