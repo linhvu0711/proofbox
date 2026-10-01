@@ -103,15 +103,19 @@ The raw, full-quality capture of a Sandbox desktop between `record start` and `r
 _Avoid_: video (too loose), screencast
 
 **Action log**:
-The timed list of commands and Step marks during a Recording, kept inside the Sandbox next to it.
+The timed list of commands, Step marks, and Wait marks during a Recording, kept inside the Sandbox next to it.
 _Avoid_: trace, event log
 
 **Step mark**:
 A label the Caller sets during a Recording ("step 3: save the post"). It becomes the caption on the Proof video and the anchor for a Proof screenshot.
 _Avoid_: chapter, annotation
 
+**Wait mark**:
+A reason the Caller gives for a Still part during a Recording ("waiting for the scheduler"). That Still part keeps its label, with the reason after it. It does not start a step.
+_Avoid_: wait step, pause
+
 **Still part**:
-A stretch of a Recording where nothing on screen changes. The Proof video replaces it with a short "» 1 min 50 s later" label.
+A stretch of a Recording where nothing on screen changes. The Proof video cuts it. It keeps a short "» 1 min 50 s later" label only when the app ended it or a Wait mark names it.
 _Avoid_: idle time, dead time, thinking time
 
 **Proof video**:
