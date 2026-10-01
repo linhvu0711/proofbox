@@ -242,7 +242,7 @@ describe("Namespace macOS Provider", () => {
     }
   });
 
-  it("screenshot --out writes a 2560x1600 PNG", async () => {
+  it("screenshot --out writes a 1280x800 PNG", async () => {
     // Given: the Mac from beforeAll
     const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
     // When
@@ -250,8 +250,8 @@ describe("Namespace macOS Provider", () => {
     // Then
     expect(result.exitCode).toBe(0);
     const bytes = readFileSync(out);
-    expect(bytes.readUInt32BE(16)).toBe(2560);
-    expect(bytes.readUInt32BE(20)).toBe(1600);
+    expect(bytes.readUInt32BE(16)).toBe(1280);
+    expect(bytes.readUInt32BE(20)).toBe(800);
   });
 
   it("a point outside 1280x800 is refused", async () => {
@@ -351,6 +351,30 @@ describe("Namespace macOS Provider", () => {
       });
     });
 
+    it("click --screenshot writes a 1280x800 PNG", async () => {
+      // Given: the events page open
+      const out = join(
+        mkdtempSync(join(tmpdir(), "proofbox-shot-")),
+        "shot.png",
+      );
+      // When
+      const result = await runCli(env, [
+        "click",
+        id,
+        "640",
+        "400",
+        "--pace",
+        "fast",
+        "--screenshot",
+        out,
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const bytes = readFileSync(out);
+      expect(bytes.readUInt32BE(16)).toBe(1280);
+      expect(bytes.readUInt32BE(20)).toBe(800);
+    });
+
     it("scroll sends wheel steps down and up", async () => {
       // Given: the events page open
       // When
@@ -388,6 +412,37 @@ describe("Namespace macOS Provider", () => {
         type: "mouseup",
         x: 600,
         y: 400,
+        button: 0,
+      });
+    });
+
+    it("a spot read off the screenshot is where click lands", async () => {
+      // Given: the events page open
+      const out = join(
+        mkdtempSync(join(tmpdir(), "proofbox-shot-")),
+        "shot.png",
+      );
+      const shot = await runCli(env, ["screenshot", id, "--out", out]);
+      expect(shot.exitCode).toBe(0);
+      const bytes = readFileSync(out);
+      const width = bytes.readUInt32BE(16);
+      const height = bytes.readUInt32BE(20);
+      // When
+      const result = await runCli(env, [
+        "click",
+        id,
+        String(width / 4),
+        String(height / 4),
+        "--pace",
+        "fast",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({
+        type: "mousedown",
+        x: 320,
+        y: 200,
         button: 0,
       });
     });
