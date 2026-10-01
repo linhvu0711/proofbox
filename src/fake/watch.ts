@@ -8,24 +8,26 @@ import { describe, SandboxFile } from "./fake-provider.ts";
 const fail = (reason: string) =>
   new ProviderError({ provider: "fake", reason });
 
-const readDeadline = (root: string, name: string) =>
-  Effect.gen(function* () {
-    const text = yield* Effect.tryPromise({
-      try: () => readFile(join(root, name, "sandbox.json"), "utf8"),
-      catch: (cause) => fail(describe(cause)),
-    });
-    const json = yield* Effect.try({
-      try: () => JSON.parse(text) as unknown,
-      catch: (cause) => fail(describe(cause)),
-    });
-    const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
-      Effect.mapError((error) => fail(error.message)),
-    );
-    return file.deadline;
+const readDeadline = Effect.fn("watch.readDeadline")(function* (
+  root: string,
+  name: string,
+) {
+  const text = yield* Effect.tryPromise({
+    try: () => readFile(join(root, name, "sandbox.json"), "utf8"),
+    catch: (cause) => fail(describe(cause)),
   });
+  const json = yield* Effect.try({
+    try: () => JSON.parse(text) as unknown,
+    catch: (cause) => fail(describe(cause)),
+  });
+  const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
+    Effect.mapError((error) => fail(error.message)),
+  );
+  return file.deadline;
+});
 
-const deleteSandbox = (root: string, name: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
+const deleteSandbox: (root: string, name: string) => Effect.Effect<void> =
+  Effect.fn("watch.deleteSandbox")(function* (root: string, name: string) {
     const deleted = yield* Effect.tryPromise({
       try: () => rm(join(root, name), { recursive: true, force: true }),
       catch: (cause) => fail(describe(cause)),
@@ -38,8 +40,8 @@ const deleteSandbox = (root: string, name: string): Effect.Effect<void> =>
     }
   });
 
-export const watchSandbox = (root: string, name: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
+export const watchSandbox: (root: string, name: string) => Effect.Effect<void> =
+  Effect.fn("watch.watchSandbox")(function* (root: string, name: string) {
     if (!existsSync(join(root, name))) {
       return;
     }

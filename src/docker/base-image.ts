@@ -6,7 +6,7 @@ import { packagePath } from "../entry.ts";
 import { ProviderError } from "../errors.ts";
 import { Progress } from "../progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
-import type { DockerClient, DockerError } from "./docker-client.ts";
+import type { DockerClient } from "./docker-client.ts";
 
 export const BASE_IMAGE_DIR = packagePath("images/linux/");
 
@@ -55,10 +55,8 @@ export interface ToolBundleFile {
   readonly sha256: string;
 }
 
-export const toolBundleForArch = (
-  arch: string,
-): Effect.Effect<ReadonlyArray<ToolBundleFile>, ProviderError> =>
-  Effect.gen(function* () {
+export const toolBundleForArch = Effect.fn("baseImage.toolBundleForArch")(
+  function* (arch: string) {
     if (arch !== "amd64" && arch !== "arm64") {
       return yield* new ProviderError({
         provider: "docker",
@@ -71,7 +69,8 @@ export const toolBundleForArch = (
       url: file.linux[arch].url,
       sha256: file.linux[arch].sha256,
     }));
-  });
+  },
+);
 
 export const toolBundleArgs = (
   files: ReadonlyArray<ToolBundleFile>,
@@ -83,16 +82,16 @@ export const toolBundleArgs = (
     ]),
   );
 
-export const ensureBaseImage = (
-  client: DockerClient,
-  image: {
-    readonly dir: string;
-    readonly tag: string;
-    readonly buildArgs: Readonly<Record<string, string>>;
-  },
-  options?: { readonly registry?: boolean | undefined },
-): Effect.Effect<void, DockerError, Progress> =>
-  Effect.gen(function* () {
+export const ensureBaseImage = Effect.fn("baseImage.ensureBaseImage")(
+  function* (
+    client: DockerClient,
+    image: {
+      readonly dir: string;
+      readonly tag: string;
+      readonly buildArgs: Readonly<Record<string, string>>;
+    },
+    options?: { readonly registry?: boolean | undefined },
+  ) {
     if (yield* client.imageExists(image.tag)) {
       return;
     }
@@ -104,4 +103,5 @@ export const ensureBaseImage = (
     if (options?.registry === true) {
       yield* client.push(image.tag);
     }
-  });
+  },
+);

@@ -104,240 +104,234 @@ export const makeFakeProvider = (options: {
 
   // A fixed offline table stands in for a Provider's token check. The
   // fake has no regions; the region argument goes unused.
-  const checkToken = (
+  const checkToken = Effect.fn("FakeProvider.checkToken")(function* (
     token: Redacted.Redacted<string>,
     _region: Option.Option<string>,
-  ) =>
-    Effect.gen(function* () {
-      const known: Record<string, ProviderAccount> = {
-        t0k: {
-          account: "ada",
-          expiresAt: new Date("2999-01-01T00:00:00.000Z"),
-        },
-        t1k: {
-          account: "bob",
-          expiresAt: new Date("2999-01-01T00:00:00.000Z"),
-        },
-      };
-      const key = Redacted.value(token);
-      const found = Object.hasOwn(known, key) ? known[key] : undefined;
-      if (found === undefined) {
-        return yield* new TokenRejectedError({ provider: "fake" });
-      }
-      return found;
-    });
+  ) {
+    const known: Record<string, ProviderAccount> = {
+      t0k: {
+        account: "ada",
+        expiresAt: new Date("2999-01-01T00:00:00.000Z"),
+      },
+      t1k: {
+        account: "bob",
+        expiresAt: new Date("2999-01-01T00:00:00.000Z"),
+      },
+    };
+    const key = Redacted.value(token);
+    const found = Object.hasOwn(known, key) ? known[key] : undefined;
+    if (found === undefined) {
+      return yield* new TokenRejectedError({ provider: "fake" });
+    }
+    return found;
+  });
 
-  const readFileInfo = (name: string) =>
-    Effect.gen(function* () {
-      if (!/^[a-z0-9]{6}$/.test(name)) {
-        return yield* gone(name);
-      }
-      const dir = join(root, name);
-      const text = yield* Effect.tryPromise({
-        try: () => readFile(join(dir, "sandbox.json"), "utf8"),
-        catch: (cause) =>
-          !existsSync(dir)
-            ? gone(name)
-            : hasCode(cause, "ENOENT")
-              ? gone(name, true)
-              : fail(describe(cause)),
-      });
-      const json = yield* Effect.try({
-        try: () => JSON.parse(text) as unknown,
+  const readFileInfo = Effect.fn("FakeProvider.readFileInfo")(function* (
+    name: string,
+  ) {
+    if (!/^[a-z0-9]{6}$/.test(name)) {
+      return yield* gone(name);
+    }
+    const dir = join(root, name);
+    const text = yield* Effect.tryPromise({
+      try: () => readFile(join(dir, "sandbox.json"), "utf8"),
+      catch: (cause) =>
+        !existsSync(dir)
+          ? gone(name)
+          : hasCode(cause, "ENOENT")
+            ? gone(name, true)
+            : fail(describe(cause)),
+    });
+    const json = yield* Effect.try({
+      try: () => JSON.parse(text) as unknown,
+      catch: (cause) => fail(describe(cause)),
+    });
+    const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
+      Effect.mapError((error) => fail(error.message)),
+    );
+    const info = new SandboxInfo({
+      name,
+      os: file.os,
+      createdAt: file.createdAt,
+      idleSeconds: file.idleSeconds,
+      deadline: file.deadline,
+      maxLifeAt: file.maxLifeAt,
+      size: file.size,
+      snapshot: file.snapshot,
+    });
+    const current = yield* now;
+    if (info.deadline.getTime() <= current.getTime()) {
+      yield* Effect.tryPromise({
+        try: () => rm(dir, { recursive: true, force: true }),
         catch: (cause) => fail(describe(cause)),
       });
-      const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
-        Effect.mapError((error) => fail(error.message)),
-      );
-      const info = new SandboxInfo({
-        name,
-        os: file.os,
-        createdAt: file.createdAt,
-        idleSeconds: file.idleSeconds,
-        deadline: file.deadline,
-        maxLifeAt: file.maxLifeAt,
-        size: file.size,
-        snapshot: file.snapshot,
-      });
-      const current = yield* now;
-      if (info.deadline.getTime() <= current.getTime()) {
-        yield* Effect.tryPromise({
-          try: () => rm(dir, { recursive: true, force: true }),
-          catch: (cause) => fail(describe(cause)),
-        });
-        return yield* gone(name);
-      }
-      return info;
-    });
+      return yield* gone(name);
+    }
+    return info;
+  });
 
   // Write a temp file and rename it over sandbox.json, so a concurrent read
   // sees the old file or the new one, never a half-written one.
-  const writeFileInfo = (name: string, file: SandboxFile) =>
-    Effect.gen(function* () {
-      const path = join(root, name, "sandbox.json");
-      const temp = `${path}.${randomUUID()}.tmp`;
-      yield* Effect.tryPromise({
+  const writeFileInfo = Effect.fn("FakeProvider.writeFileInfo")(function* (
+    name: string,
+    file: SandboxFile,
+  ) {
+    const path = join(root, name, "sandbox.json");
+    const temp = `${path}.${randomUUID()}.tmp`;
+    yield* Effect.tryPromise({
+      try: async () => {
+        await writeFile(
+          temp,
+          `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+        );
+        await rename(temp, path);
+      },
+      catch: (cause) => fail(describe(cause)),
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.tryPromise(() => rm(temp, { force: true })).pipe(Effect.ignore),
+      ),
+    );
+  });
+
+  const createWork = Effect.fn("FakeProvider.createWork")(function* (req: {
+    readonly os: Os;
+    readonly idle: Duration.Duration;
+    readonly maxLife: Duration.Duration;
+    readonly size?: Size | undefined;
+    readonly snapshot?: string | undefined;
+  }) {
+    const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
+      Duration.toSeconds(req.idle),
+    ).pipe(
+      Effect.mapError(() =>
+        fail(
+          `idle must be a whole number of seconds above 0, got ${Duration.format(req.idle)}`,
+        ),
+      ),
+    );
+    yield* Effect.tryPromise({
+      try: () => mkdir(root, { recursive: true }),
+      catch: (cause) => fail(describe(cause)),
+    });
+    let name: string | undefined;
+    for (let i = 0; i < 5 && name === undefined; i++) {
+      const candidate = makeSandboxName();
+      const made = yield* Effect.tryPromise({
         try: async () => {
-          await writeFile(
-            temp,
-            `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
-          );
-          await rename(temp, path);
+          await mkdir(join(root, candidate));
+          return true;
         },
-        catch: (cause) => fail(describe(cause)),
+        catch: (cause) => cause,
       }).pipe(
-        Effect.tapError(() =>
-          Effect.tryPromise(() => rm(temp, { force: true })).pipe(
-            Effect.ignore,
-          ),
+        Effect.catchAll((cause) =>
+          hasCode(cause, "EEXIST")
+            ? Effect.succeed(false)
+            : Effect.fail(fail(describe(cause))),
         ),
       );
+      if (made) name = candidate;
+    }
+    if (name === undefined) {
+      return yield* fail("could not make a Sandbox name after 5 tries");
+    }
+    const dir = join(root, name);
+    const createdAt = yield* now;
+    const maxLifeAt = new Date(
+      createdAt.getTime() + Duration.toMillis(req.maxLife),
+    );
+    // A missing Snapshot is not an error: the Sandbox starts empty and
+    // the Setup script runs.
+    const pullFails =
+      req.snapshot !== undefined && options.snapshots?.fail === "pull";
+    if (pullFails) {
+      const progress = yield* Progress;
+      yield* progress.warn(
+        `could not pull the Snapshot (${fail("pull refused").message}); running the Setup script`,
+      );
+    }
+    const saved =
+      req.snapshot === undefined || options.snapshots === undefined || pullFails
+        ? undefined
+        : join(options.snapshots.root, req.snapshot);
+    const entry = saved !== undefined && existsSync(saved) ? saved : undefined;
+    const file = new SandboxFile({
+      os: req.os,
+      createdAt,
+      idleSeconds,
+      deadline: nextDeadline({
+        now: createdAt,
+        idle: req.idle,
+        maxLifeAt,
+      }),
+      maxLifeAt,
+      size: req.size,
+      snapshot: entry === undefined ? undefined : req.snapshot,
     });
-
-  const createWork = (req: {
-    readonly os: Os;
-    readonly idle: Duration.Duration;
-    readonly maxLife: Duration.Duration;
-    readonly size?: Size | undefined;
-    readonly snapshot?: string | undefined;
-  }) =>
-    Effect.gen(function* () {
-      const idleSeconds = yield* Schema.decodeUnknown(IdleSeconds)(
-        Duration.toSeconds(req.idle),
-      ).pipe(
-        Effect.mapError(() =>
-          fail(
-            `idle must be a whole number of seconds above 0, got ${Duration.format(req.idle)}`,
-          ),
-        ),
+    yield* writeFileInfo(name, file);
+    const hold = options.createHold;
+    if (hold !== undefined) {
+      yield* Effect.sync(() => existsSync(hold)).pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(Duration.millis(50)),
+          until: (released) => released,
+        }),
       );
+    }
+    if (options.marksLocal === true) {
+      const maxLife = (yield* keeperPaths({ provider: "fake", name })).maxLife;
       yield* Effect.tryPromise({
-        try: () => mkdir(root, { recursive: true }),
+        try: () =>
+          writeFile(maxLife, String(Math.floor(maxLifeAt.getTime() / 1000)), {
+            mode: 0o600,
+          }),
         catch: (cause) => fail(describe(cause)),
       });
-      let name: string | undefined;
-      for (let i = 0; i < 5 && name === undefined; i++) {
-        const candidate = makeSandboxName();
-        const made = yield* Effect.tryPromise({
-          try: async () => {
-            await mkdir(join(root, candidate));
-            return true;
-          },
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.catchAll((cause) =>
-            hasCode(cause, "EEXIST")
-              ? Effect.succeed(false)
-              : Effect.fail(fail(describe(cause))),
-          ),
-        );
-        if (made) name = candidate;
-      }
-      if (name === undefined) {
-        return yield* fail("could not make a Sandbox name after 5 tries");
-      }
-      const dir = join(root, name);
-      const createdAt = yield* now;
-      const maxLifeAt = new Date(
-        createdAt.getTime() + Duration.toMillis(req.maxLife),
-      );
-      // A missing Snapshot is not an error: the Sandbox starts empty and
-      // the Setup script runs.
-      const pullFails =
-        req.snapshot !== undefined && options.snapshots?.fail === "pull";
-      if (pullFails) {
-        const progress = yield* Progress;
-        yield* progress.warn(
-          `could not pull the Snapshot (${fail("pull refused").message}); running the Setup script`,
-        );
-      }
-      const saved =
-        req.snapshot === undefined ||
-        options.snapshots === undefined ||
-        pullFails
-          ? undefined
-          : join(options.snapshots.root, req.snapshot);
-      const entry =
-        saved !== undefined && existsSync(saved) ? saved : undefined;
-      const file = new SandboxFile({
-        os: req.os,
-        createdAt,
-        idleSeconds,
-        deadline: nextDeadline({
-          now: createdAt,
-          idle: req.idle,
-          maxLifeAt,
-        }),
-        maxLifeAt,
-        size: req.size,
-        snapshot: entry === undefined ? undefined : req.snapshot,
-      });
-      yield* writeFileInfo(name, file);
-      const hold = options.createHold;
-      if (hold !== undefined) {
-        yield* Effect.sync(() => existsSync(hold)).pipe(
-          Effect.repeat({
-            schedule: Schedule.spaced(Duration.millis(50)),
-            until: (released) => released,
-          }),
-        );
-      }
-      if (options.marksLocal === true) {
-        const maxLife = (yield* keeperPaths({ provider: "fake", name }))
-          .maxLife;
-        yield* Effect.tryPromise({
-          try: () =>
-            writeFile(maxLife, String(Math.floor(maxLifeAt.getTime() / 1000)), {
-              mode: 0o600,
-            }),
-          catch: (cause) => fail(describe(cause)),
-        });
-      }
+    }
+    yield* Effect.tryPromise({
+      try: async () => {
+        await mkdir(join(dir, "home"));
+        await mkdir(join(dir, "state"));
+        await mkdir(join(dir, "secrets"), { mode: 0o700 });
+      },
+      catch: (cause) => fail(describe(cause)),
+    });
+    if (entry !== undefined) {
       yield* Effect.tryPromise({
         try: async () => {
-          await mkdir(join(dir, "home"));
-          await mkdir(join(dir, "state"));
-          await mkdir(join(dir, "secrets"), { mode: 0o700 });
+          await cp(join(entry, "home"), join(dir, "home"), {
+            recursive: true,
+          });
+          await cp(join(entry, "state"), join(dir, "state"), {
+            recursive: true,
+          });
         },
         catch: (cause) => fail(describe(cause)),
       });
-      if (entry !== undefined) {
-        yield* Effect.tryPromise({
-          try: async () => {
-            await cp(join(entry, "home"), join(dir, "home"), {
-              recursive: true,
-            });
-            await cp(join(entry, "state"), join(dir, "state"), {
-              recursive: true,
-            });
-          },
-          catch: (cause) => fail(describe(cause)),
-        });
-      }
-      if (options.watch === "process") {
-        yield* spawnDetached("fake", "fake/watch-main", [root, name]);
-      }
-      return new SandboxInfo({ name, ...file });
-    });
+    }
+    if (options.watch === "process") {
+      yield* spawnDetached("fake", "fake/watch-main", [root, name]);
+    }
+    return new SandboxInfo({ name, ...file });
+  });
 
-  const create = (req: {
+  const create = Effect.fn("FakeProvider.create")(function* (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
     readonly snapshot?: string | undefined;
-  }) =>
-    Effect.gen(function* () {
-      const login = yield* options.login ?? Effect.void;
-      // The fake stands in for a real Provider, which rejects a bad
-      // token at its API — a rejected login makes no Sandbox.
-      if (login !== undefined) {
-        yield* checkToken(login.token, login.region);
-      }
-      return yield* Effect.flatMap(Progress, (progress) =>
-        progress.step("creating fake Sandbox", createWork(req)),
-      );
-    });
+  }) {
+    const login = yield* options.login ?? Effect.void;
+    // The fake stands in for a real Provider, which rejects a bad
+    // token at its API — a rejected login makes no Sandbox.
+    if (login !== undefined) {
+      yield* checkToken(login.token, login.region);
+    }
+    return yield* Effect.flatMap(Progress, (progress) =>
+      progress.step("creating fake Sandbox", createWork(req)),
+    );
+  });
 
   const get = (sandbox: SandboxRef) => readFileInfo(sandbox.name);
 
@@ -397,172 +391,174 @@ export const makeFakeProvider = (options: {
     return { infos, unreached, unfinished };
   });
 
-  const del = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      const name = sandbox.name;
-      if (name === options.deleteDown) {
-        return yield* new ProviderUnavailableError({
-          provider: "fake",
-          reason: `fake Sandbox ${name} did not answer`,
-        });
-      }
-      // The Max life file goes with the Sandbox, whether it was still
-      // there or already gone, as Namespace drops its runtime files.
-      const unmark =
-        options.marksLocal === true
-          ? Effect.flatMap(keeperPaths({ provider: "fake", name }), (paths) =>
-              Effect.promise(() =>
-                rm(paths.maxLife, { force: true }).catch(() => {}),
-              ),
-            )
-          : Effect.void;
-      // An Unfinished Sandbox is there to delete, as its Namespace host is.
-      const present = yield* readFileInfo(name).pipe(
-        Effect.map(() => true),
-        Effect.catchTag("SandboxGoneError", (error) =>
-          Effect.succeed(error.unfinished === true),
-        ),
-      );
-      if (!present) {
-        yield* unmark;
-        return "gone" as const;
-      }
-      yield* Effect.tryPromise({
-        try: () => rm(join(root, name), { recursive: true, force: true }),
-        catch: (cause) => fail(describe(cause)),
+  const del = Effect.fn("FakeProvider.del")(function* (sandbox: SandboxRef) {
+    const name = sandbox.name;
+    if (name === options.deleteDown) {
+      return yield* new ProviderUnavailableError({
+        provider: "fake",
+        reason: `fake Sandbox ${name} did not answer`,
       });
+    }
+    // The Max life file goes with the Sandbox, whether it was still
+    // there or already gone, as Namespace drops its runtime files.
+    const unmark =
+      options.marksLocal === true
+        ? Effect.flatMap(keeperPaths({ provider: "fake", name }), (paths) =>
+            Effect.promise(() =>
+              rm(paths.maxLife, { force: true }).catch(() => {}),
+            ),
+          )
+        : Effect.void;
+    // An Unfinished Sandbox is there to delete, as its Namespace host is.
+    const present = yield* readFileInfo(name).pipe(
+      Effect.map(() => true),
+      Effect.catchTag("SandboxGoneError", (error) =>
+        Effect.succeed(error.unfinished === true),
+      ),
+    );
+    if (!present) {
       yield* unmark;
-      return "deleted" as const;
+      return "gone" as const;
+    }
+    yield* Effect.tryPromise({
+      try: () => rm(join(root, name), { recursive: true, force: true }),
+      catch: (cause) => fail(describe(cause)),
     });
+    yield* unmark;
+    return "deleted" as const;
+  });
 
-  const extend = (sandbox: SandboxRef, deadline: Date) =>
-    Effect.gen(function* () {
-      const info = yield* readFileInfo(sandbox.name);
-      const file = new SandboxFile({
-        os: info.os,
-        createdAt: info.createdAt,
-        idleSeconds: info.idleSeconds,
-        deadline,
-        maxLifeAt: info.maxLifeAt,
-        size: info.size,
-        snapshot: info.snapshot,
-      });
-      yield* writeFileInfo(sandbox.name, file);
+  const extend = Effect.fn("FakeProvider.extend")(function* (
+    sandbox: SandboxRef,
+    deadline: Date,
+  ) {
+    const info = yield* readFileInfo(sandbox.name);
+    const file = new SandboxFile({
+      os: info.os,
+      createdAt: info.createdAt,
+      idleSeconds: info.idleSeconds,
+      deadline,
+      maxLifeAt: info.maxLifeAt,
+      size: info.size,
+      snapshot: info.snapshot,
     });
+    yield* writeFileInfo(sandbox.name, file);
+  });
 
   // Copy into a temp entry and rename it over the old one, so a create
   // that starts from the Snapshot never sees a half-written one.
-  const saveSnapshot = (sandbox: SandboxRef, fingerprint: string) =>
-    Effect.gen(function* () {
-      const name = sandbox.name;
-      const snapshots = options.snapshots;
-      if (snapshots === undefined) {
-        return yield* fail("this fake Provider keeps no Snapshots");
-      }
-      if (snapshots.fail === "push") {
-        return yield* fail("push refused");
-      }
-      yield* readFileInfo(name);
-      const dir = join(root, name);
-      const entry = join(snapshots.root, fingerprint);
-      const temp = join(snapshots.root, `.new-${fingerprint}`);
-      yield* Effect.tryPromise({
-        try: async () => {
-          await rm(temp, { recursive: true, force: true });
-          await mkdir(temp, { recursive: true });
-          await cp(join(dir, "home"), join(temp, "home"), { recursive: true });
-          await cp(join(dir, "state"), join(temp, "state"), {
-            recursive: true,
-          });
-          await rm(entry, { recursive: true, force: true });
-          await rename(temp, entry);
-        },
-        catch: (cause) => fail(describe(cause)),
-      }).pipe(
-        Effect.tapError(() =>
-          Effect.tryPromise(() =>
-            rm(temp, { recursive: true, force: true }),
-          ).pipe(Effect.ignore),
-        ),
-      );
-    });
+  const saveSnapshot = Effect.fn("FakeProvider.saveSnapshot")(function* (
+    sandbox: SandboxRef,
+    fingerprint: string,
+  ) {
+    const name = sandbox.name;
+    const snapshots = options.snapshots;
+    if (snapshots === undefined) {
+      return yield* fail("this fake Provider keeps no Snapshots");
+    }
+    if (snapshots.fail === "push") {
+      return yield* fail("push refused");
+    }
+    yield* readFileInfo(name);
+    const dir = join(root, name);
+    const entry = join(snapshots.root, fingerprint);
+    const temp = join(snapshots.root, `.new-${fingerprint}`);
+    yield* Effect.tryPromise({
+      try: async () => {
+        await rm(temp, { recursive: true, force: true });
+        await mkdir(temp, { recursive: true });
+        await cp(join(dir, "home"), join(temp, "home"), { recursive: true });
+        await cp(join(dir, "state"), join(temp, "state"), {
+          recursive: true,
+        });
+        await rm(entry, { recursive: true, force: true });
+        await rename(temp, entry);
+      },
+      catch: (cause) => fail(describe(cause)),
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.tryPromise(() =>
+          rm(temp, { recursive: true, force: true }),
+        ).pipe(Effect.ignore),
+      ),
+    );
+  });
 
-  const connect = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      const executor = yield* CommandExecutor.CommandExecutor;
-      const home = join(root, sandbox.name, "home");
-      const info = yield* get(sandbox);
-      // The fake's commands run on the Caller's machine and its Deadline is
-      // a JSON file, so its checks run in-process. It sees no memory kills, so
-      // its Exit carries no counts.
-      const push = Effect.flatMap(pushedDeadline(info), (deadline) =>
-        extend(sandbox, deadline),
-      );
-      const run = (
-        argv: ReadonlyArray<string>,
-        options: Parameters<Connection["exec"]>[1],
-      ) =>
-        Stream.unwrapScoped(
-          Effect.gen(function* () {
-            const process = yield* Command.start(
-              Command.make("sh", "-c", shellJoin(argv)).pipe(
-                Command.workingDirectory(home),
-              ),
-            ).pipe(
-              Effect.provideService(CommandExecutor.CommandExecutor, executor),
-              Effect.mapError((error) => fail(error.message)),
-            );
-            const feed =
-              options?.stdin === undefined
-                ? undefined
-                : Stream.run(options.stdin, process.stdin).pipe(
-                    // A command may exit before its stdin reports "finish"
-                    // (tar -x stops at the end-of-archive marker); when the
-                    // process is gone the feed is done by definition.
-                    Effect.raceFirst(
-                      process.exitCode.pipe(Effect.orElseSucceed(() => {})),
-                    ),
-                    Effect.mapError((error) => fail(error.message)),
-                  );
-            const outputs = Stream.merge(
-              process.stdout.pipe(
-                Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
-              ),
-              process.stderr.pipe(
-                Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
-              ),
-            ).pipe(Stream.mapError((error) => fail(error.message)));
-            const events =
-              feed === undefined
-                ? outputs
-                : Stream.merge(
-                    outputs,
-                    Stream.fromEffect(feed).pipe(Stream.drain),
-                  );
-            const exit = Stream.fromEffect(
-              process.exitCode.pipe(
-                Effect.mapError((error) => fail(error.message)),
-              ),
-            ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
-            return Stream.concat(events, exit);
-          }),
-        );
-      const connection: Connection = {
-        info,
-        get: get(sandbox),
-        extend: (deadline) => extend(sandbox, deadline),
-        exec: (argv, options) =>
-          Stream.concat(
-            Stream.fromEffect(push).pipe(Stream.drain),
-            run(argv, options).pipe(
-              Stream.tap((event) =>
-                event._tag === "Exit" ? push : Effect.void,
-              ),
+  const connect = Effect.fn("FakeProvider.connect")(function* (
+    sandbox: SandboxRef,
+  ) {
+    const executor = yield* CommandExecutor.CommandExecutor;
+    const home = join(root, sandbox.name, "home");
+    const info = yield* get(sandbox);
+    // The fake's commands run on the Caller's machine and its Deadline is
+    // a JSON file, so its checks run in-process. It sees no memory kills, so
+    // its Exit carries no counts.
+    const push = Effect.flatMap(pushedDeadline(info), (deadline) =>
+      extend(sandbox, deadline),
+    );
+    const run = (
+      argv: ReadonlyArray<string>,
+      options: Parameters<Connection["exec"]>[1],
+    ) =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          const process = yield* Command.start(
+            Command.make("sh", "-c", shellJoin(argv)).pipe(
+              Command.workingDirectory(home),
             ),
+          ).pipe(
+            Effect.provideService(CommandExecutor.CommandExecutor, executor),
+            Effect.mapError((error) => fail(error.message)),
+          );
+          const feed =
+            options?.stdin === undefined
+              ? undefined
+              : Stream.run(options.stdin, process.stdin).pipe(
+                  // A command may exit before its stdin reports "finish"
+                  // (tar -x stops at the end-of-archive marker); when the
+                  // process is gone the feed is done by definition.
+                  Effect.raceFirst(
+                    process.exitCode.pipe(Effect.orElseSucceed(() => {})),
+                  ),
+                  Effect.mapError((error) => fail(error.message)),
+                );
+          const outputs = Stream.merge(
+            process.stdout.pipe(
+              Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
+            ),
+            process.stderr.pipe(
+              Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
+            ),
+          ).pipe(Stream.mapError((error) => fail(error.message)));
+          const events =
+            feed === undefined
+              ? outputs
+              : Stream.merge(
+                  outputs,
+                  Stream.fromEffect(feed).pipe(Stream.drain),
+                );
+          const exit = Stream.fromEffect(
+            process.exitCode.pipe(
+              Effect.mapError((error) => fail(error.message)),
+            ),
+          ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
+          return Stream.concat(events, exit);
+        }),
+      );
+    const connection: Connection = {
+      info,
+      get: get(sandbox),
+      extend: (deadline) => extend(sandbox, deadline),
+      exec: (argv, options) =>
+        Stream.concat(
+          Stream.fromEffect(push).pipe(Stream.drain),
+          run(argv, options).pipe(
+            Stream.tap((event) => (event._tag === "Exit" ? push : Effect.void)),
           ),
-      };
-      return connection;
-    });
+        ),
+    };
+    return connection;
+  });
 
   return {
     name: "fake",
