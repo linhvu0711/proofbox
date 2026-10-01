@@ -52,7 +52,7 @@ const markCreating = (provider: Provider) =>
       return Option.none<string>();
     }
     return yield* withLoginsLock(markCreate(provider.idPrefix)).pipe(
-      Effect.map(Option.some),
+      Effect.map((mark) => Option.some(mark)),
       Effect.catchTag("ConfigError", () =>
         Effect.succeed(Option.none<string>()),
       ),
