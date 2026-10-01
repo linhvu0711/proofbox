@@ -222,6 +222,121 @@ describe("edit-plan", () => {
     expect(plan.seconds).toBe(9);
   });
 
+  it("a Wait mark puts its reason after the label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+      waits: [{ t: 6, reason: "waiting for the scheduler" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · waiting for the scheduler",
+      step: 1,
+    });
+  });
+
+  it("a Wait mark before a Still part goes on the next one in its step", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+      waits: [{ t: 2, reason: "waiting for the scheduler" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · waiting for the scheduler",
+      step: 1,
+    });
+  });
+
+  it("a Wait mark with no Still part in its step is not used", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 35],
+      clicks: [],
+      waits: [{ t: 36, reason: "nobody waits here" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([
+      { reason: "nobody waits here", step: 2 },
+    ]);
+  });
+
+  it("two Wait marks on one Still part show the first reason", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      waits: [
+        { t: 6, reason: "first reason" },
+        { t: 8, reason: "second reason" },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · first reason",
+      step: 1,
+    });
+  });
+
+  it("the second Wait mark on one Still part is not used", () => {
+    // Given: the same input as the case above
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      waits: [
+        { t: 6, reason: "first reason" },
+        { t: 8, reason: "second reason" },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([
+      { reason: "second reason", step: 1 },
+    ]);
+  });
+
   it("a Still part across a Step mark that a Caller action ends has no label on either side", () => {
     // Given
     const input = {
