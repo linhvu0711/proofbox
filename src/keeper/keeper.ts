@@ -7,15 +7,15 @@ import {
   type Socket,
 } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
-import { Data, Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
+import { Effect, Mailbox, Runtime, Schedule, Stream } from "effect";
 import { withRunningPush } from "../deadline.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
-import { withFileLock } from "../file-lock.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
+import { withStartLock } from "./start-lock.ts";
 
 const socketAnswers = (path: string) =>
   Effect.async<boolean>((resume) => {
@@ -28,47 +28,6 @@ const socketAnswers = (path: string) =>
       resume(Effect.succeed(false));
     });
   });
-
-// A held start lock, inside this file only: it tells the start to take
-// the lock over once.
-class StartLockHeldError extends Data.TaggedError("StartLockHeldError") {}
-
-// Runs a Keeper's start, from its socket check until it listens, under a
-// lock per Sandbox, so a second Keeper started at once waits and then
-// finds the first one's socket answers. A start holds the lock for a few
-// ms, so a lock still held after the wait was left by a Keeper killed
-// mid-start: remove it and try once more.
-const withStartLock =
-  (dir: string, provider: string) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) => {
-    const isHeld = (error: unknown): error is StartLockHeldError =>
-      error instanceof StartLockHeldError;
-    const locked = withFileLock<StartLockHeldError | ProviderError>({
-      dir,
-      wait: "5 seconds",
-      busy: () => new StartLockHeldError(),
-      failed: (cause) =>
-        new ProviderError({
-          provider,
-          reason: cause instanceof Error ? cause.message : String(cause),
-        }),
-    })(effect);
-    return locked.pipe(
-      Effect.catchIf(isHeld, () =>
-        Effect.promise(() =>
-          rm(dir, { recursive: true, force: true }).catch(() => {}),
-        ).pipe(Effect.zipRight(locked)),
-      ),
-      Effect.catchIf(isHeld, () =>
-        Effect.fail(
-          new ProviderError({
-            provider,
-            reason: `another Keeper of this Sandbox is still starting; delete ${dir} if it is stale`,
-          }),
-        ),
-      ),
-    );
-  };
 
 const writeFrame = (socket: Socket, frame: unknown) =>
   Effect.async<void, Error>((resume) => {
@@ -293,7 +252,6 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
       const started = yield* withStartLock(
         paths.startLock,
         id.provider.name,
-      )(
         Effect.gen(function* () {
           if (yield* socketAnswers(paths.socket)) {
             return false;

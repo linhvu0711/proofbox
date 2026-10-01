@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -53,6 +54,15 @@ const alive = (pid: number) => {
   } catch {
     return false;
   }
+};
+
+// The start lock a Keeper killed mid-start leaves: its owner is a pid
+// that no longer runs.
+const staleStartLock = (env: { runtime: string }, name: string) => {
+  const dead = spawnSync("true").pid;
+  const lock = join(env.runtime, `fake-${name}.start-lock`);
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), `${dead} killed\n`);
 };
 
 const runtimeConfig = (env: { runtime: string }) =>
@@ -489,7 +499,7 @@ describe("Keeper", () => {
             maxLife: Duration.hours(1),
           })
           .pipe(Effect.provideService(Progress, noProgress));
-        mkdirSync(join(env.runtime, `fake-${info.name}.start-lock`));
+        staleStartLock(env, info.name);
         const socket = join(env.runtime, `fake-${info.name}.sock`);
         // When
         yield* Effect.forkScoped(
@@ -509,6 +519,72 @@ describe("Keeper", () => {
       }).pipe(runtimeConfig(env));
     },
   );
+
+  it.scopedLive(
+    "two Keepers that take over one stale start lock leave one Keeper's socket and pid file",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a Sandbox, and the start lock of a Keeper killed mid-start
+        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const info = yield* fake
+          .create({
+            os: "linux",
+            idle: Duration.minutes(5),
+            maxLife: Duration.hours(1),
+          })
+          .pipe(Effect.provideService(Progress, noProgress));
+        staleStartLock(env, info.name);
+        const keeper = runKeeper(`fake:${info.name}`).pipe(
+          Effect.provideService(
+            Providers,
+            new Map([["fake", providerEntry(fake)]]),
+          ),
+          Effect.provide(NodeContext.layer),
+        );
+        // When: two Keepers start together, and the one that lost ends
+        const first = yield* Effect.forkScoped(keeper);
+        const second = yield* Effect.forkScoped(keeper);
+        yield* Effect.race(Fiber.await(first), Fiber.await(second));
+        // Then
+        expect([
+          existsSync(join(env.runtime, `fake-${info.name}.sock`)),
+          existsSync(join(env.runtime, `fake-${info.name}.pid`)),
+        ]).toEqual([true, true]);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scopedLive("a Keeper never takes over a live start lock", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a Sandbox, and the start lock of a Keeper that still runs
+      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const info = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const lock = join(env.runtime, `fake-${info.name}.start-lock`);
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner"), `${process.pid} live\n`);
+      // When
+      yield* runKeeper(`fake:${info.name}`).pipe(
+        Effect.provideService(
+          Providers,
+          new Map([["fake", providerEntry(fake)]]),
+        ),
+        Effect.provide(NodeContext.layer),
+        Effect.flip,
+      );
+      // Then
+      expect(readFileSync(join(lock, "owner"), "utf8")).toBe(
+        `${process.pid} live\n`,
+      );
+    }).pipe(runtimeConfig(env));
+  });
 
   it.scoped("the pid file names the Keeper once its socket exists", () => {
     const env = makeEnv();
