@@ -25,7 +25,11 @@ import { makeDockerProvider } from "../src/docker/docker-provider.ts";
 import { ToolBundleHashError } from "../src/errors.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type ProviderEntry,
+  Providers,
+  providerEntry,
+} from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 import {
   type CliEnv,
@@ -274,13 +278,15 @@ describe("Docker Provider", () => {
         );
         const providers = Layer.succeed(
           Providers,
-          new Map<string, Provider>([
+          new Map<string, ProviderEntry>([
             [
               "docker",
-              makeDockerProvider({
-                client: makeDockerClient(executor),
-                imageTag: tamperedTag,
-              }),
+              providerEntry(
+                makeDockerProvider({
+                  client: makeDockerClient(executor),
+                  imageTag: tamperedTag,
+                }),
+              ),
             ],
           ]),
         );

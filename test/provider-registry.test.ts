@@ -1,13 +1,36 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { ConfigProvider, Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
+import { Providers } from "../src/provider.ts";
+import { ProvidersLive } from "../src/provider-registry.ts";
 import { spawnDetached } from "../src/spawn-detached.ts";
-import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+
+// Env for a CLI run that records every module it resolves to `loads`.
+const recordLoads = (env: CliEnv) => {
+  const loads = join(env.root, "loads.txt");
+  const hook = pathToFileURL(join(repoRoot, "test/support/record-loads.ts"));
+  return {
+    loads,
+    set: { NODE_OPTIONS: `--import=${hook.href}`, PROOFBOX_TEST_LOADS: loads },
+  };
+};
+
+// The modules of the Namespace Provider's own libraries in a loads file.
+const providerLibs = (loads: string) =>
+  readFileSync(loads, "utf8")
+    .split("\n")
+    .filter((url) =>
+      /\/node_modules\/(@namespacelabs\/sdk|@connectrpc\/|@bufbuild\/protobuf)\//.test(
+        url,
+      ),
+    );
 
 describe("Provider registry", () => {
   afterEach(cleanupEnvs);
@@ -98,4 +121,71 @@ describe("Provider registry", () => {
     expect(listed.stdout).toBe("");
     expect(listed.stderr).toBe("No live Sandboxes\n");
   });
+
+  it("exec on a fake Sandbox loads no Namespace libraries", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const { loads, set } = recordLoads(env);
+    // When
+    const result = await runCli(
+      env,
+      ["exec", created.stdout.trim(), "--", "true"],
+      { set },
+    );
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(providerLibs(loads)).toEqual([]);
+    expect(readFileSync(loads, "utf8")).toContain("/node_modules/effect/");
+  });
+
+  it("exec on a Docker Sandbox loads no Namespace libraries", async () => {
+    // Given: no Docker daemon, so exec fails after it picks the Provider
+    const env = makeEnv();
+    const { loads, set } = recordLoads(env);
+    // When
+    const result = await runCli(env, ["exec", "docker:abc123", "--", "true"], {
+      set,
+    });
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toContain(
+      "Docker is not running; start Docker and try again",
+    );
+    expect(providerLibs(loads)).toEqual([]);
+    expect(readFileSync(loads, "utf8")).toContain("/node_modules/effect/");
+  });
+
+  it.effect("each Provider entry names the id prefix its Provider uses", () =>
+    Effect.gen(function* () {
+      // Given
+      const providers = yield* Providers;
+      // When
+      const pairs: Array<[string, string]> = [];
+      for (const entry of providers.values()) {
+        const provider = yield* entry.load;
+        pairs.push([entry.idPrefix, provider.idPrefix]);
+      }
+      // Then
+      expect(pairs).toEqual([
+        ["docker", "docker"],
+        ["ns", "ns"],
+        ["fake", "fake"],
+      ]);
+    }).pipe(
+      Effect.provide(ProvidersLive),
+      Effect.provide(NodeContext.layer),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(
+          new Map([["PROOFBOX_FAKE_ROOT", makeEnv().root]]),
+        ),
+      ),
+    ),
+  );
 });

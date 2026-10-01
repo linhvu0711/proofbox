@@ -11,7 +11,13 @@ import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers, SandboxInfo } from "../src/provider.ts";
+import {
+  type Provider,
+  type ProviderEntry,
+  Providers,
+  providerEntry,
+  SandboxInfo,
+} from "../src/provider.ts";
 
 const tempRoots: string[] = [];
 
@@ -50,7 +56,7 @@ const layers = () => {
   };
   const providers = Layer.succeed(
     Providers,
-    new Map<string, Provider>([["fake", mac]]),
+    new Map<string, ProviderEntry>([["fake", providerEntry(mac)]]),
   );
   return Layer.mergeAll(
     NodeContext.layer,

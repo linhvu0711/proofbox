@@ -1,16 +1,14 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
+import { packagePath } from "../entry.ts";
 import { ProviderError } from "../errors.ts";
 import { Progress } from "../progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient, DockerError } from "./docker-client.ts";
 
-export const BASE_IMAGE_DIR = fileURLToPath(
-  new URL("../../images/linux/", import.meta.url),
-);
+export const BASE_IMAGE_DIR = packagePath("images/linux/");
 
 export const baseImageVersion = (
   dir: string,

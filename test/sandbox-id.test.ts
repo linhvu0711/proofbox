@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import type { Provider } from "../src/provider.ts";
+import { type Provider, providerEntry } from "../src/provider.ts";
 import { fileStem, resolveSandboxId } from "../src/sandbox-id.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
@@ -30,7 +30,7 @@ describe("Sandbox id", () => {
       // When
       const resolved = yield* resolveSandboxId(
         "ns:eu:abc123",
-        new Map([["namespace", namespaceLike]]),
+        new Map([["namespace", providerEntry(namespaceLike)]]),
       );
       // Then
       expect({

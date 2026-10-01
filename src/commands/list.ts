@@ -8,9 +8,8 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
   Effect.gen(function* () {
     const providers = yield* Providers;
     const output = yield* CliOutput;
-    const found = yield* Effect.forEach(
-      [...providers.entries()],
-      ([, provider]) =>
+    const found = yield* Effect.forEach([...providers.entries()], ([, entry]) =>
+      Effect.flatMap(entry.load, (provider) =>
         provider.list.pipe(
           Effect.map((result) => ({
             unreached: result.unreached,
@@ -34,6 +33,7 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
             }),
           ),
         ),
+      ),
     );
     for (const { unreached } of found) {
       for (const miss of unreached) {

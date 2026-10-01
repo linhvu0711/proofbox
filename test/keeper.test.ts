@@ -14,7 +14,7 @@ import { afterEach, describe, expect } from "vitest";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { Progress } from "../src/progress.ts";
-import { Providers } from "../src/provider.ts";
+import { Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -303,7 +303,10 @@ describe("Keeper", () => {
         mkdirSync(join(env.runtime, `fake-${info.name}.pid`));
         // When
         const error = yield* runKeeper(`fake:${info.name}`).pipe(
-          Effect.provideService(Providers, new Map([["fake", fake]])),
+          Effect.provideService(
+            Providers,
+            new Map([["fake", providerEntry(fake)]]),
+          ),
           Effect.provide(NodeContext.layer),
           Effect.withConfigProvider(
             ConfigProvider.fromMap(
