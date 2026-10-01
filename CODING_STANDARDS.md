@@ -62,7 +62,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - pnpm is on a major version that still gets security fixes. (pnpm-security)
 - A dependency's install script runs only when `allowBuilds` lists it. (pnpm-supply-chain)
   An install script runs code from the package on the machine that installs it.
-- Every version is pinned exact. [.npmrc save-exact]
+- Every version is pinned exact. [pnpm-workspace.yaml saveExact]
 - `pnpm-lock.yaml` is committed, and CI installs with `--frozen-lockfile`. (pnpm-install) [ci]
 - After a bump of `effect`, run `/embed-source update effect`.
 - Import from the installed package, never from `repos/`.

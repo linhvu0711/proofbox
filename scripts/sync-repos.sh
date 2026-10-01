@@ -5,7 +5,7 @@
 # Set EMBED_SOURCE_SKIP=1 to skip (for example in CI that only lints and tests).
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || { echo "sync-repos: cannot cd to the repo root, skipping"; exit 0; }
 MANIFEST="repos/README.md"
 
 if [[ "${EMBED_SOURCE_SKIP:-}" == "1" ]]; then

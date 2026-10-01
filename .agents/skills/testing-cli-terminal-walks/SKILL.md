@@ -5,7 +5,7 @@ description: How to record proofbox CLI UI walks in a real GUI terminal (which t
 
 # Recording proofbox CLI terminal walks
 
-- Run the CLI from source: `node --disable-warning=ExperimentalWarning src/main.ts <command>`; needs Node 24+ for type stripping.
+- Run the CLI from source: `node src/main.ts <command>`; needs Node 24.12+ for type stripping.
 - In every shell/terminal first run `export PATH="$HOME/.local/bin:$HOME/.local/node24/bin:$PATH"` — the default `node` on PATH may be older.
 - Isolated run env: `export PROOFBOX_FAKE_ROOT="$(mktemp -d)" PROOFBOX_RUNTIME_DIR="$(mktemp -d)"` before creating sandboxes.
 - Terminal choice matters: **konsole on this box has a repaint bug** — after `clear`, freshly printed lines may not render (the text is in scrollback but invisible in screenshots/recording). Use **xterm** (`sudo apt-get install -y xterm`, then `xterm -geometry 100x30 -fa Monospace -fs 12`). In konsole, `\e[8;30;100t` resizes to 100x30 if resize needed.
