@@ -327,7 +327,10 @@ describe("Helper call time limits", () => {
       run: (id: string) =>
         dragFrom({ id, x1: 1, y1: 1, x2: 2, y2: 2, pace: "fast" }),
     },
-    { name: "mark", run: (id: string) => setMark({ id, label: "step" }) },
+    {
+      name: "mark",
+      run: (id: string) => setMark({ id, label: "step", wait: false }),
+    },
     { name: "record start", run: (id: string) => startRecording(id) },
     {
       name: "record stop",
