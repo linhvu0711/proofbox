@@ -835,6 +835,45 @@ describe("Keeper", () => {
       expect(yield* running(`sleep ${nap}`)).toBe(false);
     }).pipe(runtimeConfig(env));
   });
+  it.scoped(
+    "a Caller who gives up after its input ends is logged as gave up",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a helper call whose input is sent whole, then runs a minute
+        const keeper = yield* warmKeeper(env, { desktop: true });
+        yield* TestClock.adjust("10 minutes");
+        const caller = yield* Effect.fork(
+          runHelper(
+            keeper.id,
+            { feature: "desktop", paths: { linux: "sleep" } },
+            [nap],
+            {
+              outcome: "build",
+              stdin: Stream.make(new TextEncoder().encode("script\n")),
+              limit: { _tag: "Act", name: "build", extra: Duration.zero },
+            },
+          ).pipe(Effect.provide(keeper.layers), Effect.flip),
+        );
+        yield* eventually(running(`sleep ${nap}`));
+        yield* sleepsNear(720_000);
+        // When: its time limit passes
+        yield* TestClock.adjust("121 seconds");
+        yield* Fiber.join(caller);
+        const log = join(env.runtime, `fake-${keeper.name}.log`);
+        yield* eventually(
+          Effect.sync(
+            () =>
+              existsSync(log) &&
+              readFileSync(log, "utf8").includes("exec sleep"),
+          ),
+        );
+        // Then
+        expect(readFileSync(log, "utf8")).toMatch(/ exec sleep .* gave up\n$/);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
   it.scoped("the Keeper writes one log line per request", () => {
     const env = makeEnv();
     return Effect.gen(function* () {

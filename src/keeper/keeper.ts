@@ -91,6 +91,9 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
       const runtime = yield* Effect.runtime<CommandExecutor.CommandExecutor>();
       const handleClient = (socket: Socket) => {
         let pending = "";
+        // The lines in hand: a Caller that gives up writes its give-up
+        // frame and closes at once, so the close waits for that frame.
+        let handling: Promise<unknown> = Promise.resolve();
         // "request": waiting for the request line; "plain": no stdin, the
         // exec runs inside the line handler; "stdin": a Mailbox feeds the
         // exec's stdin from the lines that follow.
@@ -107,7 +110,8 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         // Caller ends it.
         let ending: "gave up" | "Caller left" | undefined;
         const endExec = (why: "gave up" | "Caller left") => {
-          if (running !== undefined && !execEnded) {
+          // The first reason wins: a Caller that gave up also closes.
+          if (running !== undefined && !execEnded && ending === undefined) {
             ending = why;
             void Runtime.runPromiseExit(runtime)(Fiber.interrupt(running));
           }
@@ -261,7 +265,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
             if (frame._tag === "Some" && "giveUp" in frame.value) {
               endExec("gave up");
             }
-          } else if (mode === "stdin" && mailbox !== undefined && !inputEnded) {
+          } else if (mode === "stdin" && mailbox !== undefined) {
             const frame = yield* Effect.try({
               try: () => decodeInput(JSON.parse(line)),
               catch: () =>
@@ -270,8 +274,12 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                   reason: "bad input frame",
                 }),
             });
+            // A give-up frame counts even after the input ended: a build
+            // sends its whole script, then runs.
             if ("giveUp" in frame) {
               endExec("gave up");
+            } else if (inputEnded) {
+              // The input is over; later input frames mean nothing.
             } else if ("in" in frame) {
               if (!execDone) {
                 yield* mailbox.offer(
@@ -292,7 +300,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         socket.on("data", (chunk) => {
           pending += chunk.toString("utf8");
           socket.pause();
-          void Runtime.runPromiseExit(runtime)(
+          handling = Runtime.runPromiseExit(runtime)(
             Effect.gen(function* () {
               let newline = pending.indexOf("\n");
               while (newline !== -1) {
@@ -335,19 +343,21 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         });
 
         socket.once("close", () => {
-          endExec("Caller left");
-          if (mailbox !== undefined && !inputEnded) {
-            inputEnded = true;
-            void Runtime.runPromiseExit(runtime)(
-              mailbox.fail(
-                new ProviderError({
-                  provider: id.provider.name,
-                  reason:
-                    "the client closed the connection before the input ended",
-                }),
-              ),
-            );
-          }
+          void handling.then(() => {
+            endExec("Caller left");
+            if (mailbox !== undefined && !inputEnded) {
+              inputEnded = true;
+              void Runtime.runPromiseExit(runtime)(
+                mailbox.fail(
+                  new ProviderError({
+                    provider: id.provider.name,
+                    reason:
+                      "the client closed the connection before the input ended",
+                  }),
+                ),
+              );
+            }
+          });
         });
       };
       // Under the lock, check the socket again: a Keeper that waited for
