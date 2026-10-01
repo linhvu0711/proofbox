@@ -191,14 +191,15 @@ const startOf = (pid: number): Effect.Effect<ProcessStart> =>
         }),
   );
 
-// A process that is gone answers ESRCH; EPERM means it runs as someone
-// else, which is still alive.
-const isAlive = (pid: number) => {
+// Whether this user runs a process with this id. A create mark sits in
+// this user's runtime dir, so its create ran as this user: EPERM is some
+// other user's process, which cannot be that create.
+const runsAsMe = (pid: number) => {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (cause) {
-    return hasErrorCode(cause, "EPERM");
+  } catch {
+    return false;
   }
 };
 
@@ -247,12 +248,14 @@ export const liveCreates = (
         continue;
       }
       const now = yield* startOf(Number(pid));
-      // With no start time to compare, a running process id counts: logout
-      // would rather wait than miss a host.
+      // With no start time to compare, a process id this user runs counts:
+      // logout would rather wait than miss a host.
       const running =
         now._tag === "Started"
-          ? started === "" || started === now.at
-          : now._tag === "Unknown" && isAlive(Number(pid));
+          ? started === ""
+            ? runsAsMe(Number(pid))
+            : started === now.at
+          : now._tag === "Unknown" && runsAsMe(Number(pid));
       if (running) {
         live.push(mark.name);
       }

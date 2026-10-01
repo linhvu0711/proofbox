@@ -536,4 +536,16 @@ describe("Create marks", () => {
       }).pipe(runtimeConfig(env));
     },
   );
+
+  // As root every process is this user's, so the case cannot happen.
+  it.effect.skipIf(process.getuid?.() === 0)(
+    "a create mark whose process id belongs to another user is not live",
+    () => {
+      const env = makeEnv();
+      writeFileSync(join(env.runtime, "fake-creating-1-0123abcd"), "1\n\n");
+      return Effect.gen(function* () {
+        expect(yield* liveCreates("fake")).toEqual([]);
+      }).pipe(runtimeConfig(env));
+    },
+  );
 });
