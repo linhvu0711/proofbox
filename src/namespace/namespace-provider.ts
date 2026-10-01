@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  Cause,
   Chunk,
   Clock,
   Config,
@@ -53,6 +54,7 @@ import {
   type ProviderLogin,
   SandboxInfo,
   type SandboxRef,
+  type UnfinishedSandbox,
 } from "../provider.ts";
 import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
@@ -109,6 +111,12 @@ const exec = promisify(execFile);
 
 const MAC_SCRIPT = checksScript(macChecks());
 
+// Left on a Linux host once its Sandbox is made. Docker removes the
+// container at its Deadline (`--rm`) while the host lives on a while, so
+// with no container this tells an expired Sandbox from one create never
+// finished. The login's home: the host user may not own /var/lib.
+const MADE_MARK = '"$HOME/.proofbox-made"';
+
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
   readonly login: ProviderLogin;
@@ -127,8 +135,9 @@ export const makeNamespaceProvider = (deps: {
     new ProviderError({ provider: "namespace", reason });
   const sandboxId = (ref: SandboxRef) =>
     formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
-  const gone = (ref: SandboxRef) =>
-    new SandboxGoneError({ id: sandboxId(ref) });
+  // `unfinished`: the host is there, but create never made its Sandbox.
+  const gone = (ref: SandboxRef, unfinished?: true) =>
+    new SandboxGoneError({ id: sandboxId(ref), unfinished });
   const brandFor = (ref: SandboxRef) => ({
     provider: "namespace",
     id: () => sandboxId(ref),
@@ -237,11 +246,16 @@ export const makeNamespaceProvider = (deps: {
       const stderr = result.stderr.toLowerCase();
       // The container can stop or be removed between inspect and the deadline
       // read; either way the Sandbox is gone rather than malformed.
-      const missing =
+      const removed =
         stderr.includes("no such object") ||
-        stderr.includes("no such container") ||
-        stderr.includes("is not running");
+        stderr.includes("no such container");
+      const missing = removed || stderr.includes("is not running");
       if (result.exitCode !== 0 || missing) {
+        if (removed) {
+          // No container and no mark: create never made the Sandbox.
+          const marked = yield* link.run(`test -e ${MADE_MARK}`);
+          return yield* marked.exitCode === 0 ? gone(ref) : gone(ref, true);
+        }
         if (missing) {
           return yield* gone(ref);
         }
@@ -475,22 +489,49 @@ export const makeNamespaceProvider = (deps: {
           }),
       ).then(() => {});
     });
+    // A host Namespace still makes has no link to read over yet, and one
+    // whose Sandbox state was never written reads as never made: both are
+    // Unfinished Sandboxes. Any other gone host is dropped.
+    const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       live,
-      ({ os, region, instance }) =>
-        getAs(os, { name: instance.id, region }).pipe(
-          Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
-        ),
+      ({ os, region, instance }) => {
+        const entry = {
+          name: instance.id,
+          region,
+          os,
+          createdAt: instance.createdAt,
+        };
+        if (instance.starting === true) {
+          unfinished.push(entry);
+          return Effect.succeed(undefined);
+        }
+        return getAs(os, { name: instance.id, region }).pipe(
+          Effect.catchTag("SandboxGoneError", (error) =>
+            Effect.sync(() => {
+              if (error.unfinished === true) {
+                unfinished.push(entry);
+              }
+              return undefined;
+            }),
+          ),
+        );
+      },
       { discard: false },
     );
     return {
       infos: infos.filter((info) => info !== undefined),
       unreached,
+      unfinished,
     } satisfies ListResult;
   }).pipe(
     Effect.catchTag("SandboxGoneError", () => Effect.fail(unreachable())),
     Effect.catchTag("NotLoggedInError", () =>
-      Effect.succeed({ infos: [], unreached: [] } satisfies ListResult),
+      Effect.succeed({
+        infos: [],
+        unreached: [],
+        unfinished: [],
+      } satisfies ListResult),
     ),
   );
 
@@ -695,27 +736,44 @@ export const makeNamespaceProvider = (deps: {
                 )
               : Effect.succeed(made.value),
           ),
-          // A failed create can leave a half-made host (a timed-out call
-          // may have registered it). A limit makes nothing, so skip the
-          // sweep there.
-          Effect.tapError((error) =>
-            error instanceof ProviderLimitError
+          // A failed or interrupted create can leave a half-made host (a
+          // timed-out call may have registered it, and Ctrl-C can land
+          // before the host id is known). A limit makes nothing, so skip
+          // the sweep there. A plain failure already has its one error
+          // line; once a Ctrl-C is in the cause there may be none, so a
+          // sweep that cannot finish says where to look.
+          Effect.onError((cause) =>
+            Option.exists(
+              Cause.failureOption(cause),
+              (error) => error instanceof ProviderLimitError,
+            )
               ? Effect.void
               : Effect.gen(function* () {
-                  const left = yield* api
-                    .list(region, [
-                      { name: "proofbox.create-token", value: createToken },
-                    ])
-                    .pipe(Effect.orElseSucceed(() => []));
-                  yield* Effect.forEach(
+                  const left = yield* api.list(region, [
+                    { name: "proofbox.create-token", value: createToken },
+                  ]);
+                  yield* Effect.validateAll(
                     left,
                     (instance) =>
                       api
                         .destroy(region, instance.id)
-                        .pipe(Effect.orElseSucceed(() => undefined)),
+                        .pipe(
+                          Effect.catchTag(
+                            "SandboxGoneError",
+                            () => Effect.void,
+                          ),
+                        ),
                     { discard: true },
                   );
-                }),
+                }).pipe(
+                  Effect.catchAll(() =>
+                    Cause.isInterrupted(cause)
+                      ? progress.warn(
+                          "could not delete the host this create started; it may be left. Run: proofbox list",
+                        )
+                      : Effect.void,
+                  ),
+                ),
           ),
         );
         const ref: SandboxRef = { name: instanceId, region };
@@ -849,6 +907,12 @@ export const makeNamespaceProvider = (deps: {
             }
           }),
         );
+        const marked = yield* link.run(`touch ${MADE_MARK}`);
+        if (marked.exitCode !== 0) {
+          return yield* fail(
+            `could not mark the host: ${(marked.stderr || marked.stdout).trim()}`,
+          );
+        }
         return new SandboxInfo({
           name: ref.name,
           region: ref.region,

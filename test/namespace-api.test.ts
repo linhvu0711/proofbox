@@ -99,4 +99,63 @@ describe("Namespace API", () => {
         );
       }),
   );
+
+  it.effect(
+    "list gives when each instance started and whether Namespace still makes it",
+    () =>
+      Effect.gen(function* () {
+        // Given: one instance Namespace still creates and one running
+        const ns = yield* Effect.promise(() =>
+          fakeNamespace((call) =>
+            call.method === "ListInstances"
+              ? {
+                  json: {
+                    instances: [
+                      {
+                        instanceId: "mac000000000a",
+                        status: "CREATING",
+                        createdAt: "2026-10-01T07:49:00Z",
+                      },
+                      {
+                        instanceId: "lin000000000a",
+                        status: "RUNNING",
+                        createdAt: "2026-10-01T07:40:00Z",
+                      },
+                    ],
+                  },
+                }
+              : { json: {} },
+          ),
+        );
+        // When
+        const listed = yield* makeNamespaceApi({ login })
+          .list("us", [])
+          .pipe(
+            Effect.withConfigProvider(
+              ConfigProvider.fromMap(
+                new Map([["PROOFBOX_NAMESPACE_COMPUTE_URL", ns.url]]),
+              ),
+            ),
+          );
+        // Then
+        expect(
+          listed.map(({ id, createdAt, starting }) => ({
+            id,
+            createdAt,
+            starting,
+          })),
+        ).toEqual([
+          {
+            id: "mac000000000a",
+            createdAt: new Date("2026-10-01T07:49:00Z"),
+            starting: true,
+          },
+          {
+            id: "lin000000000a",
+            createdAt: new Date("2026-10-01T07:40:00Z"),
+            starting: false,
+          },
+        ]);
+      }),
+  );
 });

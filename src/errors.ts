@@ -44,6 +44,9 @@ export class ToolBundleHashError extends Data.TaggedError(
 
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   readonly id: string;
+  // The Provider still holds the machine, but create never made it into
+  // a Sandbox: an Unfinished Sandbox.
+  readonly unfinished?: boolean | undefined;
 }> {
   get message() {
     return `Sandbox ${this.id} is gone`;

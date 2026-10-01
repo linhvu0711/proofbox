@@ -12,6 +12,7 @@ const TOKEN =
   "nsct_eyJhbGciOiJub25lIn0.eyJ0ZW5hbnRfaWQiOiJ0bnRfdGVzdCIsImV4cCI6MzI1MDM2ODAwMDB9.sig";
 
 const CREATE = ["create", "--os", "linux", "--provider", "namespace"];
+const CREATE_MACOS = ["create", "--os", "macos", "--provider", "namespace"];
 
 const nsEnv = (ns: FakeNamespace) => ({
   PROOFBOX_NAMESPACE_TOKEN: TOKEN,
@@ -144,6 +145,166 @@ describe("Namespace errors", () => {
           JSON.stringify(call.body).includes("abc123def4567"),
       ),
     ).toBe(true);
+  });
+
+  it("Ctrl-C while Namespace makes the host deletes it", async () => {
+    // Given: create answers; wait sends Ctrl-C and never answers; list
+    // finds the host by its create token
+    let interrupt = () => {};
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "WaitInstanceSync") {
+        interrupt();
+        return "hang";
+      }
+      if (call.method === "ListInstances") {
+        return { json: { instances: [{ instanceId: "abc123def4567" }] } };
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE_MACOS, {
+      set: { ...nsEnv(ns), PROOFBOX_NS_CREATE_TIMEOUT: "60s" },
+      onSpawn: (send) => {
+        interrupt = send;
+      },
+    });
+    // Then: the sweep found the host by its token and deleted it
+    expect({
+      methods: ns.calls.map((call) => call.method),
+      sweep: JSON.stringify(
+        ns.calls.find((call) => call.method === "ListInstances")?.body,
+      ).includes("proofbox.create-token"),
+      destroyed: ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => ({ region: call.region, body: call.body })),
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    }).toEqual({
+      methods: [
+        "CreateInstance",
+        "WaitInstanceSync",
+        "ListInstances",
+        "DestroyInstance",
+      ],
+      sweep: true,
+      destroyed: [{ region: "us", body: { instanceId: "abc123def4567" } }],
+      stderr: "",
+      exitCode: 125,
+    });
+  });
+
+  it("Ctrl-C after Namespace made the host still deletes it", async () => {
+    // Given: the host is made; the SSH config call sends Ctrl-C and never
+    // answers
+    let interrupt = () => {};
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "GetSSHConfig") {
+        interrupt();
+        return "hang";
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE_MACOS, {
+      set: { ...nsEnv(ns), PROOFBOX_NS_CREATE_TIMEOUT: "60s" },
+      onSpawn: (send) => {
+        interrupt = send;
+      },
+    });
+    // Then: the host was deleted by its id, with no sweep
+    expect({
+      listed: ns.calls.some((call) => call.method === "ListInstances"),
+      destroyed: ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.body),
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    }).toEqual({
+      listed: false,
+      destroyed: [{ instanceId: "abc123def4567" }],
+      stderr: "",
+      exitCode: 125,
+    });
+  });
+
+  it("Ctrl-C says to run list when the host cannot be deleted", async () => {
+    // Given: as a Ctrl-C during the wait, but the sweep's list fails
+    let interrupt = () => {};
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "WaitInstanceSync") {
+        interrupt();
+        return "hang";
+      }
+      if (call.method === "ListInstances") {
+        return { error: { code: "unavailable", message: "down" } };
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE_MACOS, {
+      set: { ...nsEnv(ns), PROOFBOX_NS_CREATE_TIMEOUT: "60s" },
+      onSpawn: (send) => {
+        interrupt = send;
+      },
+    });
+    // Then
+    expect({
+      stderr: result.stderr,
+      destroyed: ns.calls.some((call) => call.method === "DestroyInstance"),
+      exitCode: result.exitCode,
+    }).toEqual({
+      stderr:
+        "proofbox: could not delete the host this create started; it may be left. Run: proofbox list\n",
+      destroyed: false,
+      exitCode: 125,
+    });
+  });
+
+  it("delete of an Unfinished Sandbox destroys its host", async () => {
+    // Given: Namespace lists a Mac host that never got its Sandbox state
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? {
+            json: {
+              instances: [
+                {
+                  instanceId: "abc123def4567",
+                  labels: [{ name: "proofbox.os", value: "macos" }],
+                },
+              ],
+            },
+          }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["delete", "ns:us:abc123def4567"], {
+      set: nsEnv(ns),
+    });
+    // Then
+    expect({
+      stdout: result.stdout,
+      destroyed: ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.body),
+      exitCode: result.exitCode,
+    }).toEqual({
+      stdout: "Deleted ns:us:abc123def4567\n",
+      destroyed: [{ instanceId: "abc123def4567" }],
+      exitCode: 0,
+    });
   });
 
   it("create when Namespace cannot be reached says to check the network", async () => {

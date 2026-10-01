@@ -614,6 +614,26 @@ describe("Namespace Provider", () => {
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
+  it.effect("create marks a Linux host once its Sandbox is made", () =>
+    Effect.gen(function* () {
+      // Given: a link that keeps every command it runs
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: Array<string> = [];
+      const provider = makeProvider(calls, fakeDocker({}), (commandLine) => {
+        ran.push(commandLine);
+        return tenantRun(commandLine);
+      });
+      // When
+      yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then: the last command on the host is the mark
+      expect(ran.at(-1)).toBe('touch "$HOME/.proofbox-made"');
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
   it.effect("create goes to the region of an eu login", () =>
     Effect.gen(function* () {
       // Given: a login in eu
@@ -821,11 +841,176 @@ describe("Namespace Provider", () => {
       // When
       const listed = yield* provider.list;
       // Then: no api call was ever made
-      expect(listed).toEqual({ infos: [], unreached: [] });
+      expect(listed).toEqual({ infos: [], unreached: [], unfinished: [] });
       expect(yield* Ref.get(calls)).toEqual([]);
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
+
+  it.effect("list names a Mac host with no Sandbox state as unfinished", () =>
+    Effect.gen(function* () {
+      // Given: a Mac host whose state file was never written
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        () =>
+          Effect.succeed({
+            exitCode: 1,
+            stdout: "",
+            stderr: "cat: /var/proofbox/labels.json: No such file or directory",
+          }),
+        { instances: [UNFINISHED_MAC] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [
+          {
+            name: "mac000000000a",
+            region: "us",
+            os: "macos",
+            createdAt: new Date("2026-10-01T07:49:00Z"),
+          },
+        ],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list names a Linux host with no container as unfinished", () =>
+    Effect.gen(function* () {
+      // Given: a Linux host whose Sandbox container was never made
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        () =>
+          Effect.succeed({
+            exitCode: 1,
+            stdout: "",
+            stderr: "Error: No such object: proofbox-lin000",
+          }),
+        { instances: [UNFINISHED_LINUX] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [
+          {
+            name: "lin000000000a",
+            region: "us",
+            os: "linux",
+            createdAt: new Date("2026-10-01T07:49:00Z"),
+          },
+        ],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list drops a Linux host whose container stopped", () =>
+    Effect.gen(function* () {
+      // Given: the container stopped itself at its Deadline
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        () =>
+          Effect.succeed(
+            done(`${JSON.stringify({ "proofbox.name": "lin000" })}|false\n0\n`),
+          ),
+        { instances: [UNFINISHED_LINUX] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list drops a Linux host whose Sandbox expired", () =>
+    Effect.gen(function* () {
+      // Given: Docker removed the container at its Deadline; the host
+      // still has the mark create left
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        (commandLine) =>
+          Effect.succeed(
+            commandLine.includes(".proofbox-made")
+              ? done()
+              : {
+                  exitCode: 1,
+                  stdout: "",
+                  stderr: "Error: No such object: proofbox-lin000",
+                },
+          ),
+        { instances: [UNFINISHED_LINUX] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "list names a host Namespace is still starting without reading it",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace still makes the Mac host; the link counts reads
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        let reads = 0;
+        const provider = makeProvider(
+          calls,
+          fakeDocker({}),
+          () =>
+            Effect.sync(() => {
+              reads += 1;
+              return done();
+            }),
+          { instances: [{ ...UNFINISHED_MAC, starting: true }] },
+        );
+        // When
+        const listed = yield* provider.list;
+        // Then
+        expect({ unfinished: listed.unfinished, reads }).toEqual({
+          unfinished: [
+            {
+              name: "mac000000000a",
+              region: "us",
+              os: "macos",
+              createdAt: new Date("2026-10-01T07:49:00Z"),
+            },
+          ],
+          reads: 0,
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
 });
+
+// Hosts a create started and never finished, as ListInstances lists them.
+const UNFINISHED_MAC = {
+  id: "mac000000000a",
+  labels: { "proofbox.os": "macos" },
+  region: "us",
+  createdAt: new Date("2026-10-01T07:49:00Z"),
+};
+const UNFINISHED_LINUX = {
+  id: "lin000000000a",
+  labels: { "proofbox.os": "linux" },
+  region: "us",
+  createdAt: new Date("2026-10-01T07:49:00Z"),
+};
 
 const NS_ID = "ns:us:abc123def4567";
 

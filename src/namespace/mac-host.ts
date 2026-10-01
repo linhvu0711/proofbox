@@ -394,7 +394,10 @@ export const readMac = (link: Link, ref: SandboxRef) =>
     if (result.exitCode !== 0) {
       // No state file: the create never finished, so there is no Sandbox.
       if (result.stderr.includes("No such file")) {
-        return yield* new SandboxGoneError({ id: sandboxId(ref) });
+        return yield* new SandboxGoneError({
+          id: sandboxId(ref),
+          unfinished: true,
+        });
       }
       return yield* fail(
         `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,

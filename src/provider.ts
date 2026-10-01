@@ -358,14 +358,25 @@ export interface Provider {
   >;
 }
 
-// What a Provider's list gives: the Sandboxes it reached, and each place
-// it could not reach — a `list` still shows the Sandboxes it got.
+// A machine a create started at the Provider and never made into a
+// Sandbox. It has no Deadline of its own to show, only when it started.
+export interface UnfinishedSandbox {
+  readonly name: string;
+  readonly region?: string | undefined;
+  readonly os: Os;
+  readonly createdAt?: Date | undefined;
+}
+
+// What a Provider's list gives: the Sandboxes it reached, each place it
+// could not reach — a `list` still shows the Sandboxes it got — and each
+// Unfinished Sandbox it saw.
 export interface ListResult {
   readonly infos: ReadonlyArray<SandboxInfo>;
   readonly unreached: ReadonlyArray<{
     readonly where: string;
     readonly reason: string;
   }>;
+  readonly unfinished: ReadonlyArray<UnfinishedSandbox>;
 }
 
 // A Provider the registry knows by name and id prefix. Its code loads the

@@ -7,6 +7,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,6 +41,7 @@ import {
   type ProviderLogin,
   SandboxInfo,
   type SandboxRef,
+  type UnfinishedSandbox,
 } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
@@ -94,7 +96,10 @@ export const makeFakeProvider = (options: {
   const root = options.root;
   const fail = (reason: string) =>
     new ProviderError({ provider: "fake", reason });
-  const gone = (name: string) => new SandboxGoneError({ id: `fake:${name}` });
+  // `unfinished`: the folder is there, but create never wrote its
+  // sandbox.json, as a Namespace host with no Sandbox state.
+  const gone = (name: string, unfinished?: true) =>
+    new SandboxGoneError({ id: `fake:${name}`, unfinished });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
   // A fixed offline table stands in for a Provider's token check. The
@@ -131,9 +136,11 @@ export const makeFakeProvider = (options: {
       const text = yield* Effect.tryPromise({
         try: () => readFile(join(dir, "sandbox.json"), "utf8"),
         catch: (cause) =>
-          !existsSync(dir) || hasCode(cause, "ENOENT")
+          !existsSync(dir)
             ? gone(name)
-            : fail(describe(cause)),
+            : hasCode(cause, "ENOENT")
+              ? gone(name, true)
+              : fail(describe(cause)),
       });
       const json = yield* Effect.try({
         try: () => JSON.parse(text) as unknown,
@@ -353,11 +360,28 @@ export const makeFakeProvider = (options: {
     const names = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
+    // The fake has only Linux; a folder's mtime stands in for when the
+    // create started, so a test can age it.
+    const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       names,
       (name) =>
         readFileInfo(name).pipe(
-          Effect.catchTag("SandboxGoneError", () => Effect.succeed(undefined)),
+          Effect.catchTag("SandboxGoneError", (error) =>
+            error.unfinished === true
+              ? Effect.promise(() =>
+                  stat(join(root, name)).then(
+                    (info) => info.mtime,
+                    () => undefined,
+                  ),
+                ).pipe(
+                  Effect.map((createdAt) => {
+                    unfinished.push({ name, os: "linux", createdAt });
+                    return undefined;
+                  }),
+                )
+              : Effect.succeed(undefined),
+          ),
         ),
       { discard: false },
     ).pipe(Effect.map((infos) => infos.filter((info) => info !== undefined)));
@@ -370,7 +394,7 @@ export const makeFakeProvider = (options: {
               reason: `fake region ${options.unreached} did not answer`,
             },
           ];
-    return { infos, unreached };
+    return { infos, unreached, unfinished };
   });
 
   const del = (sandbox: SandboxRef) =>
@@ -392,11 +416,14 @@ export const makeFakeProvider = (options: {
               ),
             )
           : Effect.void;
-      const alive = yield* readFileInfo(name).pipe(
+      // An Unfinished Sandbox is there to delete, as its Namespace host is.
+      const present = yield* readFileInfo(name).pipe(
         Effect.map(() => true),
-        Effect.catchTag("SandboxGoneError", () => Effect.succeed(false)),
+        Effect.catchTag("SandboxGoneError", (error) =>
+          Effect.succeed(error.unfinished === true),
+        ),
       );
-      if (!alive) {
+      if (!present) {
         yield* unmark;
         return "gone" as const;
       }
