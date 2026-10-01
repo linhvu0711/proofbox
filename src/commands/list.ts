@@ -1,8 +1,15 @@
-import { Effect } from "effect";
+import { Clock, Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { formatTime } from "../format-time.ts";
 import { Providers } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
+
+// Whole minutes, so the line reads the same for the few seconds a
+// command takes.
+const startedAgo = (millis: number) => {
+  const minutes = Math.floor(millis / 60_000);
+  return minutes < 1 ? "under 1 min ago" : `${minutes} min ago`;
+};
 
 export const listSandboxes = (options: { readonly json: boolean }) =>
   Effect.gen(function* () {
@@ -13,6 +20,15 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
         provider.list.pipe(
           Effect.map((result) => ({
             unreached: result.unreached,
+            unfinished: result.unfinished.map((machine) => ({
+              id: formatSandboxId({
+                provider: provider.idPrefix,
+                region: machine.region,
+                name: machine.name,
+              }),
+              provider: provider.name,
+              machine,
+            })),
             sandboxes: result.infos.map((info) => ({
               id: formatSandboxId({
                 provider: provider.idPrefix,
@@ -29,6 +45,7 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
           Effect.catchTag("ProviderUnavailableError", (error) =>
             Effect.succeed({
               unreached: [{ where: provider.name, reason: error.message }],
+              unfinished: [],
               sandboxes: [],
             }),
           ),
@@ -41,6 +58,25 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
           `Could not list Sandboxes in ${miss.where}: ${miss.reason}\n`,
         );
       }
+    }
+    // An Unfinished Sandbox still uses quota but is not a Sandbox yet, so
+    // it is named on stderr only, oldest first, with how to delete it.
+    const nowMillis = yield* Clock.currentTimeMillis;
+    const unfinished = found
+      .flatMap((entry) => entry.unfinished)
+      .sort(
+        (a, b) =>
+          (a.machine.createdAt?.getTime() ?? nowMillis) -
+          (b.machine.createdAt?.getTime() ?? nowMillis),
+      );
+    for (const { id, provider, machine } of unfinished) {
+      const started =
+        machine.createdAt === undefined
+          ? ""
+          : `, started ${startedAgo(nowMillis - machine.createdAt.getTime())}`;
+      yield* output.err(
+        `Unfinished Sandbox ${id} (${machine.os}${started}): a create may still be making it, or one stopped part way. It counts against your ${provider} quota until you delete it. Run: proofbox delete ${id}\n`,
+      );
     }
     const sandboxes = found
       .flatMap((entry) => entry.sandboxes)

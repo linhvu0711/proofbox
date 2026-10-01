@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
@@ -23,6 +23,24 @@ describe("delete", () => {
     expect(result.stdout).toBe(`Deleted ${id}\n`);
     expect(result.exitCode).toBe(0);
     expect(existsSync(join(env.root, id.slice("fake:".length)))).toBe(false);
+  });
+
+  it("delete removes an Unfinished Sandbox", async () => {
+    // Given: a Sandbox folder a create started and never finished
+    const env = makeEnv();
+    mkdirSync(join(env.root, "uuuuuu"));
+    // When
+    const result = await runCli(env, ["delete", "fake:uuuuuu"]);
+    // Then
+    expect({
+      stdout: result.stdout,
+      left: existsSync(join(env.root, "uuuuuu")),
+      exitCode: result.exitCode,
+    }).toEqual({
+      stdout: "Deleted fake:uuuuuu\n",
+      left: false,
+      exitCode: 0,
+    });
   });
 
   it("delete of a missing Sandbox is a quiet no-op", async () => {
