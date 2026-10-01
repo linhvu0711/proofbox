@@ -1,7 +1,16 @@
-import { chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import {
+  chmod,
+  mkdir,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Config, Effect } from "effect";
+import { Config, Duration, Effect, Schedule } from "effect";
 import { ProviderError } from "../errors.ts";
 import type { SandboxRef } from "../provider.ts";
 
@@ -97,17 +106,21 @@ export const localSandboxes = (
     });
   });
 
-// A create still running leaves a create mark, `<prefix>-creating-<pid>`,
-// in the runtime dir from its login check until its Max life file is
-// written: its host can exist before that file does, so logout waits for
-// it (ADR 0016).
+// A create still running leaves a create mark,
+// `<prefix>-creating-<pid>-<random>`, in the runtime dir from its login
+// check until its Max life file is written: its host can exist before that
+// file does, so logout waits for it (ADR 0016). The random part keeps two
+// creates in one process apart.
 export const markCreate = (
   prefix: string,
 ): Effect.Effect<string, ProviderError> =>
   Effect.gen(function* () {
     const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
       .dir;
-    const path = join(dir, `${prefix}-creating-${process.pid}`);
+    const path = join(
+      dir,
+      `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
+    );
     yield* Effect.tryPromise({
       try: () => writeFile(path, `${process.pid}\n`, { mode: 0o600 }),
       catch: (cause) =>
@@ -121,6 +134,19 @@ export const markCreate = (
 
 export const unmarkCreate = (path: string) =>
   Effect.promise(() => rm(path, { force: true }).catch(() => {}));
+
+// A live create touches its mark this often; a mark left untouched for
+// STALE_MARK is stale, so a crashed create's process id, reused by some
+// other process, cannot hold logout forever.
+const MARK_BEAT = Duration.seconds(10);
+const STALE_MARK = Duration.minutes(1);
+
+// Runs until interrupted; a failed touch waits for the next beat.
+export const keepMarkFresh = (path: string) =>
+  Effect.promise(() => {
+    const now = new Date();
+    return utimes(path, now, now).catch(() => {});
+  }).pipe(Effect.repeat(Schedule.spaced(MARK_BEAT)), Effect.asVoid);
 
 // A process that is gone answers ESRCH; EPERM means it runs as someone
 // else, which is still alive.
@@ -138,24 +164,38 @@ const isAlive = (pid: number) => {
   }
 };
 
-// The process ids of the creates still running for one Provider. A mark
-// left by a create that crashed names a dead process and is skipped.
+// The marks of the creates still running for one Provider. A mark whose
+// process is gone, or that nobody touched for STALE_MARK, is skipped.
 export const liveCreates = (
   prefix: string,
-): Effect.Effect<ReadonlyArray<number>, ProviderError> =>
+): Effect.Effect<ReadonlyArray<string>, ProviderError> =>
   Effect.gen(function* () {
     const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
       .dir;
+    const oldest = Date.now() - Duration.toMillis(STALE_MARK);
     return yield* Effect.tryPromise({
-      try: async () =>
-        (await readdir(dir)).flatMap((entry) => {
-          const pid = /^(\d+)$/.exec(
+      try: async () => {
+        const live: Array<string> = [];
+        for (const entry of await readdir(dir)) {
+          const pid = /^(\d+)-[0-9a-f]+$/.exec(
             entry.startsWith(`${prefix}-creating-`)
               ? entry.slice(`${prefix}-creating-`.length)
               : "",
           )?.[1];
-          return pid !== undefined && isAlive(Number(pid)) ? [Number(pid)] : [];
-        }),
+          if (pid === undefined || !isAlive(Number(pid))) {
+            continue;
+          }
+          // A mark removed since readdir is a create that just finished.
+          const touched = await stat(join(dir, entry)).then(
+            (info) => info.mtimeMs,
+            () => 0,
+          );
+          if (touched >= oldest) {
+            live.push(entry);
+          }
+        }
+        return live;
+      },
       catch: (cause) =>
         new ProviderError({
           provider: prefix,

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Layer, Ref, Stream } from "effect";
+import { Chunk, ConfigProvider, Effect, Layer, Ref, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
@@ -67,7 +67,19 @@ const layers = (os: "linux" | "macos" = "macos") => {
     Providers,
     new Map<string, ProviderEntry>([["fake", providerEntry(provider)]]),
   );
+  // Its own runtime dir and no HOME: create marks itself nowhere real,
+  // and takes no logins lock in the developer's HOME.
+  const runtime = mkdtempSync(
+    join(
+      process.platform === "darwin" ? "/tmp" : tmpdir(),
+      "proofbox-runtime-",
+    ),
+  );
+  tempRoots.push(runtime);
   return Layer.mergeAll(
+    Layer.setConfigProvider(
+      ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+    ),
     NodeContext.layer,
     CliOutput.Test,
     providers,

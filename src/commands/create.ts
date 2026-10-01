@@ -17,8 +17,8 @@ import {
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { markCreate, unmarkCreate } from "../keeper/paths.ts";
-import { readLogins, withLoginsLock } from "../login/logins-file.ts";
+import { keepMarkFresh, markCreate, unmarkCreate } from "../keeper/paths.ts";
+import { withLoginsLock } from "../login/logins-file.ts";
 import { Progress } from "../progress.ts";
 import {
   lacksFeature,
@@ -34,37 +34,20 @@ import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
-// A create that may act with the saved login marks itself while it runs,
-// and checks for that login and writes the mark under the logins lock: a
-// logout either waits for this create or has removed the login already
-// (ADR 0016). Without a saved login there is nothing for logout to remove,
-// and the Provider's own login check decides; nor does a Provider with no
-// login need a mark.
-const markWhileLoggedIn = (provider: Provider) =>
-  Effect.gen(function* () {
-    if (provider.login._tag === "None") {
-      return Option.none<string>();
-    }
-    // A logins file it cannot read leaves the login to the Provider too.
-    const saved = readLogins.pipe(
-      Effect.map((logins) => logins[provider.name] !== undefined),
-      Effect.orElseSucceed(() => false),
-    );
-    if (!(yield* saved)) {
-      return Option.none<string>();
-    }
-    return yield* withLoginsLock(
-      Effect.gen(function* () {
-        return (yield* saved)
-          ? Option.some(yield* markCreate(provider.idPrefix))
-          : Option.none<string>();
-      }),
-    ).pipe(
-      Effect.catchTag("ConfigError", () =>
-        Effect.succeed(Option.none<string>()),
-      ),
-    );
-  });
+// A create with a Provider login marks itself while the Provider makes
+// the host, and writes the mark under the logins lock: a logout either
+// waits for this create or has removed the login already, and then the
+// Provider finds none (ADR 0016). With no HOME there is no saved login
+// for logout to remove, so no mark.
+const markCreating = (provider: Provider) =>
+  provider.login._tag === "None"
+    ? Effect.succeed(Option.none<string>())
+    : withLoginsLock(markCreate(provider.idPrefix)).pipe(
+        Effect.map(Option.some),
+        Effect.catchTag("ConfigError", () =>
+          Effect.succeed(Option.none<string>()),
+        ),
+      );
 
 export const createSandbox = (options: {
   readonly os: Os;
@@ -171,16 +154,26 @@ export const createSandbox = (options: {
             script,
             files,
           });
-    // The mark goes once the Max life file is there for logout to find.
+    const made = provider.create({
+      os: options.os,
+      idle,
+      maxLife,
+      size,
+      snapshot: fp,
+    });
+    // The mark stays fresh while the Provider works, and goes once the Max
+    // life file is there for logout to find. The touches never end on
+    // their own, so the race ends with the create.
     const info = yield* Effect.acquireUseRelease(
-      markWhileLoggedIn(provider),
-      () =>
-        provider.create({
-          os: options.os,
-          idle,
-          maxLife,
-          size,
-          snapshot: fp,
+      markCreating(provider),
+      (mark) =>
+        Option.match(mark, {
+          onNone: () => made,
+          onSome: (path) =>
+            Effect.raceFirst(
+              made,
+              keepMarkFresh(path).pipe(Effect.zipRight(Effect.never)),
+            ),
         }),
       (mark) =>
         Option.match(mark, { onNone: () => Effect.void, onSome: unmarkCreate }),

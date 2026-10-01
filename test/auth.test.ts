@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1292,7 +1293,29 @@ describe("auth", () => {
     // Given: one Sandbox, and the mark of a create that crashed
     const { env, set, unset, ids } = await fakeLoginWith(1);
     const dead = spawnSync(process.execPath, ["-e", ""]).pid;
-    writeFileSync(join(env.runtime, `fake-creating-${dead}`), `${dead}\n`);
+    writeFileSync(
+      join(env.runtime, `fake-creating-${dead}-0123abcd`),
+      `${dead}\n`,
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout skips a create mark nobody touched for a minute", async () => {
+    // Given: one Sandbox, and a crashed create's mark whose process id now
+    // belongs to a live process (this test's own)
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    const mark = join(env.runtime, `fake-creating-${process.pid}-0123abcd`);
+    writeFileSync(mark, `${process.pid}\n`);
+    const old = new Date(Date.now() - 2 * 60 * 1000);
+    utimesSync(mark, old, old);
     // When
     const result = await runCli(env, ["auth", "logout", "fake"], {
       set,
