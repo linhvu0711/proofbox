@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -80,6 +80,33 @@ describe("file-lock", () => {
       // Then
       expect(error).toBe("busy");
       expect(existsSync(lock)).toBe(true);
+    }),
+  );
+
+  it.live("a busy lock inside a traced function waits for the holder", () =>
+    Effect.gen(function* () {
+      // Given: the lock is held, and the holder lets go after 300 ms
+      const lock = join(tempDir(), "x.lock");
+      mkdirSync(lock);
+      const options = {
+        dir: lock,
+        wait: "5 seconds",
+        busy: () => new Error("busy"),
+        failed: () => new Error("failed"),
+      } as const;
+      yield* Effect.fork(
+        Effect.sleep("300 millis").pipe(
+          Effect.zipRight(Effect.sync(() => rmSync(lock, { recursive: true }))),
+        ),
+      );
+      const locked = Effect.fn("test.locked")(function* () {
+        return yield* withFileLock(options)(Effect.succeed("ran"));
+      });
+      // When
+      const result = yield* locked();
+      // Then
+      expect(result).toBe("ran");
+      expect(existsSync(lock)).toBe(false);
     }),
   );
 });

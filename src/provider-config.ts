@@ -14,8 +14,8 @@ const KNOWN_KEYS = new Set(["linux", "macos"]);
 const providerReason = (os: Os) => `"${os}" must be a Provider name`;
 
 // The config file maps each OS to a Provider name; no file means namespace.
-export const providerForOs = (os: Os) =>
-  Effect.gen(function* () {
+export const providerForOs = Effect.fn("providerConfig.providerForOs")(
+  function* (os: Os) {
     const home = yield* Config.string("HOME");
     const path = join(home, ".config", "proofbox", "config");
     const bad = (reason: string) => new BadConfigError({ path, reason });
@@ -57,4 +57,5 @@ export const providerForOs = (os: Os) =>
       return yield* bad(providerReason(os));
     }
     return name;
-  });
+  },
+);

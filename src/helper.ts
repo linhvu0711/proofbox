@@ -18,39 +18,42 @@ export interface HelperTable {
   readonly paths: Partial<Record<Os, string>>;
 }
 
-const resolveHelper = (rawId: string, table: HelperTable, outcome: string) =>
-  Effect.gen(function* () {
-    const providers = yield* Providers;
-    const id = yield* resolveSandboxId(rawId, providers);
-    const provider = id.provider;
-    const hasDesktop = Object.values(provider.offers).some((offer) =>
-      offer.features.has("desktop"),
-    );
-    if (!hasDesktop) {
-      return yield* new MissingCapabilityError({
-        provider: provider.name,
-        capability: "desktop",
-        outcome,
-      });
-    }
-    // The warm Keeper answers from what it read at connect, and pushes the
-    // Deadline in the helper's own call (ADR 0015).
-    const info = yield* (yield* KeeperClient).info(rawId);
-    const features = provider.offers[info.os]?.features;
-    if (features === undefined || !features.has("desktop")) {
-      return yield* lacksFeature(provider, info.os, "desktop", outcome);
-    }
-    if (!features.has(table.feature)) {
-      return yield* lacksFeature(provider, info.os, table.feature, outcome);
-    }
-    const helper = table.paths[info.os];
-    if (helper === undefined) {
-      return yield* lacksFeature(provider, info.os, table.feature, outcome);
-    }
-    return { provider, info, helper };
-  });
+const resolveHelper = Effect.fn("helper.resolveHelper")(function* (
+  rawId: string,
+  table: HelperTable,
+  outcome: string,
+) {
+  const providers = yield* Providers;
+  const id = yield* resolveSandboxId(rawId, providers);
+  const provider = id.provider;
+  const hasDesktop = Object.values(provider.offers).some((offer) =>
+    offer.features.has("desktop"),
+  );
+  if (!hasDesktop) {
+    return yield* new MissingCapabilityError({
+      provider: provider.name,
+      capability: "desktop",
+      outcome,
+    });
+  }
+  // The warm Keeper answers from what it read at connect, and pushes the
+  // Deadline in the helper's own call (ADR 0015).
+  const info = yield* (yield* KeeperClient).info(rawId);
+  const features = provider.offers[info.os]?.features;
+  if (features === undefined || !features.has("desktop")) {
+    return yield* lacksFeature(provider, info.os, "desktop", outcome);
+  }
+  if (!features.has(table.feature)) {
+    return yield* lacksFeature(provider, info.os, table.feature, outcome);
+  }
+  const helper = table.paths[info.os];
+  if (helper === undefined) {
+    return yield* lacksFeature(provider, info.os, table.feature, outcome);
+  }
+  return { provider, info, helper };
+});
 
-export const runHelper = (
+export const runHelper = Effect.fn("helper.runHelper")(function* (
   rawId: string,
   table: HelperTable,
   argv: ReadonlyArray<string>,
@@ -58,150 +61,148 @@ export const runHelper = (
     readonly outcome: string;
     readonly stdin?: KeeperExecOptions["stdin"];
   },
-) =>
-  Effect.gen(function* () {
-    const { provider, info, helper } = yield* resolveHelper(
+) {
+  const { provider, info, helper } = yield* resolveHelper(
+    rawId,
+    table,
+    options.outcome,
+  );
+  const keeper = yield* KeeperClient;
+  const collected = yield* Effect.gen(function* () {
+    const events = yield* keeper.exec(
       rawId,
-      table,
-      options.outcome,
+      [helper, ...argv],
+      options.stdin === undefined ? undefined : { stdin: options.stdin },
     );
-    const keeper = yield* KeeperClient;
-    const collected = yield* Effect.gen(function* () {
-      const events = yield* keeper.exec(
-        rawId,
-        [helper, ...argv],
-        options.stdin === undefined ? undefined : { stdin: options.stdin },
-      );
-      return yield* events.pipe(
-        Stream.runFold(
-          {
-            stdout: [] as Uint8Array[],
-            stderr: [] as Uint8Array[],
-            code: undefined as number | undefined,
-          },
-          (acc, event) => {
-            switch (event._tag) {
-              case "Stdout":
-                acc.stdout.push(event.bytes);
-                return acc;
-              case "Stderr":
-                acc.stderr.push(event.bytes);
-                return acc;
-              case "Exit":
-                return { ...acc, code: event.code };
-            }
-          },
-        ),
-      );
-    });
-    return {
-      provider: provider.name,
-      os: info.os,
-      code: collected.code,
-      stdout: Buffer.concat(collected.stdout),
-      stderr: Buffer.concat(collected.stderr).toString("utf8").trim(),
-    };
+    return yield* events.pipe(
+      Stream.runFold(
+        {
+          stdout: [] as Uint8Array[],
+          stderr: [] as Uint8Array[],
+          code: undefined as number | undefined,
+        },
+        (acc, event) => {
+          switch (event._tag) {
+            case "Stdout":
+              acc.stdout.push(event.bytes);
+              return acc;
+            case "Stderr":
+              acc.stderr.push(event.bytes);
+              return acc;
+            case "Exit":
+              return { ...acc, code: event.code };
+          }
+        },
+      ),
+    );
   });
+  return {
+    provider: provider.name,
+    os: info.os,
+    code: collected.code,
+    stdout: Buffer.concat(collected.stdout),
+    stderr: Buffer.concat(collected.stderr).toString("utf8").trim(),
+  };
+});
 
-export const fetchHelper = (
+export const fetchHelper = Effect.fn("helper.fetchHelper")(function* (
   rawId: string,
   table: HelperTable,
   remote: string,
   dest: string,
   options: { readonly outcome: string },
-) =>
-  Effect.gen(function* () {
-    const { provider, helper } = yield* resolveHelper(
-      rawId,
-      table,
-      options.outcome,
-    );
-    const keeper = yield* KeeperClient;
-    const collected = yield* Effect.gen(function* () {
-      const events = yield* keeper.exec(rawId, [helper, "fetch", remote]);
-      const part = `${dest}.part`;
-      return yield* Effect.acquireUseRelease(
-        Effect.sync(() => createWriteStream(part)),
-        (stream) =>
-          Effect.gen(function* () {
-            let writeError: Error | undefined;
-            stream.on("error", (error) => {
-              writeError = error;
-            });
-            const stderr: Uint8Array[] = [];
-            let code: number | undefined;
-            yield* events.pipe(
-              Stream.runForEach((event) => {
-                if (event._tag === "Stdout") {
-                  if (writeError !== undefined) {
-                    return Effect.fail(
-                      new OutFileError({
-                        path: dest,
-                        reason: describe(writeError),
-                      }),
+) {
+  const { provider, helper } = yield* resolveHelper(
+    rawId,
+    table,
+    options.outcome,
+  );
+  const keeper = yield* KeeperClient;
+  const collected = yield* Effect.gen(function* () {
+    const events = yield* keeper.exec(rawId, [helper, "fetch", remote]);
+    const part = `${dest}.part`;
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => createWriteStream(part)),
+      (stream) =>
+        Effect.gen(function* () {
+          let writeError: Error | undefined;
+          stream.on("error", (error) => {
+            writeError = error;
+          });
+          const stderr: Uint8Array[] = [];
+          let code: number | undefined;
+          yield* events.pipe(
+            Stream.runForEach((event) => {
+              if (event._tag === "Stdout") {
+                if (writeError !== undefined) {
+                  return Effect.fail(
+                    new OutFileError({
+                      path: dest,
+                      reason: describe(writeError),
+                    }),
+                  );
+                }
+                return Effect.async<void, OutFileError>((resume) => {
+                  stream.write(event.bytes, (error) => {
+                    resume(
+                      error === undefined || error === null
+                        ? Effect.void
+                        : Effect.fail(
+                            new OutFileError({
+                              path: dest,
+                              reason: describe(error),
+                            }),
+                          ),
                     );
-                  }
-                  return Effect.async<void, OutFileError>((resume) => {
-                    stream.write(event.bytes, (error) => {
-                      resume(
-                        error === undefined || error === null
-                          ? Effect.void
-                          : Effect.fail(
-                              new OutFileError({
-                                path: dest,
-                                reason: describe(error),
-                              }),
-                            ),
-                      );
-                    });
                   });
-                }
-                if (event._tag === "Stderr") {
-                  stderr.push(event.bytes);
-                } else {
-                  code = event.code;
-                }
-                return Effect.void;
-              }),
-            );
-            yield* Effect.async<void>((resume) => {
-              if (writeError !== undefined) {
-                resume(Effect.void);
-                return;
+                });
               }
-              stream.once("error", () => resume(Effect.void));
-              stream.end(() => resume(Effect.void));
-            });
+              if (event._tag === "Stderr") {
+                stderr.push(event.bytes);
+              } else {
+                code = event.code;
+              }
+              return Effect.void;
+            }),
+          );
+          yield* Effect.async<void>((resume) => {
             if (writeError !== undefined) {
-              return yield* new OutFileError({
-                path: dest,
-                reason: describe(writeError),
-              });
+              resume(Effect.void);
+              return;
             }
-            if (code === 0) {
-              yield* Effect.tryPromise({
-                try: () => rename(part, dest),
-                catch: (cause) =>
-                  new OutFileError({
-                    path: dest,
-                    reason: describe(cause),
-                  }),
-              });
-            }
-            return {
-              provider: provider.name,
-              code,
-              stderr: Buffer.concat(stderr).toString("utf8").trim(),
-            };
-          }),
-        (stream) => Effect.sync(() => stream.destroy()),
-      );
-    }).pipe(
-      Effect.onExit((exit) =>
-        Exit.isSuccess(exit) && exit.value.code === 0
-          ? Effect.void
-          : Effect.promise(() => unlink(`${dest}.part`).catch(() => {})),
-      ),
+            stream.once("error", () => resume(Effect.void));
+            stream.end(() => resume(Effect.void));
+          });
+          if (writeError !== undefined) {
+            return yield* new OutFileError({
+              path: dest,
+              reason: describe(writeError),
+            });
+          }
+          if (code === 0) {
+            yield* Effect.tryPromise({
+              try: () => rename(part, dest),
+              catch: (cause) =>
+                new OutFileError({
+                  path: dest,
+                  reason: describe(cause),
+                }),
+            });
+          }
+          return {
+            provider: provider.name,
+            code,
+            stderr: Buffer.concat(stderr).toString("utf8").trim(),
+          };
+        }),
+      (stream) => Effect.sync(() => stream.destroy()),
     );
-    return collected;
-  });
+  }).pipe(
+    Effect.onExit((exit) =>
+      Exit.isSuccess(exit) && exit.value.code === 0
+        ? Effect.void
+        : Effect.promise(() => unlink(`${dest}.part`).catch(() => {})),
+    ),
+  );
+  return collected;
+});

@@ -165,18 +165,15 @@ export const withDeadlinePush =
       const idle = Duration.seconds(info.idleSeconds);
       const push = deadlinePush(provider, sandbox, info);
       yield* push;
-      // The repeated push never completes on its own, so the winner is always
-      // the raced effect's value.
-      const result = yield* Effect.map(
-        effect.pipe(
-          Effect.raceFirst(
-            Effect.repeat(
-              push,
-              Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-            ),
-          ),
+      // The repeated push never ends (Effect.never after it), so the race
+      // gives the raced effect's value.
+      const result = yield* effect.pipe(
+        Effect.raceFirst(
+          Effect.repeat(
+            push,
+            Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
+          ).pipe(Effect.zipRight(Effect.never)),
         ),
-        (done) => done as A,
       );
       yield* push;
       return result;

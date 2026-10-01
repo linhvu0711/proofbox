@@ -69,46 +69,47 @@ const DOCKER_BRAND: ProviderBrand = {
 // Labels and the Deadline file are the whole persisted state; both the
 // local Docker Provider and the Namespace Provider build SandboxInfo the
 // same way from them.
-export const sandboxInfoFromLabels = (
+export const sandboxInfoFromLabels = Effect.fn(
+  "dockerProvider.sandboxInfoFromLabels",
+)(function* (
   brand: ProviderBrand,
   name: string,
   rawLabels: unknown,
   deadlineSeconds: number,
   region?: string,
-): Effect.Effect<SandboxInfo, ProviderError | SandboxGoneError> =>
-  Effect.gen(function* () {
-    const fail = (reason: string) =>
-      new ProviderError({ provider: brand.provider, reason });
-    const gone = new SandboxGoneError({ id: brand.id(name) });
-    const ownedBy = yield* Schema.decodeUnknown(
-      Schema.Struct({ "proofbox.name": Schema.String }),
-    )(rawLabels).pipe(Effect.option);
-    if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
-      return yield* gone;
-    }
-    const labels = yield* Schema.decodeUnknown(Labels)(rawLabels).pipe(
-      Effect.mapError((error) => fail(error.message)),
-    );
-    const sizeLabel = labels["proofbox.size"];
-    const size =
-      sizeLabel === undefined
-        ? undefined
-        : yield* parseSize(sizeLabel).pipe(
-            Effect.mapError((error) => fail(error.message)),
-          );
-    return new SandboxInfo({
-      name,
-      region,
-      os: labels["proofbox.os"],
-      createdAt: labels["proofbox.created-at"],
-      idleSeconds: labels["proofbox.idle-seconds"],
-      deadline: new Date(deadlineSeconds * 1000),
-      maxLifeAt: labels["proofbox.max-life-at"],
-      base: labels["proofbox.base-version"],
-      snapshot: labels["proofbox.snapshot"],
-      size,
-    });
+) {
+  const fail = (reason: string) =>
+    new ProviderError({ provider: brand.provider, reason });
+  const gone = new SandboxGoneError({ id: brand.id(name) });
+  const ownedBy = yield* Schema.decodeUnknown(
+    Schema.Struct({ "proofbox.name": Schema.String }),
+  )(rawLabels).pipe(Effect.option);
+  if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
+    return yield* gone;
+  }
+  const labels = yield* Schema.decodeUnknown(Labels)(rawLabels).pipe(
+    Effect.mapError((error) => fail(error.message)),
+  );
+  const sizeLabel = labels["proofbox.size"];
+  const size =
+    sizeLabel === undefined
+      ? undefined
+      : yield* parseSize(sizeLabel).pipe(
+          Effect.mapError((error) => fail(error.message)),
+        );
+  return new SandboxInfo({
+    name,
+    region,
+    os: labels["proofbox.os"],
+    createdAt: labels["proofbox.created-at"],
+    idleSeconds: labels["proofbox.idle-seconds"],
+    deadline: new Date(deadlineSeconds * 1000),
+    maxLifeAt: labels["proofbox.max-life-at"],
+    base: labels["proofbox.base-version"],
+    snapshot: labels["proofbox.snapshot"],
+    size,
   });
+});
 
 export const makeDockerProvider = (options: {
   readonly client: DockerClient;
@@ -126,50 +127,51 @@ export const makeDockerProvider = (options: {
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
   const containerOf = (name: string) => `proofbox-${name}`;
 
-  const get = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      const name = sandbox.name;
-      if (!/^[a-z0-9]{6}$/.test(name)) {
-        return yield* gone(name);
-      }
-      const container = containerOf(name);
-      const found = yield* client.inspect(container);
-      if (Option.isNone(found) || !found.value.running) {
-        return yield* gone(name);
-      }
-      const read = yield* client.execText(container, "root", [
-        "cat",
-        "/run/proofbox/deadline",
-      ]);
-      const seconds = Number(read.stdout.trim());
-      if (read.exitCode !== 0 || !Number.isFinite(seconds)) {
-        return yield* fail(
-          `could not read the Deadline: ${read.stderr.trim() || read.stdout.trim()}`,
-        );
-      }
-      return yield* sandboxInfoFromLabels(
-        brand,
-        name,
-        found.value.labels,
-        seconds,
+  const get = Effect.fn("DockerProvider.get")(function* (sandbox: SandboxRef) {
+    const name = sandbox.name;
+    if (!/^[a-z0-9]{6}$/.test(name)) {
+      return yield* gone(name);
+    }
+    const container = containerOf(name);
+    const found = yield* client.inspect(container);
+    if (Option.isNone(found) || !found.value.running) {
+      return yield* gone(name);
+    }
+    const read = yield* client.execText(container, "root", [
+      "cat",
+      "/run/proofbox/deadline",
+    ]);
+    const seconds = Number(read.stdout.trim());
+    if (read.exitCode !== 0 || !Number.isFinite(seconds)) {
+      return yield* fail(
+        `could not read the Deadline: ${read.stderr.trim() || read.stdout.trim()}`,
       );
-    });
+    }
+    return yield* sandboxInfoFromLabels(
+      brand,
+      name,
+      found.value.labels,
+      seconds,
+    );
+  });
 
-  const writeDeadline = (name: string, deadline: Date) =>
-    Effect.gen(function* () {
-      const written = yield* client.execText(containerOf(name), "root", [
-        "sh",
-        "-c",
-        'tmp=/run/proofbox/.deadline.$$; printf "%s\n" "$1" > "$tmp" && mv "$tmp" /run/proofbox/deadline',
-        "sh",
-        String(Math.floor(deadline.getTime() / 1000)),
-      ]);
-      if (written.exitCode !== 0) {
-        return yield* fail(
-          `could not write the Deadline: ${written.stderr.trim()}`,
-        );
-      }
-    });
+  const writeDeadline = Effect.fn("DockerProvider.writeDeadline")(function* (
+    name: string,
+    deadline: Date,
+  ) {
+    const written = yield* client.execText(containerOf(name), "root", [
+      "sh",
+      "-c",
+      'tmp=/run/proofbox/.deadline.$$; printf "%s\n" "$1" > "$tmp" && mv "$tmp" /run/proofbox/deadline',
+      "sh",
+      String(Math.floor(deadline.getTime() / 1000)),
+    ]);
+    if (written.exitCode !== 0) {
+      return yield* fail(
+        `could not write the Deadline: ${written.stderr.trim()}`,
+      );
+    }
+  });
 
   const extend = (sandbox: SandboxRef, deadline: Date) =>
     Effect.zipRight(get(sandbox), writeDeadline(sandbox.name, deadline));
@@ -196,43 +198,43 @@ export const makeDockerProvider = (options: {
     ),
   );
 
-  const del = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      const name = sandbox.name;
-      const found = yield* client.inspect(containerOf(name));
-      if (Option.isNone(found)) {
-        return "gone" as const;
-      }
-      const ownedBy = yield* Schema.decodeUnknown(
-        Schema.Struct({ "proofbox.name": Schema.String }),
-      )(found.value.labels).pipe(Effect.option);
-      if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
-        return "gone" as const;
-      }
-      yield* client.remove(containerOf(name));
-      return "deleted" as const;
-    });
+  const del = Effect.fn("DockerProvider.del")(function* (sandbox: SandboxRef) {
+    const name = sandbox.name;
+    const found = yield* client.inspect(containerOf(name));
+    if (Option.isNone(found)) {
+      return "gone" as const;
+    }
+    const ownedBy = yield* Schema.decodeUnknown(
+      Schema.Struct({ "proofbox.name": Schema.String }),
+    )(found.value.labels).pipe(Effect.option);
+    if (Option.isNone(ownedBy) || ownedBy.value["proofbox.name"] !== name) {
+      return "gone" as const;
+    }
+    yield* client.remove(containerOf(name));
+    return "deleted" as const;
+  });
 
-  const waitForDesktop = (container: string) =>
-    Effect.gen(function* () {
-      const cutoff = (yield* Clock.currentTimeMillis) + 30_000;
-      while (true) {
-        const result = yield* client.execText(container, "app", [
-          "xdpyinfo",
-          "-display",
-          ":99",
-        ]);
-        if (result.exitCode === 0) {
-          return;
-        }
-        if ((yield* Clock.currentTimeMillis) >= cutoff) {
-          return yield* fail("desktop did not start in 30 s");
-        }
-        yield* Effect.sleep("200 millis");
+  const waitForDesktop = Effect.fn("DockerProvider.waitForDesktop")(function* (
+    container: string,
+  ) {
+    const cutoff = (yield* Clock.currentTimeMillis) + 30_000;
+    while (true) {
+      const result = yield* client.execText(container, "app", [
+        "xdpyinfo",
+        "-display",
+        ":99",
+      ]);
+      if (result.exitCode === 0) {
+        return;
       }
-    });
+      if ((yield* Clock.currentTimeMillis) >= cutoff) {
+        return yield* fail("desktop did not start in 30 s");
+      }
+      yield* Effect.sleep("200 millis");
+    }
+  });
 
-  const createWork = (
+  const createWork = Effect.fn("DockerProvider.createWork")(function* (
     req: {
       readonly os: Os;
       readonly idle: Duration.Duration;
@@ -246,178 +248,174 @@ export const makeDockerProvider = (options: {
       readonly bundle: ReadonlyArray<ToolBundleFile>;
     },
     size?: Size,
-  ) =>
-    Effect.gen(function* () {
-      const { version, tag, bundle } = image;
-      const createdAt = yield* now;
-      const maxLifeAt =
-        req.maxLifeAt ??
-        new Date(createdAt.getTime() + Duration.toMillis(req.maxLife));
-      const firstDeadline = new Date(
-        Math.min(
-          createdAt.getTime() + Duration.toMillis(req.idle) + 60_000,
-          maxLifeAt.getTime(),
-        ),
-      );
-      let name: string | undefined;
-      const tries = req.name === undefined ? 5 : 1;
-      for (let i = 0; i < tries && name === undefined; i++) {
-        const candidate = req.name ?? makeSandboxName();
-        const result = yield* client.run([
-          "--rm",
-          "--init",
-          "--name",
-          containerOf(candidate),
-          "--hostname",
-          containerOf(candidate),
-          "--shm-size",
-          "512m",
-          "--tmpfs",
-          "/run/proofbox/secrets:mode=0700,uid=1000,gid=1000,size=1m",
-          "--label",
-          `proofbox.name=${candidate}`,
-          "--label",
-          `proofbox.os=${req.os}`,
-          "--label",
-          `proofbox.created-at=${createdAt.toISOString()}`,
-          "--label",
-          `proofbox.idle-seconds=${Duration.toSeconds(req.idle)}`,
-          "--label",
-          `proofbox.max-life-at=${maxLifeAt.toISOString()}`,
-          "--label",
-          `proofbox.base-version=${version}`,
-          ...(size === undefined
-            ? []
-            : [
-                "--cpus",
-                String(size.cpu),
-                "--memory",
-                `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
-                "--memory-swap",
-                `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
-                "--label",
-                `proofbox.size=${formatSize(size)}`,
-              ]),
-          "--env",
-          `PROOFBOX_DEADLINE=${Math.floor(firstDeadline.getTime() / 1000)}`,
-          "--env",
-          `PROOFBOX_MAX_LIFE_AT=${Math.floor(maxLifeAt.getTime() / 1000)}`,
-          ...(options.runArgs ?? []),
-          tag,
+  ) {
+    const { version, tag, bundle } = image;
+    const createdAt = yield* now;
+    const maxLifeAt =
+      req.maxLifeAt ??
+      new Date(createdAt.getTime() + Duration.toMillis(req.maxLife));
+    const firstDeadline = new Date(
+      Math.min(
+        createdAt.getTime() + Duration.toMillis(req.idle) + 60_000,
+        maxLifeAt.getTime(),
+      ),
+    );
+    let name: string | undefined;
+    const tries = req.name === undefined ? 5 : 1;
+    for (let i = 0; i < tries && name === undefined; i++) {
+      const candidate = req.name ?? makeSandboxName();
+      const result = yield* client.run([
+        "--rm",
+        "--init",
+        "--name",
+        containerOf(candidate),
+        "--hostname",
+        containerOf(candidate),
+        "--shm-size",
+        "512m",
+        "--tmpfs",
+        "/run/proofbox/secrets:mode=0700,uid=1000,gid=1000,size=1m",
+        "--label",
+        `proofbox.name=${candidate}`,
+        "--label",
+        `proofbox.os=${req.os}`,
+        "--label",
+        `proofbox.created-at=${createdAt.toISOString()}`,
+        "--label",
+        `proofbox.idle-seconds=${Duration.toSeconds(req.idle)}`,
+        "--label",
+        `proofbox.max-life-at=${maxLifeAt.toISOString()}`,
+        "--label",
+        `proofbox.base-version=${version}`,
+        ...(size === undefined
+          ? []
+          : [
+              "--cpus",
+              String(size.cpu),
+              "--memory",
+              `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
+              "--memory-swap",
+              `${size.ramGb - (options.memoryReserveGb ?? 0)}g`,
+              "--label",
+              `proofbox.size=${formatSize(size)}`,
+            ]),
+        "--env",
+        `PROOFBOX_DEADLINE=${Math.floor(firstDeadline.getTime() / 1000)}`,
+        "--env",
+        `PROOFBOX_MAX_LIFE_AT=${Math.floor(maxLifeAt.getTime() / 1000)}`,
+        ...(options.runArgs ?? []),
+        tag,
+      ]);
+      if (result.exitCode === 0) {
+        name = candidate;
+      } else if (
+        req.name === undefined &&
+        (result.stderr.includes("is already in use") ||
+          result.stderr.includes("Conflict"))
+      ) {
+      } else {
+        return yield* fail(`docker run failed: ${result.stderr.trim()}`);
+      }
+    }
+    if (name === undefined) {
+      return yield* fail("could not make a Sandbox name after 5 tries");
+    }
+    const container = containerOf(name);
+    const sandboxId = brand.id(name);
+    return yield* Effect.gen(function* () {
+      yield* waitForDesktop(container);
+      // The image could have been rebuilt or tampered with since the build;
+      // re-check every Tool bundle hash inside the container.
+      for (const file of bundle) {
+        const sum = yield* client.execText(container, "root", [
+          "sha256sum",
+          file.path,
         ]);
-        if (result.exitCode === 0) {
-          name = candidate;
-        } else if (
-          req.name === undefined &&
-          (result.stderr.includes("is already in use") ||
-            result.stderr.includes("Conflict"))
+        if (
+          sum.exitCode !== 0 ||
+          sum.stdout.trim().split(/\s+/)[0] !== file.sha256
         ) {
-        } else {
-          return yield* fail(`docker run failed: ${result.stderr.trim()}`);
+          return yield* new ToolBundleHashError({
+            file: file.path,
+            sandboxId,
+            tag,
+          });
         }
       }
-      if (name === undefined) {
-        return yield* fail("could not make a Sandbox name after 5 tries");
-      }
-      const container = containerOf(name);
-      const sandboxId = brand.id(name);
-      return yield* Effect.gen(function* () {
-        yield* waitForDesktop(container);
-        // The image could have been rebuilt or tampered with since the build;
-        // re-check every Tool bundle hash inside the container.
-        for (const file of bundle) {
-          const sum = yield* client.execText(container, "root", [
-            "sha256sum",
-            file.path,
-          ]);
-          if (
-            sum.exitCode !== 0 ||
-            sum.stdout.trim().split(/\s+/)[0] !== file.sha256
-          ) {
-            return yield* new ToolBundleHashError({
-              file: file.path,
-              sandboxId,
-              tag,
-            });
-          }
-        }
-        const finished = yield* now;
-        yield* extend(
-          { name, region: undefined },
-          nextDeadline({ now: finished, idle: req.idle, maxLifeAt }),
-        );
-        return yield* get({ name, region: undefined });
-      }).pipe(
-        Effect.catchTag("SandboxGoneError", () =>
-          Effect.fail(fail("the container died during Sandbox creation")),
-        ),
-        Effect.onError(() => Effect.ignore(client.remove(container))),
+      const finished = yield* now;
+      yield* extend(
+        { name, region: undefined },
+        nextDeadline({ now: finished, idle: req.idle, maxLifeAt }),
       );
-    });
+      return yield* get({ name, region: undefined });
+    }).pipe(
+      Effect.catchTag("SandboxGoneError", () =>
+        Effect.fail(fail("the container died during Sandbox creation")),
+      ),
+      Effect.onError(() => Effect.ignore(client.remove(container))),
+    );
+  });
 
-  const create = (req: {
+  const create = Effect.fn("DockerProvider.create")(function* (req: {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
     readonly size?: Size | undefined;
     readonly name?: string | undefined;
-  }) =>
-    Effect.gen(function* () {
-      // Prove the daemon answers before anything is made — and before the
-      // progress line prints, so a dead daemon reports only the error.
-      const arch = yield* client.serverArch;
-      const version = yield* baseImageVersion(
-        BASE_IMAGE_DIR,
-        LINUX_TOOL_BUNDLE,
-      );
-      const bundle = yield* toolBundleForArch(arch);
-      const tag = options.imageTag ?? baseImageTag(version);
-      yield* ensureBaseImage(
-        client,
-        {
-          dir: BASE_IMAGE_DIR,
-          tag,
-          buildArgs: { BASE_VERSION: version, ...toolBundleArgs(bundle) },
-        },
-        { registry: options.registry },
-      );
-      const progress = yield* Progress;
-      return yield* progress.step(
-        "creating docker Sandbox",
-        createWork(req, { version, tag, bundle }, req.size),
-      );
-    });
+  }) {
+    // Prove the daemon answers before anything is made — and before the
+    // progress line prints, so a dead daemon reports only the error.
+    const arch = yield* client.serverArch;
+    const version = yield* baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE);
+    const bundle = yield* toolBundleForArch(arch);
+    const tag = options.imageTag ?? baseImageTag(version);
+    yield* ensureBaseImage(
+      client,
+      {
+        dir: BASE_IMAGE_DIR,
+        tag,
+        buildArgs: { BASE_VERSION: version, ...toolBundleArgs(bundle) },
+      },
+      { registry: options.registry },
+    );
+    const progress = yield* Progress;
+    return yield* progress.step(
+      "creating docker Sandbox",
+      createWork(req, { version, tag, bundle }, req.size),
+    );
+  });
 
-  const connect = (sandbox: SandboxRef) =>
-    Effect.gen(function* () {
-      const info = yield* get(sandbox);
-      const container = containerOf(sandbox.name);
-      return {
-        info,
-        get: get(sandbox),
-        extend: (deadline: Date) => writeDeadline(sandbox.name, deadline),
-        // One root `docker exec` per command: the script pushes, counts, and
-        // drops to `app` around it (ADR 0015).
-        exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-          Stream.unwrap(
-            Effect.map(Clock.currentTimeMillis, (nowMillis) =>
-              splitChecks(
-                client.execStream(
-                  container,
-                  checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
-                  options,
-                  "root",
-                ),
-                {
-                  gone: () => gone(sandbox.name),
-                  pushFailed: (detail) =>
-                    fail(`could not write the Deadline: ${detail}`),
-                },
+  const connect = Effect.fn("DockerProvider.connect")(function* (
+    sandbox: SandboxRef,
+  ) {
+    const info = yield* get(sandbox);
+    const container = containerOf(sandbox.name);
+    return {
+      info,
+      get: get(sandbox),
+      extend: (deadline: Date) => writeDeadline(sandbox.name, deadline),
+      // One root `docker exec` per command: the script pushes, counts, and
+      // drops to `app` around it (ADR 0015).
+      exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+        Stream.unwrap(
+          Effect.map(Clock.currentTimeMillis, (nowMillis) =>
+            splitChecks(
+              client.execStream(
+                container,
+                checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
+                options,
+                "root",
               ),
+              {
+                gone: () => gone(sandbox.name),
+                pushFailed: (detail) =>
+                  fail(`could not write the Deadline: ${detail}`),
+              },
             ),
           ),
-      };
-    });
+        ),
+    };
+  });
 
   return {
     name: "docker",

@@ -152,43 +152,42 @@ export const makeDockerClient = (
     return result.stdout.trim();
   });
 
-  const imageExists = (tag: string) =>
-    Effect.gen(function* () {
-      const result = yield* capture(["image", "inspect", tag]);
-      if (result.exitCode === 0) {
-        return true;
-      }
-      if (isDown(result)) {
-        return yield* unavailable();
-      }
-      return false;
-    });
+  const imageExists = Effect.fn("DockerClient.imageExists")(function* (
+    tag: string,
+  ) {
+    const result = yield* capture(["image", "inspect", tag]);
+    if (result.exitCode === 0) {
+      return true;
+    }
+    if (isDown(result)) {
+      return yield* unavailable();
+    }
+    return false;
+  });
 
-  const pull = (tag: string) =>
-    Effect.gen(function* () {
-      const result = yield* capture(["pull", tag]);
-      if (result.exitCode === 0) {
-        return true;
-      }
-      if (isDown(result)) {
-        return yield* unavailable();
-      }
-      return false;
-    });
+  const pull = Effect.fn("DockerClient.pull")(function* (tag: string) {
+    const result = yield* capture(["pull", tag]);
+    if (result.exitCode === 0) {
+      return true;
+    }
+    if (isDown(result)) {
+      return yield* unavailable();
+    }
+    return false;
+  });
 
-  const push = (tag: string) =>
-    Effect.gen(function* () {
-      const result = yield* capture(["push", tag]);
-      if (result.exitCode !== 0) {
-        return yield* refuse("docker push failed", result);
-      }
-    });
+  const push = Effect.fn("DockerClient.push")(function* (tag: string) {
+    const result = yield* capture(["push", tag]);
+    if (result.exitCode !== 0) {
+      return yield* refuse("docker push failed", result);
+    }
+  });
 
-  const build = (image: {
+  const build = Effect.fn("DockerClient.build")(function* (image: {
     readonly dir: string;
     readonly tag: string;
     readonly buildArgs: Readonly<Record<string, string>>;
-  }) => {
+  }) {
     const args = ["build", "--progress=plain", "-t", image.tag];
     for (const [key, value] of Object.entries(image.buildArgs)) {
       args.push("--build-arg", `${key}=${value}`);
@@ -196,7 +195,7 @@ export const makeDockerClient = (
     if (remote !== undefined) {
       // The remote host cannot see the local context directory; stream a
       // tar of it over the ssh link into `docker build -`.
-      return Effect.scoped(
+      return yield* Effect.scoped(
         Effect.gen(function* () {
           const process = yield* Command.start(
             Command.pipeTo(
@@ -235,13 +234,11 @@ export const makeDockerClient = (
         }),
       );
     }
-    return Effect.gen(function* () {
-      const result = yield* capture([...args, image.dir]);
-      if (result.exitCode !== 0) {
-        return yield* refuse("docker build failed", result);
-      }
-    });
-  };
+    const result = yield* capture([...args, image.dir]);
+    if (result.exitCode !== 0) {
+      return yield* refuse("docker build failed", result);
+    }
+  });
 
   const run = (args: ReadonlyArray<string>) => capture(["run", "-d", ...args]);
 
@@ -289,37 +286,38 @@ export const makeDockerClient = (
     );
   };
 
-  const inspect = (container: string) =>
-    Effect.gen(function* () {
-      const result = yield* capture([
-        "inspect",
-        container,
-        "--format",
-        "{{json .Config.Labels}}|{{.State.Running}}",
-      ]);
-      if (result.exitCode !== 0) {
-        if (isDown(result)) {
-          return yield* unavailable();
-        }
-        if (result.stderr.toLowerCase().includes("no such object")) {
-          return Option.none();
-        }
-        return yield* refuse("docker inspect failed", result);
+  const inspect = Effect.fn("DockerClient.inspect")(function* (
+    container: string,
+  ) {
+    const result = yield* capture([
+      "inspect",
+      container,
+      "--format",
+      "{{json .Config.Labels}}|{{.State.Running}}",
+    ]);
+    if (result.exitCode !== 0) {
+      if (isDown(result)) {
+        return yield* unavailable();
       }
-      const text = result.stdout.trim();
-      const separator = text.lastIndexOf("|");
-      if (separator === -1) {
-        return yield* fail(`bad docker inspect output: ${text}`);
+      if (result.stderr.toLowerCase().includes("no such object")) {
+        return Option.none();
       }
-      const labels = yield* Effect.try({
-        try: () => JSON.parse(text.slice(0, separator)) as unknown,
-        catch: (cause) => fail(describe(cause)),
-      });
-      return Option.some({
-        labels,
-        running: text.slice(separator + 1) === "true",
-      });
+      return yield* refuse("docker inspect failed", result);
+    }
+    const text = result.stdout.trim();
+    const separator = text.lastIndexOf("|");
+    if (separator === -1) {
+      return yield* fail(`bad docker inspect output: ${text}`);
+    }
+    const labels = yield* Effect.try({
+      try: () => JSON.parse(text.slice(0, separator)) as unknown,
+      catch: (cause) => fail(describe(cause)),
     });
+    return Option.some({
+      labels,
+      running: text.slice(separator + 1) === "true",
+    });
+  });
 
   const listNames = Effect.gen(function* () {
     const result = yield* capture([
@@ -338,13 +336,14 @@ export const makeDockerClient = (
       .filter((line) => line.length > 0);
   });
 
-  const remove = (container: string) =>
-    Effect.gen(function* () {
-      const result = yield* capture(["rm", "-f", container]);
-      if (result.exitCode !== 0) {
-        return yield* refuse("docker rm failed", result);
-      }
-    });
+  const remove = Effect.fn("DockerClient.remove")(function* (
+    container: string,
+  ) {
+    const result = yield* capture(["rm", "-f", container]);
+    if (result.exitCode !== 0) {
+      return yield* refuse("docker rm failed", result);
+    }
+  });
 
   return {
     serverArch,

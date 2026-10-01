@@ -11,8 +11,8 @@ const startedAgo = (millis: number) => {
   return minutes < 1 ? "under 1 min ago" : `${minutes} min ago`;
 };
 
-export const listSandboxes = (options: { readonly json: boolean }) =>
-  Effect.gen(function* () {
+export const listSandboxes = Effect.fn("list.listSandboxes")(
+  function* (options: { readonly json: boolean }) {
     const providers = yield* Providers;
     const output = yield* CliOutput;
     const found = yield* Effect.forEach([...providers.entries()], ([, entry]) =>
@@ -106,4 +106,5 @@ export const listSandboxes = (options: { readonly json: boolean }) =>
         )}\n`,
       );
     }
-  });
+  },
+);

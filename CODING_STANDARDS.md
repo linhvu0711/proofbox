@@ -115,6 +115,8 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - An effect written once, inside other code, is `Effect.gen`. (effect-gen)
 - A combinator gets a lambda, never a bare function name: `Effect.map((value) => Option.some(value))`, not `Effect.map(Option.some)`. (effect-guidelines)
   A bare name can lose generic types and makes stack traces less clear.
+- Code tells one failure from another by `instanceof` or `_tag`, never by `===` against a saved error.
+  Inside a span, as in an `Effect.fn`, `Effect.fail` hands on a Proxy of the error, so `===` is false.
 - A service with code is `Effect.Service<Self>()("proofbox/Name", …)`. A service that is a plain value is a `Context.Tag`. (effect-services)
 - Data that crosses an edge (JSON on disk, a Keeper frame, CLI input) is a `Schema`. Its type comes from the schema, never from a second `interface`. (effect-schema)
 - A count or a duration in a schema is `Schema.Number.pipe(Schema.int(), Schema.positive())`, or `Schema.nonNegative()` when zero is valid.

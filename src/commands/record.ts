@@ -44,29 +44,30 @@ const StoppedRecording = Schema.Struct({
   ),
 });
 
-export const startRecording = (id: string) =>
-  Effect.gen(function* () {
-    const started = yield* runHelper(id, RECORD_HELPER, ["start"], {
-      outcome: "no Recording was started",
+export const startRecording = Effect.fn("record.startRecording")(function* (
+  id: string,
+) {
+  const started = yield* runHelper(id, RECORD_HELPER, ["start"], {
+    outcome: "no Recording was started",
+  });
+  if (started.code === 4) {
+    return yield* new RecordingRunningError({ id });
+  }
+  if (started.code !== 0) {
+    return yield* new ProviderError({
+      provider: started.provider,
+      reason: `Recording helper failed: ${started.stderr}`,
     });
-    if (started.code === 4) {
-      return yield* new RecordingRunningError({ id });
-    }
-    if (started.code !== 0) {
-      return yield* new ProviderError({
-        provider: started.provider,
-        reason: `Recording helper failed: ${started.stderr}`,
-      });
-    }
-  }).pipe(Effect.scoped);
+  }
+}, Effect.scoped);
 
-export const stopRecording = (options: {
-  readonly id: string;
-  readonly out?: string | undefined;
-  readonly discard?: boolean | undefined;
-  readonly maxSize?: number | undefined;
-}) =>
-  Effect.gen(function* () {
+export const stopRecording = Effect.fn("record.stopRecording")(
+  function* (options: {
+    readonly id: string;
+    readonly out?: string | undefined;
+    readonly discard?: boolean | undefined;
+    readonly maxSize?: number | undefined;
+  }) {
     if (options.out === undefined && options.discard !== true) {
       return yield* new StopFlagsError({ both: false });
     }
@@ -210,22 +211,21 @@ export const stopRecording = (options: {
               screen: { width: info.width, height: info.height },
             },
       );
-      const encode = (crf: number) =>
-        Effect.gen(function* () {
-          const built = yield* runHelper(
-            options.id,
-            RECORD_HELPER,
-            ["build", info.dir, String(crf)],
-            {
-              outcome: "no Proof video was made",
-              stdin: Stream.make(new TextEncoder().encode(script)),
-            },
-          );
-          if (built.code !== 0) {
-            return yield* helperFailed(built);
-          }
-          return Number(built.stdout.toString("utf8").trim());
-        });
+      const encode = Effect.fn("record.encode")(function* (crf: number) {
+        const built = yield* runHelper(
+          options.id,
+          RECORD_HELPER,
+          ["build", info.dir, String(crf)],
+          {
+            outcome: "no Proof video was made",
+            stdin: Stream.make(new TextEncoder().encode(script)),
+          },
+        );
+        if (built.code !== 0) {
+          return yield* helperFailed(built);
+        }
+        return Number(built.stdout.toString("utf8").trim());
+      });
       yield* encodeUnderLimit(encode, {
         limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
         raw: `${info.dir}/raw.mkv`,
@@ -260,4 +260,6 @@ export const stopRecording = (options: {
     }
     const output = yield* CliOutput;
     yield* output.out(`${lines.join("\n")}\n`);
-  }).pipe(Effect.scoped);
+  },
+  Effect.scoped,
+);

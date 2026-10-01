@@ -51,9 +51,7 @@ const fakeSshForward = (log: string) => {
 };
 
 describe("ssh link", () => {
-  const originalPath = process.env.PATH;
   afterEach(() => {
-    process.env.PATH = originalPath;
     cleanupEnvs();
   });
 
@@ -61,7 +59,6 @@ describe("ssh link", () => {
     "the link dials the GetSSHConfig endpoint with its key and pinned host keys",
     () => {
       const fake = fakeSsh();
-      process.env.PATH = `${fake.binDir}:${originalPath}`;
       const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
       return Effect.gen(function* () {
         const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
@@ -99,7 +96,7 @@ describe("ssh link", () => {
         // the create-time local public key otherwise.
         const sshKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
         // When
-        const link = yield* makeOpenLink(api, executor)(
+        const link = yield* makeOpenLink(api, executor, fake.path)(
           { name: "abc123def4567", region: "us" },
           paths,
           "keeper",
@@ -137,7 +134,6 @@ describe("ssh link", () => {
       const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
       const log = join(runtime, "ssh.log");
       const fake = fakeSshForward(log);
-      process.env.PATH = `${fake.binDir}:${originalPath}`;
       return Effect.gen(function* () {
         const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
           [],
@@ -166,10 +162,11 @@ describe("ssh link", () => {
         };
         const executor = yield* CommandExecutor.CommandExecutor;
         // When
-        const forward = yield* makeSshForward(api, executor)(
-          { name: "abc123def4567", region: "us" },
-          5900,
-        );
+        const forward = yield* makeSshForward(
+          api,
+          executor,
+          fake.path,
+        )({ name: "abc123def4567", region: "us" }, 5900);
         // Then: GetSSHConfig was asked in the id's region for its instance
         expect(yield* Ref.get(asked)).toEqual([["us", "abc123def4567"]]);
         // ... and the reported port is the one ssh bound

@@ -111,6 +111,7 @@ const down = (detail: string) => new LinkDownError({ detail });
 export const makeOpenLink = (
   api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
+  sshBin = "ssh",
 ): OpenLink => {
   const sshError = (error: {
     readonly _tag: string;
@@ -153,7 +154,7 @@ export const makeOpenLink = (
 
   const checkCtl = (ctl: string, target: string) =>
     Command.exitCode(
-      Command.make("ssh", "-S", ctl, "-O", "check", target),
+      Command.make(sshBin, "-S", ctl, "-O", "check", target),
     ).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.map((code) => code === 0),
@@ -161,7 +162,9 @@ export const makeOpenLink = (
     );
 
   const exitCtl = (ctl: string, target: string) =>
-    Command.exitCode(Command.make("ssh", "-S", ctl, "-O", "exit", target)).pipe(
+    Command.exitCode(
+      Command.make(sshBin, "-S", ctl, "-O", "exit", target),
+    ).pipe(
       Effect.provideService(CommandExecutor.CommandExecutor, executor),
       Effect.catchAll(() => Effect.succeed(0)),
       Effect.asVoid,
@@ -173,7 +176,7 @@ export const makeOpenLink = (
         Effect.scoped(
           Effect.gen(function* () {
             const process = yield* Command.start(
-              Command.make("ssh", ...ssh, commandLine),
+              Command.make(sshBin, ...ssh, commandLine),
             ).pipe(
               Effect.provideService(CommandExecutor.CommandExecutor, executor),
               Effect.mapError((error) => sshError(error)),
@@ -212,7 +215,7 @@ export const makeOpenLink = (
         (commandLine: string, options?: ExecOptions) =>
           commandEvents<ProviderError | ProviderUnavailableError>(
             executor,
-            Command.make("ssh", "-T", ...ssh, commandLine),
+            Command.make(sshBin, "-T", ...ssh, commandLine),
             options,
             {
               spawn: sshError,
@@ -348,7 +351,7 @@ export const makeOpenLink = (
           const master = yield* Effect.acquireRelease(
             Effect.gen(function* () {
               const process = yield* Command.start(
-                Command.make("ssh", "-M", "-N", ...ssh),
+                Command.make(sshBin, "-M", "-N", ...ssh),
               ).pipe(
                 Effect.provideService(
                   CommandExecutor.CommandExecutor,
@@ -489,6 +492,7 @@ export type SshForward = (
 export const makeSshForward = (
   api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
+  sshBin = "ssh",
 ): SshForward => {
   let seq = 0;
   const fail = (reason: string) =>
@@ -558,7 +562,7 @@ export const makeSshForward = (
       const proc = yield* Effect.acquireRelease(
         Command.start(
           Command.make(
-            "ssh",
+            sshBin,
             "-N",
             "-T",
             "-v",
