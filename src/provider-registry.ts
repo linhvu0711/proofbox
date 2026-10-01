@@ -55,6 +55,7 @@ export const ProvidersLive = Layer.effect(
           root: fakeRoot.value,
           watch: "process",
           login: loginFor("fake"),
+          marksLocal: true,
           unreached: Option.getOrUndefined(unreached),
           listDown: Option.getOrUndefined(listDown),
           snapshots: Option.isSome(snapshotsRoot)

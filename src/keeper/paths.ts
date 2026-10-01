@@ -1,8 +1,9 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, Effect } from "effect";
 import { ProviderError } from "../errors.ts";
+import type { SandboxRef } from "../provider.ts";
 
 export interface KeeperPaths {
   readonly dir: string;
@@ -61,4 +62,37 @@ export const keeperPaths = (id: {
       deadline: join(dir, `${stem}.deadline`),
       os: join(dir, `${stem}.os`),
     };
+  });
+
+// The Sandboxes this machine started for one Provider: each has a Max life
+// file in the runtime dir, which the detached host-expiry watches, so these
+// are the Sandboxes that need this machine's login to stop. The file stem
+// is `fileStem`'s `<region>:<name>`, or `<name>` without a region.
+export const localSandboxes = (
+  prefix: string,
+): Effect.Effect<ReadonlyArray<SandboxRef>, ProviderError> =>
+  Effect.gen(function* () {
+    const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
+      .dir;
+    const entries = yield* Effect.tryPromise({
+      try: () => readdir(dir),
+      catch: (cause) =>
+        new ProviderError({
+          provider: prefix,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    });
+    return entries.flatMap((entry) => {
+      const stem = /^(.+)\.max-life$/.exec(entry)?.[1];
+      if (stem === undefined || !stem.startsWith(`${prefix}-`)) {
+        return [];
+      }
+      const rest = stem.slice(prefix.length + 1);
+      const colon = rest.lastIndexOf(":");
+      return [
+        colon === -1
+          ? { name: rest, region: undefined }
+          : { name: rest.slice(colon + 1), region: rest.slice(0, colon) },
+      ];
+    });
   });

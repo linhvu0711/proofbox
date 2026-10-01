@@ -27,7 +27,8 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { KeeperClient } from "../keeper/keeper-client.ts";
+import { keeperPaths, localSandboxes } from "../keeper/paths.ts";
 import {
   changeLogins,
   readLogins,
@@ -306,8 +307,10 @@ export const showAuthStatus = Effect.gen(function* () {
   }
 });
 
-// Logout lists the still-running Sandboxes as the result, removes the
-// saved slot whatever `list` gives, and says what it did on stderr.
+// Logout deletes the Sandboxes this machine started, since their
+// host-expiry needs the login it is about to remove (ADR 0016), then
+// removes the saved slot and says what it did on stderr. The deleted ids
+// are the result on stdout.
 export const logoutOfProvider = (name: string) =>
   Effect.gen(function* () {
     const { provider } = yield* loginPartFor(name);
@@ -318,6 +321,22 @@ export const logoutOfProvider = (name: string) =>
       return;
     }
     const listed = yield* Effect.either(provider.list);
+    const keeper = yield* KeeperClient;
+    const deleted: Array<string> = [];
+    for (const ref of yield* localSandboxes(provider.idPrefix)) {
+      const id = formatSandboxId({
+        provider: provider.idPrefix,
+        region: ref.region,
+        name: ref.name,
+      });
+      // "gone" counts too: the host is already down, and delete dropped
+      // its files.
+      const result = yield* Effect.either(provider.delete(ref));
+      yield* keeper.stop(id);
+      if (Either.isRight(result)) {
+        deleted.push(id);
+      }
+    }
     const before = yield* changeLogins((saved) => {
       const rest = { ...saved };
       delete rest[provider.name];
@@ -348,26 +367,19 @@ export const logoutOfProvider = (name: string) =>
           }),
       });
     }
-    if (Either.isLeft(listed)) {
-      yield* output.err(
-        `Logged out of ${provider.name}. Could not check for running Sandboxes. Any left stop at their Deadline.\n`,
-      );
-      return;
-    }
-    const infos = listed.right.infos;
     const note =
-      infos.length === 0
+      deleted.length === 0
         ? ""
-        : infos.length === 1
-          ? " 1 Sandbox still runs. It stops at its Deadline."
-          : ` ${infos.length} Sandboxes still run. They stop at their Deadline.`;
+        : deleted.length === 1
+          ? " Deleted 1 Sandbox."
+          : ` Deleted ${deleted.length} Sandboxes.`;
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
-    for (const miss of listed.right.unreached) {
-      yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
+    if (Either.isRight(listed)) {
+      for (const miss of listed.right.unreached) {
+        yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
+      }
     }
-    for (const info of infos) {
-      yield* output.out(
-        `${formatSandboxId({ provider: provider.idPrefix, region: info.region, name: info.name })}\n`,
-      );
+    for (const id of deleted) {
+      yield* output.out(`${id}\n`);
     }
   });
