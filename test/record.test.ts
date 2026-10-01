@@ -27,7 +27,7 @@ import {
   providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { sleepsFrom } from "./support/clock.ts";
+import { sleepsNear } from "./support/clock.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -342,11 +342,12 @@ describe("Recording and the Proof video", () => {
       tempRoots.push(root, runtime);
       const mac = stoppingMac(root, Stream.never);
       return Effect.gen(function* () {
-        // Given: a 300 s Recording whose check never answers
+        // Given: a 300 s Recording whose check never answers, on a Sandbox
+        // that outlasts the test
         const info = yield* mac.create({
           os: "macos",
-          idle: Duration.minutes(5),
-          maxLife: Duration.hours(1),
+          idle: Duration.hours(1),
+          maxLife: Duration.hours(2),
         });
         const id = `fake:${info.name}`;
         const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
@@ -355,7 +356,7 @@ describe("Recording and the Proof video", () => {
         const fiber = yield* Effect.fork(
           Effect.flip(stopRecording({ id, out: join(dir, "proof.mp4") })),
         );
-        yield* sleepsFrom(420_000);
+        yield* sleepsNear(420_000);
         yield* TestClock.adjust("421 seconds");
         const error = yield* Fiber.join(fiber);
         // Then
@@ -394,11 +395,12 @@ describe("Recording and the Proof video", () => {
         ),
       );
       return Effect.gen(function* () {
-        // Given: a 300 s Recording whose check answers after 400 s
+        // Given: a 300 s Recording whose check answers after 400 s, on a
+        // Sandbox that outlasts the test
         const info = yield* mac.create({
           os: "macos",
-          idle: Duration.minutes(5),
-          maxLife: Duration.hours(1),
+          idle: Duration.hours(1),
+          maxLife: Duration.hours(2),
         });
         const id = `fake:${info.name}`;
         const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
@@ -407,7 +409,7 @@ describe("Recording and the Proof video", () => {
         const fiber = yield* Effect.fork(
           Effect.flip(stopRecording({ id, out: join(dir, "proof.mp4") })),
         );
-        yield* sleepsFrom(400_000);
+        yield* sleepsNear(400_000);
         yield* TestClock.adjust("401 seconds");
         const error = yield* Fiber.join(fiber);
         // Then

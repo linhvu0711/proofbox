@@ -39,7 +39,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
-import { sleepsFrom } from "./support/clock.ts";
+import { sleepsNear } from "./support/clock.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -102,7 +102,9 @@ const layers = (mac: Provider) => {
 };
 
 // A stub Mac made at t=0, the runtime folder its Keeper log goes in, and
-// the layers and config a command needs to reach it.
+// the layers and config a command needs to reach it. Its idle time and
+// life outlast every test, so a Deadline push the busy test machine runs
+// late never lets it expire.
 const macSandbox = (answer: Answer) =>
   Effect.gen(function* () {
     const root = tempDir("proofbox-fake-");
@@ -111,8 +113,8 @@ const macSandbox = (answer: Answer) =>
     const info = yield* mac
       .create({
         os: "macos",
-        idle: Duration.minutes(5),
-        maxLife: Duration.hours(1),
+        idle: Duration.hours(1),
+        maxLife: Duration.hours(2),
       })
       .pipe(Effect.provideService(Progress, noProgress));
     return {
@@ -181,9 +183,9 @@ describe("Helper call time limits", () => {
           const fiber = yield* Effect.fork(
             Effect.flip(takeScreenshot(sandbox.id, out)),
           );
-          yield* sleepsFrom(120_000);
+          yield* sleepsNear(120_000);
           yield* TestClock.adjust("121 seconds");
-          yield* sleepsFrom(240_000);
+          yield* sleepsNear(240_000);
           yield* TestClock.adjust("130 seconds");
           return yield* Fiber.join(fiber);
         }),
@@ -206,9 +208,9 @@ describe("Helper call time limits", () => {
           const fiber = yield* Effect.fork(
             Effect.flip(takeScreenshot(sandbox.id, out)),
           );
-          yield* sleepsFrom(120_000);
+          yield* sleepsNear(120_000);
           yield* TestClock.adjust("121 seconds");
-          yield* sleepsFrom(240_000);
+          yield* sleepsNear(240_000);
           yield* TestClock.adjust("130 seconds");
           return yield* Fiber.join(fiber);
         }),
@@ -229,9 +231,9 @@ describe("Helper call time limits", () => {
         const printed = yield* sandbox.provide(
           Effect.gen(function* () {
             const fiber = yield* Effect.fork(takeScreenshot(sandbox.id, out));
-            yield* sleepsFrom(120_000);
+            yield* sleepsNear(120_000);
             yield* TestClock.adjust("121 seconds");
-            yield* sleepsFrom(240_000);
+            yield* sleepsNear(240_000);
             const printed = {
               err: yield* captured("err"),
               out: yield* captured("out"),
@@ -266,7 +268,7 @@ describe("Helper call time limits", () => {
         const err = yield* sandbox.provide(
           Effect.gen(function* () {
             const fiber = yield* Effect.fork(takeScreenshot(sandbox.id, out));
-            yield* sleepsFrom(43_000, 120_000);
+            yield* sleepsNear(43_000, 120_000);
             yield* TestClock.adjust("44 seconds");
             yield* Fiber.join(fiber);
             return yield* captured("err");
@@ -343,7 +345,7 @@ describe("Helper call time limits", () => {
         const error = yield* sandbox.provide(
           Effect.gen(function* () {
             const fiber = yield* Effect.fork(Effect.flip(run(sandbox.id)));
-            yield* sleepsFrom(120_000);
+            yield* sleepsNear(120_000);
             yield* TestClock.adjust("121 seconds");
             yield* TestClock.adjust("200 seconds");
             return yield* Fiber.join(fiber);
@@ -375,7 +377,7 @@ describe("Helper call time limits", () => {
               }),
             ),
           );
-          yield* sleepsFrom(120_000);
+          yield* sleepsNear(120_000);
           yield* TestClock.adjust("122 seconds");
           return yield* Fiber.join(fiber);
         }),
@@ -407,7 +409,7 @@ describe("Helper call time limits", () => {
               typeMax: "200s",
             }),
           );
-          yield* sleepsFrom(150_000);
+          yield* sleepsNear(150_000);
           yield* TestClock.adjust("151 seconds");
           yield* Fiber.join(fiber);
           return yield* captured("err");
@@ -447,7 +449,7 @@ describe("Helper call time limits", () => {
           Effect.gen(function* () {
             const fiber = yield* Effect.fork(fetchVideo(sandbox.id, dest));
             for (let k = 1; k <= 5; k++) {
-              yield* sleepsFrom(k * 100_000);
+              yield* sleepsNear(k * 100_000);
               yield* TestClock.adjust("100 seconds");
             }
             yield* Fiber.join(fiber);
@@ -470,9 +472,9 @@ describe("Helper call time limits", () => {
           const fiber = yield* Effect.fork(
             Effect.flip(fetchVideo(sandbox.id, dest)),
           );
-          yield* sleepsFrom(120_000);
+          yield* sleepsNear(120_000);
           yield* TestClock.adjust("121 seconds");
-          yield* sleepsFrom(240_000);
+          yield* sleepsNear(240_000);
           yield* TestClock.adjust("130 seconds");
           return yield* Fiber.join(fiber);
         }),

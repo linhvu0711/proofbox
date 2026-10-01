@@ -34,7 +34,7 @@ import { liveCreates, markCreate, unmarkCreate } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { sleepsFrom } from "./support/clock.ts";
+import { sleepsNear } from "./support/clock.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -826,7 +826,7 @@ describe("Keeper", () => {
         ).pipe(Effect.provide(keeper.layers), Effect.flip),
       );
       yield* eventually(running(`sleep ${nap}`));
-      yield* sleepsFrom(720_000);
+      yield* sleepsNear(720_000);
       // When: its time limit passes
       yield* TestClock.adjust("121 seconds");
       yield* Fiber.join(caller);
