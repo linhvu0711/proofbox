@@ -146,8 +146,15 @@ const layers = (mac: Provider) => {
 describe("Recording and the Proof video", () => {
   afterEach(() => {
     cleanupEnvs();
+    // A Deadline push already writing when its call ended can still land
+    // a file in the fake root; the retries let that write finish first.
     for (const root of tempRoots.splice(0)) {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
     }
   });
 
