@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -252,7 +258,8 @@ describe("Keeper", () => {
   });
 
   it("the Keeper stops when its Deadline passes", async () => {
-    // Given
+    // Given: a Sandbox with the default idle, so its Keeper starts long
+    // before the Deadline
     const env = makeEnv();
     const created = await runCli(env, [
       "create",
@@ -260,12 +267,16 @@ describe("Keeper", () => {
       "linux",
       "--provider",
       "fake",
-      "--idle",
-      "2s",
     ]);
     const name = created.stdout.trim().slice("fake:".length);
     const pid = keeperPid(env, name);
-    // When
+    // When: the Deadline passes. Write a temp file and rename it, like the
+    // fake does, so the Keeper never reads a half-written sandbox.json.
+    const sandboxFile = join(env.root, name, "sandbox.json");
+    const meta = JSON.parse(readFileSync(sandboxFile, "utf8"));
+    meta.deadline = new Date(Date.now() - 1000).toISOString();
+    writeFileSync(`${sandboxFile}.tmp`, `${JSON.stringify(meta)}\n`);
+    renameSync(`${sandboxFile}.tmp`, sandboxFile);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await sleep(200);
