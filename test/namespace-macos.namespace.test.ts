@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
 import { destroyHost, liveInstances } from "./support/namespace-live.ts";
+import { findColor } from "./support/png.ts";
 
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
@@ -416,35 +417,35 @@ describe("Namespace macOS Provider", () => {
       });
     });
 
-    it("a spot read off the screenshot is where click lands", async () => {
-      // Given: the events page open
+    it("a marker found in the screenshot's pixels is where click lands", async () => {
+      // Given: the events page open (with the marker)
       const out = join(
         mkdtempSync(join(tmpdir(), "proofbox-shot-")),
         "shot.png",
       );
       const shot = await runCli(env, ["screenshot", id, "--out", out]);
       expect(shot.exitCode).toBe(0);
-      const bytes = readFileSync(out);
-      const width = bytes.readUInt32BE(16);
-      const height = bytes.readUInt32BE(20);
+      const at = findColor(
+        readFileSync(out),
+        (r, g, b) => r > 200 && g < 80 && b > 200,
+      );
+      expect(at).toBeDefined();
+      if (at === undefined) {
+        throw new Error("no marker in the screenshot");
+      }
       // When
       const result = await runCli(env, [
         "click",
         id,
-        String(width / 4),
-        String(height / 4),
+        String(at.x),
+        String(at.y),
         "--pace",
         "fast",
       ]);
       // Then
       expect(result.exitCode).toBe(0);
       const events = await readEvents(env, id);
-      expect(events).toContainEqual({
-        type: "mousedown",
-        x: 320,
-        y: 200,
-        button: 0,
-      });
+      expect(events).toContainEqual({ type: "marker" });
     });
   });
 });

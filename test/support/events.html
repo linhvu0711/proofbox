@@ -7,10 +7,12 @@
       html, body { margin: 0; }
       body { height: 4000px; }
       #t { position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; font-size: 48px; }
+      #m { position: fixed; left: 1000px; top: 600px; width: 61px; height: 61px; background: #ff00ff; }
     </style>
   </head>
   <body>
     <input id="t" autocomplete="off" />
+    <div id="m"></div>
     <script>
       // One JSON line to the events server per event, keys in a fixed order.
       const send = (event) =>
@@ -25,6 +27,7 @@
         send({ type: "keydown", key: e.key, ctrl: e.ctrlKey, meta: e.metaKey }),
       );
       t.addEventListener("input", () => send({ type: "input", value: t.value }));
+      document.getElementById("m").addEventListener("mousedown", () => send({ type: "marker" }));
       window.addEventListener("wheel", (e) =>
         send({ type: "wheel", dir: e.deltaY > 0 ? "down" : "up" }),
       );
