@@ -170,6 +170,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const marks: number[] = [];
       const clicks: { t: number; x: number; y: number }[] = [];
+      const actions: number[] = [];
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -186,12 +187,22 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         } else if (entry.kind === "click") {
           clicks.push({ t, x: entry.x, y: entry.y });
         }
+        if (
+          entry.kind === "click" ||
+          entry.kind === "type" ||
+          entry.kind === "key" ||
+          entry.kind === "scroll" ||
+          entry.kind === "drag"
+        ) {
+          actions.push(t);
+        }
       }
       const plan = planEdit({
         duration: probe.duration,
         freezes: probe.freezes,
         marks,
         clicks,
+        actions,
       });
       const script = renderEdit(
         plan,

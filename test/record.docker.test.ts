@@ -316,6 +316,92 @@ describe("Recording and the Proof video", () => {
     expect(log.stdout).toContain('"kind":"click"');
   });
 
+  it("a Still part that a click ends has no label in the Proof video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await wait(6000);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(1000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/recordings/1/edit.txt",
+    ]);
+    expect(edit.stdout).not.toContain("later");
+  });
+
+  it("a Still part that exec ends keeps its label in the Proof video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await wait(6000);
+    // DISPLAY=:99 comes from images/linux/Dockerfile.
+    await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "xdotool",
+      "mousemove",
+      "720",
+      "450",
+      "click",
+      "3",
+    ]);
+    await wait(1000);
+    await runCli(env, ["exec", id, "--", "xdotool", "key", "Escape"]);
+    await wait(1000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/recordings/1/edit.txt",
+    ]);
+    expect(edit.stdout).toMatch(/:text=» \d+ s later:expansion=none:/);
+  });
+
   it("record start twice is refused", async () => {
     // Given
     const env = makeEnv({ docker: true });
