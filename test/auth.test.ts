@@ -901,6 +901,32 @@ describe("auth", () => {
     expect(existsSync(join(env.runtime, `fake-${name}.max-life`))).toBe(false);
   });
 
+  it("auth logout leaves a Sandbox started elsewhere and names it", async () => {
+    // Given: one Sandbox from this machine, one from another machine (its
+    // own runtime dir) on the same fake account
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    const other = mkdtempSync(join("/tmp", "proofbox-runtime-"));
+    trackTempDir(other);
+    const theirs = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"], {
+        set: { ...set, PROOFBOX_RUNTIME_DIR: other },
+        unset,
+      })
+    ).stdout.trim();
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      `Logged out of fake. Deleted 1 Sandbox.\n${theirs} still runs, started elsewhere.\n`,
+    );
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(env.root, nameOf(theirs)))).toBe(true);
+  });
+
   it("auth logout names the Sandboxes of every region and the region it could not check", async () => {
     // Given: a fake login, two Sandboxes, and a fake region that does not answer
     const env = makeEnv();

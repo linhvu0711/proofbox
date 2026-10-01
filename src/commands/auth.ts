@@ -322,13 +322,20 @@ export const logoutOfProvider = (name: string) =>
     }
     const listed = yield* Effect.either(provider.list);
     const keeper = yield* KeeperClient;
-    const deleted: Array<string> = [];
-    for (const ref of yield* localSandboxes(provider.idPrefix)) {
-      const id = formatSandboxId({
+    const idOf = (ref: {
+      readonly name: string;
+      readonly region?: string | undefined;
+    }) =>
+      formatSandboxId({
         provider: provider.idPrefix,
         region: ref.region,
         name: ref.name,
       });
+    const local = yield* localSandboxes(provider.idPrefix);
+    const localIds = new Set(local.map(idOf));
+    const deleted: Array<string> = [];
+    for (const ref of local) {
+      const id = idOf(ref);
       // "gone" counts too: the host is already down, and delete dropped
       // its files.
       const result = yield* Effect.either(provider.delete(ref));
@@ -374,7 +381,14 @@ export const logoutOfProvider = (name: string) =>
           ? " Deleted 1 Sandbox."
           : ` Deleted ${deleted.length} Sandboxes.`;
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
+    // A Sandbox from another machine stops by that machine's login; it
+    // stays.
     if (Either.isRight(listed)) {
+      for (const id of listed.right.infos.map(idOf)) {
+        if (!localIds.has(id)) {
+          yield* output.err(`${id} still runs, started elsewhere.\n`);
+        }
+      }
       for (const miss of listed.right.unreached) {
         yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
       }
