@@ -1,19 +1,17 @@
 name: ci
 
-# Docs-only changes skip this workflow. commitlint.yml still checks
-# their commit messages.
 on:
   pull_request:
-    paths-ignore: ['**/*.md', 'docs/**']
   push:
     branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**']
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -22,6 +20,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
         env:
           EMBED_SOURCE_SKIP: "1"
+      - if: github.event_name == 'pull_request'
+        run: pnpm exec commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
