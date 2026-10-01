@@ -733,6 +733,46 @@ describe("Namespace macOS Recording", () => {
       ]);
     }
   });
+
+  it("a Wait mark on a Mac puts its reason on the label", async () => {
+    // Given: the Mac from beforeAll; last so the recordings/<n> probes in
+    // the earlier tests keep their numbers.
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await setTimeout(6000);
+    await runCli(env, ["mark", id, "waiting for the menu", "--wait"]);
+    await runCli(env, [
+      "click",
+      id,
+      "640",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await setTimeout(1000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await setTimeout(1000);
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode, stopped.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'cat "$(ls -dt /var/lib/proofbox/recordings/[0-9]*/ | head -n 1)edit.txt"',
+    ]);
+    expect(edit.stdout).toMatch(
+      /:text=» \d+ s later · waiting for the menu:expansion=none:/,
+    );
+  });
 });
 
 describe("Namespace macOS Secrets", () => {

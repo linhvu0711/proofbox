@@ -82,7 +82,7 @@ describe("edit-plan", () => {
       { kind: "cut", from: 58, to: 61, step: 2 },
       { kind: "still", at: 61, seconds: 2, label: "» 54 s later", step: 2 },
       { kind: "cut", from: 115, to: 118, step: 3 },
-      { kind: "still", at: 118, seconds: 2, label: "» 54 s later", step: 3 },
+      { kind: "still", at: 118, seconds: 2, step: 3 },
     ]);
     expect(plan.captions).toEqual([
       { step: 1, from: 1, to: 6 },
@@ -132,6 +132,280 @@ describe("edit-plan", () => {
       { kind: "still", at: 12, seconds: 2, step: 1 },
     ]);
     expect(plan.seconds).toBe(14);
+  });
+
+  it("a Still part a Caller action ends is cut with no label, keeping 2 s after and 1 s before", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "cut", from: 29, to: 40, step: 1 },
+      { kind: "still", at: 40, seconds: 2, step: 1 },
+    ]);
+    expect(plan.seconds).toBe(20);
+  });
+
+  it("a Still part the app ends keeps its label", () => {
+    // Given: a click at 10 s that changed nothing
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [10],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later",
+      step: 1,
+    });
+  });
+
+  it("a Caller action more than 1 s before the change leaves the label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [28.9],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later",
+      step: 1,
+    });
+  });
+
+  it("a Still part that runs to the end of the Recording has no label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, undefined]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "still", at: 7, seconds: 2, step: 1 },
+    ]);
+    expect(plan.seconds).toBe(9);
+  });
+
+  it("a Wait mark puts its reason after the label", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+      waits: [{ t: 6, reason: "waiting for the scheduler" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · waiting for the scheduler",
+      step: 1,
+    });
+  });
+
+  it("a Wait mark before a Still part goes on the next one in its step", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      actions: [29.5],
+      waits: [{ t: 2, reason: "waiting for the scheduler" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · waiting for the scheduler",
+      step: 1,
+    });
+  });
+
+  it("a Wait mark with no Still part in its step is not used", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 35],
+      clicks: [],
+      waits: [{ t: 36, reason: "nobody waits here" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([
+      { reason: "nobody waits here", step: 2 },
+    ]);
+  });
+
+  it("a Wait mark in the hold before the first Step mark is not used", () => {
+    // Given: a change, then still until the first Step mark — that hold
+    // shows in no clip, so a Wait mark that only matches it is not used.
+    const input = {
+      duration: 40,
+      freezes: [
+        [0, 10],
+        [15, 40],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [35],
+      clicks: [],
+      waits: [{ t: 20, reason: "too early" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([{ reason: "too early", step: 0 }]);
+    expect(
+      plan.clips.every(
+        (clip) => !(clip.kind === "still" && clip.label?.includes("too early")),
+      ),
+    ).toBe(true);
+  });
+
+  it("a Wait mark before the first Step mark goes on an early gap that is shown", () => {
+    // Given: a still gap between changes before the first Step mark —
+    // that gap keeps a clip, so a Wait mark in it is used.
+    const input = {
+      duration: 40,
+      freezes: [
+        [0, 10],
+        [15, 40],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [35],
+      clicks: [],
+      waits: [{ t: 5, reason: "too early" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([]);
+    expect(plan.clips[0]).toEqual({
+      kind: "still",
+      at: 0,
+      seconds: 2,
+      label: "» 9 s later · too early",
+      step: 0,
+    });
+  });
+
+  it("two Wait marks on one Still part show the first reason", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      waits: [
+        { t: 6, reason: "first reason" },
+        { t: 8, reason: "second reason" },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 7,
+      seconds: 2,
+      label: "» 22 s later · first reason",
+      step: 1,
+    });
+  });
+
+  it("the second Wait mark on one Still part is not used", () => {
+    // Given: the same input as the case above
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      waits: [
+        { t: 6, reason: "first reason" },
+        { t: 8, reason: "second reason" },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.unusedWaits).toEqual([{ reason: "second reason", step: 1 }]);
+  });
+
+  it("a Still part across a Step mark that a Caller action ends has no label on either side", () => {
+    // Given
+    const input = {
+      duration: 40,
+      freezes: [[5, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 15],
+      clicks: [],
+      actions: [29.5],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "still", at: 7, seconds: 2, step: 1 },
+      { kind: "cut", from: 29, to: 40, step: 2 },
+      { kind: "still", at: 40, seconds: 2, step: 2 },
+    ]);
+    expect(plan.seconds).toBe(22);
   });
 
   it("the label reads seconds, then minutes", () => {
@@ -248,7 +522,6 @@ describe("edit-plan", () => {
         kind: "still",
         at: 32.77,
         seconds: 2,
-        label: "» 25 s later",
         step: 2,
       },
     ]);

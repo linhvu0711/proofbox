@@ -239,8 +239,9 @@ const mark = Command.make(
   {
     id: Args.text({ name: "id" }),
     label: Args.text({ name: "label" }),
+    wait: Options.boolean("wait"),
   },
-  ({ id, label }) => setMark({ id, label }),
+  ({ id, label, wait }) => setMark({ id, label, wait }),
 );
 
 const recordStart = Command.make(

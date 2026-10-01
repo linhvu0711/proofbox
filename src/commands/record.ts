@@ -170,6 +170,8 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const marks: number[] = [];
       const clicks: { t: number; x: number; y: number }[] = [];
+      const actions: number[] = [];
+      const waits: { t: number; reason: string }[] = [];
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -185,6 +187,17 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           marks.push(t);
         } else if (entry.kind === "click") {
           clicks.push({ t, x: entry.x, y: entry.y });
+        } else if (entry.kind === "wait") {
+          waits.push({ t, reason: entry.reason });
+        }
+        if (
+          entry.kind === "click" ||
+          entry.kind === "type" ||
+          entry.kind === "key" ||
+          entry.kind === "scroll" ||
+          entry.kind === "drag"
+        ) {
+          actions.push(t);
         }
       }
       const plan = planEdit({
@@ -192,7 +205,17 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         freezes: probe.freezes,
         marks,
         clicks,
+        actions,
+        waits,
       });
+      const progress = yield* Progress;
+      for (const wait of plan.unusedWaits) {
+        yield* progress.warn(
+          wait.step === 0
+            ? `Wait mark "${wait.reason}" found no free Still part before the first Step mark`
+            : `Wait mark "${wait.reason}" found no free Still part in step ${wait.step}`,
+        );
+      }
       const script = renderEdit(
         plan,
         info.width === PROOF_WIDTH

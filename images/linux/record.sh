@@ -15,11 +15,14 @@ shot() {
   "$FFMPEG" -loglevel error -f x11grab -video_size "${W}x${H}" -i "$DISPLAY" -frames:v 1 -f image2 -vcodec png -y "$1"
 }
 
-# log KIND [STEP]: append one line to the Action log.
+# log KIND [STEP|REASON]: append one line to the Action log; a Wait mark's
+# second word is the reason as a JSON string.
 log() {
   t=$(date +%s.%3N)
   eval "$(xdotool getmouselocation --shell)"
-  if [ $# -ge 2 ]; then
+  if [ "$1" = wait ]; then
+    printf '{"t":%s,"kind":"wait","x":%s,"y":%s,"reason":%s}\n' "$t" "$X" "$Y" "$2" >> "$LOG"
+  elif [ $# -ge 2 ]; then
     printf '{"t":%s,"kind":"%s","x":%s,"y":%s,"step":%s}\n' "$t" "$1" "$X" "$Y" "$2" >> "$LOG"
   else
     printf '{"t":%s,"kind":"%s","x":%s,"y":%s}\n' "$t" "$1" "$X" "$Y" >> "$LOG"
@@ -100,6 +103,13 @@ case "$cmd" in
     printf '%s' "$1" > "$DIR/caption-$n.txt"
     echo "$n" > "$DIR/steps"
     log mark "$n"
+    ;;
+  wait)
+    # wait REASON: add a Wait mark to the Action log; REASON is a JSON string.
+    if [ ! -L "$CUR" ]; then
+      exit 5
+    fi
+    log wait "$1"
     ;;
   probe)
     # probe DIR [D]: print the Duration line and each freezedetect mark of

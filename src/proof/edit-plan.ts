@@ -31,6 +31,10 @@ export interface EditPlan {
   readonly captions: ReadonlyArray<Caption>;
   readonly rings: ReadonlyArray<Ring>;
   readonly seconds: number;
+  readonly unusedWaits: ReadonlyArray<{
+    readonly reason: string;
+    readonly step: number;
+  }>;
 }
 
 export interface ProbeResult {
@@ -46,6 +50,11 @@ export interface PlanInput {
     readonly t: number;
     readonly x: number;
     readonly y: number;
+  }>;
+  readonly actions?: ReadonlyArray<number>;
+  readonly waits?: ReadonlyArray<{
+    readonly t: number;
+    readonly reason: string;
   }>;
 }
 
@@ -93,6 +102,10 @@ export const nothingChanged = (probe: ProbeResult): boolean => {
   return probe.duration - still + points < 1;
 };
 
+// A Caller action logged up to 1 s before a Still part ends ended it: the
+// Action log time runs about 0.47 s ahead of the video.
+const CALLER_WINDOW = 1;
+
 export const labelText = (seconds: number): string => {
   const n = Math.round(seconds);
   if (n < 60) {
@@ -109,6 +122,25 @@ export const planEdit = (input: PlanInput): EditPlan => {
   const clips: Clip[] = [];
   const captions: Caption[] = [];
   const rings: Ring[] = [];
+  const unusedWaits: { reason: string; step: number }[] = [];
+  // The label the Still part holding [from, to] keeps: none when the part
+  // runs to the end of the Recording or a Caller action ended it (ADR 0018).
+  const stillLabel = (from: number, to: number): string | undefined => {
+    const freeze = input.freezes.find(
+      ([a, b]) => a <= from && (b ?? input.duration) >= to,
+    );
+    if (freeze === undefined) {
+      return labelText(to - from);
+    }
+    const end = freeze[1] ?? input.duration;
+    if (end >= input.duration) {
+      return undefined;
+    }
+    const ended = (input.actions ?? []).some(
+      (t) => end - CALLER_WINDOW <= t && t <= end,
+    );
+    return ended ? undefined : labelText(to - from);
+  };
   const count = input.marks.length === 0 ? 1 : input.marks.length + 1;
   const cutSpans: {
     from: number;
@@ -159,11 +191,57 @@ export const planEdit = (input: PlanInput): EditPlan => {
       }
     }
 
+    // This step's Still parts, in order: each gap that keeps a still
+    // clip (its screen changes again at a + 1), then the tail or the
+    // empty step, which end at the step's end.
+    const stillParts: {
+      from: number;
+      to: number;
+      endsAt: number;
+      reason?: string;
+    }[] = [];
+    {
+      let position = start;
+      for (const [a, b] of merged) {
+        if (a - position >= 3) {
+          stillParts.push({ from: position, to: a, endsAt: a + 1 });
+        }
+        position = b;
+      }
+      if (merged.length === 0) {
+        if (holds) {
+          stillParts.push({ from: start, to: end, endsAt: end });
+        }
+      } else if (holds && end - position >= 3) {
+        stillParts.push({ from: position, to: end, endsAt: end });
+      }
+    }
+    // A Wait mark goes to the first Still part of its step that ends
+    // after it; one whose Still part is taken or missing is not used.
+    for (const wait of input.waits ?? []) {
+      const inStep =
+        wait.t >= start &&
+        (wait.t < end || (step === count - 1 && wait.t === end));
+      if (!inStep) {
+        continue;
+      }
+      const part = stillParts.find(({ endsAt }) => endsAt > wait.t);
+      if (part === undefined || part.reason !== undefined) {
+        unusedWaits.push({ reason: wait.reason, step });
+      } else {
+        part.reason = wait.reason;
+      }
+    }
+
     let endLabel: string | undefined;
     if (merged.length > 0) {
       const tail = end - (merged[merged.length - 1]?.[1] ?? end);
       if (tail >= 3) {
-        endLabel = labelText(tail);
+        const reason = stillParts.at(-1)?.reason;
+        endLabel =
+          reason !== undefined
+            ? `${labelText(tail)} · ${reason}`
+            : stillLabel(end - tail, end);
       } else {
         const last = merged[merged.length - 1];
         if (last !== undefined) {
@@ -172,15 +250,25 @@ export const planEdit = (input: PlanInput): EditPlan => {
       }
     }
 
+    let stillIndex = 0;
     let cursor = start;
     for (const [a, b] of merged) {
       const gap = a - cursor;
+      let gapLabel: string | undefined;
       if (gap >= 3) {
+        const reason = stillParts[stillIndex]?.reason;
+        stillIndex += 1;
+        gapLabel =
+          reason !== undefined
+            ? `${labelText(gap)} · ${reason}`
+            : stillLabel(cursor, a);
+      }
+      if (gapLabel !== undefined) {
         clips.push({
           kind: "still",
           at: cursor,
           seconds: 2,
-          label: labelText(gap),
+          label: gapLabel,
           step,
         });
         out += 2;
@@ -196,11 +284,17 @@ export const planEdit = (input: PlanInput): EditPlan => {
     }
     if (holds) {
       if (merged.length === 0) {
+        const reason = stillParts[stillIndex]?.reason;
         clips.push({
           kind: "still",
           at: start,
           seconds: 3,
-          label: end - start >= 3 ? labelText(end - start) : undefined,
+          label:
+            end - start >= 3
+              ? reason !== undefined
+                ? `${labelText(end - start)} · ${reason}`
+                : stillLabel(start, end)
+              : undefined,
           step,
         });
         out += 3;
@@ -239,5 +333,5 @@ export const planEdit = (input: PlanInput): EditPlan => {
       to: Math.min(from + 0.8, span.after),
     });
   }
-  return { clips, captions, rings, seconds: out };
+  return { clips, captions, rings, seconds: out, unusedWaits };
 };

@@ -55,7 +55,26 @@ describe("render-edit", () => {
     const script = renderEdit(plan, options);
     // Then
     expect(script).toContain(
-      `movie=${DIR}/raw.mkv:seek_point=6.9,trim=start=6.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text='» 22 s later':fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
+      `movie=${DIR}/raw.mkv:seek_point=6.9,trim=start=6.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text=» 22 s later:expansion=none:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
+    );
+  });
+
+  it("a label with quotes, colons and brackets is escaped for ffmpeg", () => {
+    // Given
+    const reason = String.raw`it's 1:30, [ok]; 100% \ done`;
+    const plan = planEdit({
+      duration: 40,
+      freezes: [[5, 30]],
+      marks: [0],
+      clicks: [],
+      waits: [{ t: 6, reason }],
+    });
+    const options = { width: 1440, height: 900, dir: DIR, font: FONT };
+    // When
+    const script = renderEdit(plan, options);
+    // Then
+    expect(script).toContain(
+      String.raw`text=» 22 s later · it\\\'s 1\\:30\, \[ok\]\; 100% \\\\ done:expansion=none:fontsize=36`,
     );
   });
 
