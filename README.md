@@ -96,7 +96,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action.
 
-A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
+A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Safety
 

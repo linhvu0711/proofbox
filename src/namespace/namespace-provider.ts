@@ -851,13 +851,20 @@ export const makeNamespaceProvider = (deps: {
     Effect.gen(function* () {
       const link = yield* openLink(ref, "keeper");
       if ((yield* osOf(ref)) === "macos") {
-        yield* readMac(link, ref);
-        return { exec: macExec(link) };
+        return {
+          info: yield* readMac(link, ref),
+          get: get(ref),
+          extend: (deadline: Date) => extend(ref, deadline),
+          exec: macExec(link),
+        };
       }
-      yield* getWith(link, ref);
+      const info = yield* getWith(link, ref);
       const docker = deps.dockerFor(link);
       const container = containerOf(ref);
       return {
+        info,
+        get: get(ref),
+        extend: (deadline: Date) => extend(ref, deadline),
         exec: (
           argv: ReadonlyArray<string>,
           options?: Parameters<DockerClient["execStream"]>[2],

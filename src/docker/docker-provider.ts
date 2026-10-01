@@ -367,9 +367,12 @@ export const makeDockerProvider = (options: {
 
   const connect = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
-      yield* get(sandbox);
+      const info = yield* get(sandbox);
       const container = containerOf(sandbox.name);
       return {
+        info,
+        get: get(sandbox),
+        extend: (deadline: Date) => extend(sandbox, deadline),
         exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
           client.execStream(container, argv, options),
       };

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Layer, Ref } from "effect";
+import { Chunk, Effect, Layer, Ref, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
@@ -21,15 +21,16 @@ import {
 
 const tempRoots: string[] = [];
 
-// A fake Sandbox that reports itself as a 4x7 Mac, where every memoryKills
-// call sees one more kernel kill than the last: some process on the Mac is
+// A fake Sandbox of the given OS and size, where each command's Exit
+// carries one more memory kill after it than before it: some process is
 // killed while the command runs.
-const layers = () => {
+const layers = (os: "linux" | "macos" = "macos") => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
   tempRoots.push(root);
   const base = makeFakeProvider({ root, watch: "none" });
+  const size = os === "macos" ? { cpu: 4, ramGb: 7 } : { cpu: 4, ramGb: 8 };
   let kills = 0;
-  const mac: Provider = {
+  const provider: Provider = {
     ...base,
     offers: {
       ...base.offers,
@@ -42,21 +43,29 @@ const layers = () => {
       },
     },
     get: (name) =>
-      base.get(name).pipe(
-        Effect.map(
-          (info) =>
-            new SandboxInfo({
-              ...info,
-              os: "macos",
-              size: { cpu: 4, ramGb: 7 },
+      base
+        .get(name)
+        .pipe(Effect.map((info) => new SandboxInfo({ ...info, os, size }))),
+    connect: (sandbox) =>
+      Effect.map(base.connect(sandbox), (connection) => ({
+        ...connection,
+        info: new SandboxInfo({ ...connection.info, os, size }),
+        exec: (argv, options) =>
+          connection.exec(argv, options).pipe(
+            Stream.map((event) => {
+              if (event._tag !== "Exit") {
+                return event;
+              }
+              const before = kills;
+              kills += 1;
+              return { ...event, kills: { before, after: kills } };
             }),
-        ),
-      ),
-    memoryKills: () => Effect.sync(() => kills++),
+          ),
+      })),
   };
   const providers = Layer.succeed(
     Providers,
-    new Map<string, ProviderEntry>([["fake", providerEntry(mac)]]),
+    new Map<string, ProviderEntry>([["fake", providerEntry(provider)]]),
   );
   return Layer.mergeAll(
     NodeContext.layer,
@@ -86,7 +95,7 @@ const stderr = Effect.gen(function* () {
   return Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join("");
 });
 
-describe("exec out of memory on a Mac", () => {
+describe("exec out of memory", () => {
   afterEach(() => {
     for (const root of tempRoots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
@@ -124,5 +133,22 @@ describe("exec out of memory on a Mac", () => {
           "Sandbox ran out of memory (4x7). Try --size 6x14.",
         );
       }).pipe(Effect.provide(layers())),
+  );
+
+  it.effect(
+    "a command that exits 0 on Linux after a new kill is out of memory",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const id = yield* created;
+        // When
+        yield* execInSandbox(id, ["true"]);
+        // Then
+        const output = yield* CliOutput;
+        expect(yield* output.exitCode).toBe(122);
+        expect(yield* stderr).toContain(
+          "Sandbox ran out of memory (4x8). Try --size 8x16.",
+        );
+      }).pipe(Effect.provide(layers("linux"))),
   );
 });

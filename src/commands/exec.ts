@@ -1,9 +1,8 @@
 import { posix } from "node:path";
-import { Duration, Effect, Schedule, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { deadlinePush } from "../deadline.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { Providers } from "../provider.ts";
+import { type MemoryKills, Providers } from "../provider.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
 import { withSecrets } from "../secrets.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
@@ -14,15 +13,10 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
     const id = yield* resolveSandboxId(rawId, providers);
     const provider = id.provider;
     const output = yield* CliOutput;
-    const [info, killsBefore] = yield* Effect.all(
-      [provider.get(id), provider.memoryKills(id)],
-      { concurrency: 2 },
-    );
-    const idle = Duration.seconds(info.idleSeconds);
-    const push = deadlinePush(provider, id, info);
-    // A cold Keeper link bring-up can outlast a short host Deadline.
-    yield* push;
     const keeper = yield* KeeperClient;
+    // The Keeper pushes the Deadline and reads the memory-kill counts in the
+    // command's own call (ADR 0015).
+    const info = yield* keeper.info(rawId);
     const events = yield* keeper.exec(
       rawId,
       withSecrets(
@@ -31,7 +25,7 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
       ),
     );
     let exitCode: number | undefined;
-    // The repeated push never completes on its own, so the stream's value wins.
+    let kills: MemoryKills | undefined;
     yield* events.pipe(
       Stream.runForEach((event) => {
         switch (event._tag) {
@@ -41,25 +35,17 @@ export const execInSandbox = (rawId: string, argv: ReadonlyArray<string>) =>
             return output.err(event.bytes);
           case "Exit":
             exitCode = event.code;
+            kills = event.kills;
             return output.setExitCode(event.code);
         }
       }),
-      Effect.raceFirst(
-        Effect.repeat(
-          push,
-          Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-        ),
-      ),
     );
-    const [killsAfter] = yield* Effect.all([provider.memoryKills(id), push], {
-      concurrency: 2,
-    });
     // On Linux the kill count is container-wide, so a new kill plus a clean
     // exit means the command hid an OOM child (e.g. an early pipeline
     // stage). On a Mac it is host-wide and takes in other apps, so only a
     // command that was itself killed (137) counts.
     const killed = exitCode === 137 || (exitCode === 0 && info.os !== "macos");
-    if (killsAfter > killsBefore && killed) {
+    if (kills !== undefined && kills.after > kills.before && killed) {
       const offered = provider.offers[info.os]?.sizes ?? "any";
       yield* output.err(`${outOfMemoryMessage(info.size, offered)}\n`);
       yield* output.setExitCode(OUT_OF_MEMORY_EXIT);
