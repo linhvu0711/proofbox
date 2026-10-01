@@ -1019,6 +1019,40 @@ describe("auth", () => {
     expect(readSaved(home)).toEqual({});
   });
 
+  it("auth logout deletes with the saved login even when an env token is set", async () => {
+    // Given: a host made with the saved login, and an env token for
+    // another account, which does not see that host
+    const env = makeEnv();
+    const home = makeHome(
+      `{"namespace":{"way":"token","token":"${TOKEN}","account":"tnt_test","expiresAt":"3000-01-01T00:00:00.000Z","region":"us"}}`,
+    );
+    const maxLife = join(env.runtime, "ns-us:abc123def4567.max-life");
+    writeFileSync(maxLife, "4102444800");
+    const ns = await fakeNamespace((call) =>
+      call.method === "ListInstances" &&
+      call.authorization === `Bearer ${TOKEN}`
+        ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
+        : { json: {} },
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        PROOFBOX_NAMESPACE_TOKEN: "nsct_other-account",
+      },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(
+      ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => call.authorization),
+    ).toEqual([`Bearer ${TOKEN}`]);
+    expect(result.stdout).toBe("ns:us:abc123def4567\n");
+    expect(readSaved(home)).toEqual({});
+  });
+
   it("auth logout with no Sandboxes only logs out", async () => {
     // Given
     const env = makeEnv();

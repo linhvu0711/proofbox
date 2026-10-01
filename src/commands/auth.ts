@@ -4,6 +4,7 @@ import { text } from "node:stream/consumers";
 import {
   Clock,
   Config,
+  ConfigProvider,
   Duration,
   Effect,
   Either,
@@ -320,7 +321,20 @@ export const logoutOfProvider = (name: string) =>
       yield* output.err(`No saved login for ${provider.name}.\n`);
       return;
     }
-    const listed = yield* Effect.either(provider.list);
+    // Logout acts with the saved login it removes, never the env token: a
+    // token for another account would not see this machine's Sandboxes,
+    // and delete would take them for gone.
+    const hidden = envTokenName(provider.name);
+    const withSavedLogin = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.configProviderWith((current) =>
+        Effect.withConfigProvider(
+          effect,
+          ConfigProvider.mapInputPath(current, (path) =>
+            path === hidden ? `${hidden}_HIDDEN_BY_LOGOUT` : path,
+          ),
+        ),
+      );
+    const listed = yield* Effect.either(withSavedLogin(provider.list));
     const keeper = yield* KeeperClient;
     const idOf = (ref: {
       readonly name: string;
@@ -344,7 +358,7 @@ export const logoutOfProvider = (name: string) =>
       const id = idOf(ref);
       // "gone" counts too: the host is already down, and delete dropped
       // its files.
-      const result = yield* Effect.either(provider.delete(ref));
+      const result = yield* Effect.either(withSavedLogin(provider.delete(ref)));
       yield* keeper.stop(id);
       if (Either.isRight(result)) {
         deleted.push(id);
