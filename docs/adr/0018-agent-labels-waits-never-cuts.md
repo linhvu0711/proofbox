@@ -1,6 +1,6 @@
 # The Caller can label a wait, never cut one
 
-Only proofbox decides what to cut from a Proof video, and it cuts only a Still part. A Still part that a Caller action ended (a click, a key, typing) is the Caller thinking, so it is cut with no label. A Still part that the app ended on its own, or that a Wait mark names, keeps its "» N s later" label, so a slow app or a real wait such as a scheduler stays visible. The Caller can add a reason to a wait with `mark --wait`, but nothing the Caller does removes footage. Shell commands are not in the Action log, so a Still part that one ends keeps its label. A mistake adds a label and never hides a wait.
+Only proofbox decides what to cut from a Proof video, and it cuts only a Still part. A Still part that a Caller action ended (a click, a key, typing, a scroll, a drag) is the Caller thinking, so it is cut with no label. A Still part that the app ended on its own, or that a Wait mark names, keeps its "» N s later" label, so a slow app or a real wait such as a scheduler stays visible. The Caller can add a reason to a wait with `mark --wait`, but nothing the Caller does removes footage. Shell commands are not in the Action log, so a Still part that one ends keeps its label. A mistake adds a label and never hides a wait.
 
 ## Considered options
 
