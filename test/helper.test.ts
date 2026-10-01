@@ -20,11 +20,16 @@ import { clickAt } from "../src/commands/click.ts";
 import { dragFrom } from "../src/commands/drag.ts";
 import { pressKey } from "../src/commands/key.ts";
 import { setMark } from "../src/commands/mark.ts";
-import { startRecording, stopRecording } from "../src/commands/record.ts";
+import {
+  RECORD_HELPER,
+  startRecording,
+  stopRecording,
+} from "../src/commands/record.ts";
 import { takeScreenshot } from "../src/commands/screenshot.ts";
 import { scrollAt } from "../src/commands/scroll.ts";
 import { typeText } from "../src/commands/type.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { fetchHelper } from "../src/helper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -410,6 +415,92 @@ describe("Helper call time limits", () => {
       );
       // Then
       expect(err).toBe("");
+    }),
+  );
+
+  const fetchVideo = (id: string, dest: string) =>
+    Effect.scoped(
+      fetchHelper(id, RECORD_HELPER, "/x/proof.mp4", dest, {
+        outcome: "no Proof video was made",
+        name: "Proof video",
+      }),
+    );
+
+  it.effect(
+    "a download that sends a chunk every 100 s for 500 s succeeds",
+    () =>
+      Effect.gen(function* () {
+        // Given: five chunks of 8 bytes, 100 s apart
+        const sandbox = yield* macSandbox(() =>
+          Stream.concat(
+            Stream.make(1, 2, 3, 4, 5).pipe(
+              Stream.mapEffect(() =>
+                Effect.as(Effect.sleep("100 seconds"), stdout(PNG_HEAD)),
+              ),
+            ),
+            Stream.make(exit(0)),
+          ),
+        );
+        const dest = join(tempDir("proofbox-out-"), "proof.mp4");
+        // When
+        const err = yield* sandbox.provide(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.fork(fetchVideo(sandbox.id, dest));
+            for (let k = 1; k <= 5; k++) {
+              yield* sleepsFrom(k * 100_000);
+              yield* TestClock.adjust("100 seconds");
+            }
+            yield* Fiber.join(fiber);
+            return yield* captured("err");
+          }),
+        );
+        // Then
+        expect({ bytes: readFileSync(dest).length, err }).toEqual({
+          bytes: 40,
+          err: "",
+        });
+      }),
+  );
+
+  const stalledFetch = (dest: string) =>
+    Effect.gen(function* () {
+      const sandbox = yield* macSandbox(stalled);
+      const error = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            Effect.flip(fetchVideo(sandbox.id, dest)),
+          );
+          yield* sleepsFrom(120_000);
+          yield* TestClock.adjust("121 seconds");
+          yield* sleepsFrom(240_000);
+          yield* TestClock.adjust("130 seconds");
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      return { sandbox, error };
+    });
+
+  it.effect("a stalled download tries once more and fails", () =>
+    Effect.gen(function* () {
+      // Given: one chunk, then nothing more
+      const dest = join(tempDir("proofbox-out-"), "proof.mp4");
+      // When
+      const { sandbox, error } = yield* stalledFetch(dest);
+      // Then
+      expect(error.message).toBe(
+        `Sandbox ${sandbox.id} sent no bytes of the Proof video for 2 min, twice. Try again in a minute. Keeper log: ${sandbox.log}`,
+      );
+    }),
+  );
+
+  it.effect("a failed download leaves no .part file", () =>
+    Effect.gen(function* () {
+      // Given: one chunk, then nothing more
+      const dest = join(tempDir("proofbox-out-"), "proof.mp4");
+      // When
+      yield* stalledFetch(dest);
+      // Then
+      expect(existsSync(`${dest}.part`)).toBe(false);
     }),
   );
 });

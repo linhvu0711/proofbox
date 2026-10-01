@@ -120,7 +120,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         RECORD_HELPER,
         `${info.dir}/blocked.png`,
         `${base}-blocked.png`,
-        { outcome: "no Proof video was made" },
+        { outcome: "no Proof video was made", name: "blocked-screen image" },
       ).pipe(
         // The blocked capture is what the caller must hear about; a
         // screen that cannot be fetched only loses its screenshot.
@@ -287,7 +287,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       RECORD_HELPER,
       `${info.dir}/proof.mp4`,
       out,
-      { outcome: "no Proof video was made" },
+      { outcome: "no Proof video was made", name: "Proof video" },
     );
     if (video.code !== 0) {
       return yield* helperFailed(video);
@@ -300,7 +300,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         RECORD_HELPER,
         `${info.dir}/shot-${k}.png`,
         path,
-        { outcome: "no Proof video was made" },
+        { outcome: "no Proof video was made", name: "Proof screenshot" },
       );
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
