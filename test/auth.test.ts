@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -81,6 +82,12 @@ const readSaved = (home: string) =>
   JSON.parse(readFileSync(loginsFile(home), "utf8")) as unknown;
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const until = async (done: () => boolean) => {
+  while (!done()) {
+    await pause(50);
+  }
+};
 
 // A fake Sandbox id is `fake:<name>`; its files are named by the name.
 const nameOf = (id: string) => id.slice("fake:".length);
@@ -1135,6 +1142,246 @@ describe("auth", () => {
     expect(readSaved(home)).toEqual({});
   });
 
+  it("auth logout waits for a create still running and deletes its Sandbox", async () => {
+    // Given: a create whose Sandbox exists but has no Max life file yet
+    const { env, set, unset } = await fakeLoginWith(0);
+    const hold = join(env.root, "release-create");
+    const creating = runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { ...set, PROOFBOX_FAKE_CREATE_HOLD: hold }, unset },
+    );
+    await until(() =>
+      readdirSync(env.root).some((f) => f !== "release-create"),
+    );
+    const [name = ""] = readdirSync(env.root);
+    // When: logout starts while the create runs, which goes on once logout
+    // waits for it
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+      onStderr: (chunk) => {
+        if (chunk.includes("Waiting")) {
+          writeFileSync(hold, "");
+        }
+      },
+    });
+    // A logout that never waited must not leave the create held.
+    writeFileSync(hold, "");
+    await creating;
+    // Then
+    expect(result.stderr).toBe(
+      "Waiting for 1 create to finish…\nLogged out of fake. Deleted 1 Sandbox.\n",
+    );
+    expect(result.stdout).toBe(`fake:${name}\n`);
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(env.root, name))).toBe(false);
+    expect(
+      readdirSync(env.runtime).filter((f) => f.includes("creating")),
+    ).toEqual([]);
+    // The create goes on to start a Keeper for the Sandbox logout deleted,
+    // which takes about ten seconds to give up.
+  }, 60_000);
+
+  it("auth logout interrupted while it waits keeps the login", async () => {
+    // Given: a create still running
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    const hold = join(env.root, "release-create");
+    const creating = runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { ...set, PROOFBOX_FAKE_CREATE_HOLD: hold }, unset },
+    );
+    await until(() =>
+      readdirSync(env.root).some((f) => f !== "release-create"),
+    );
+    // When: Ctrl-C while logout waits
+    await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+      onStderr: (chunk, interrupt) => {
+        if (chunk.includes("Waiting")) {
+          interrupt();
+        }
+      },
+    });
+    writeFileSync(hold, "");
+    const made = await creating;
+    // Then: the login stays, and a second logout deletes the Sandbox
+    expect(Object.keys(readSaved(home) as object)).toEqual(["fake"]);
+    const again = await runCli(env, ["auth", "logout", "fake"], { set, unset });
+    expect(again.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(again.stdout).toBe(made.stdout);
+  });
+
+  it("auth logout goes on when a create it waits for fails", async () => {
+    // Given: a create still running
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    const hold = join(env.root, "release-create");
+    let stopCreate = () => {};
+    const creating = runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      {
+        set: { ...set, PROOFBOX_FAKE_CREATE_HOLD: hold },
+        unset,
+        onStderr: (_chunk, interrupt) => {
+          stopCreate = interrupt;
+        },
+      },
+    );
+    await until(() =>
+      readdirSync(env.root).some((f) => f !== "release-create"),
+    );
+    // When: the create fails while logout waits for it
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+      onStderr: (chunk) => {
+        if (chunk.includes("Waiting")) {
+          stopCreate();
+        }
+      },
+    });
+    writeFileSync(hold, "");
+    await creating;
+    // Then: logout finishes and the login is gone
+    expect(result.stderr).toMatch(
+      /^Waiting for 1 create to finish…\nLogged out of fake\./,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(readSaved(home)).toEqual({});
+  });
+
+  it("create with the saved login stops when the logins lock stays busy", async () => {
+    // Given: a saved login and a logins lock another process holds
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // Then
+    expect(result.stderr).toContain(
+      `Another proofbox command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+
+  it("auth logout stops when the logins lock stays busy and keeps the login", async () => {
+    // Given: a saved login and a logins lock another process holds
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toContain(
+      `Another proofbox command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(Object.keys(readSaved(home) as object)).toEqual(["fake"]);
+  });
+
+  it("auth logout skips a create mark whose process is gone", async () => {
+    // Given: one Sandbox, and the mark of a create that crashed
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+    writeFileSync(
+      join(env.runtime, `fake-creating-${dead}-0123abcd`),
+      `${dead}\n`,
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth logout skips a create mark whose process id now belongs to another process", async () => {
+    // Given: one Sandbox, and a crashed create's mark whose process id now
+    // belongs to a live process (this test's own) that started at another
+    // time
+    const { env, set, unset, ids } = await fakeLoginWith(1);
+    writeFileSync(
+      join(env.runtime, `fake-creating-${process.pid}-0123abcd`),
+      `${process.pid}\nMon Jan  1 00:00:00 2001\n`,
+    );
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe(`${ids[0]}\n`);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("create with an env token works while the logins lock is busy", async () => {
+    // Given: no saved login, an env token, and a busy logins lock
+    const env = makeEnv();
+    const home = makeHome();
+    mkdirSync(join(home, ".config", "proofbox"), { recursive: true });
+    mkdirSync(lockDir(home));
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:\S+\n$/);
+  });
+
+  it("create after auth logout says how to log in and makes nothing", async () => {
+    // Given
+    const { env, set, unset } = await fakeLoginWith(0);
+    await runCli(env, ["auth", "logout", "fake"], { set, unset });
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set, unset },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Not logged in to fake. Run: proofbox auth login fake\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readdirSync(env.root)).toEqual([]);
+  });
+
+  it("two creates with the saved login at the same time both make a Sandbox", async () => {
+    // Given
+    const { env, set, unset } = await fakeLoginWith(0);
+    // When
+    const made = await Promise.all(
+      [1, 2].map(() =>
+        runCli(env, ["create", "--os", "linux", "--provider", "fake"], {
+          set,
+          unset,
+        }),
+      ),
+    );
+    // Then
+    expect(made.map((result) => result.exitCode)).toEqual([0, 0]);
+    expect(new Set(made.map((result) => result.stdout)).size).toBe(2);
+    expect(
+      readdirSync(env.runtime).filter((f) => f.includes("creating")),
+    ).toEqual([]);
+  });
+
   it("auth logout with no saved login says so", async () => {
     // Given
     const env = makeEnv();
@@ -1225,7 +1472,7 @@ describe("auth", () => {
     });
     // Then
     expect(result.stderr).toBe(
-      `Another proofbox auth command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
+      `Another proofbox command holds ${lockDir(home)}. Try again, or delete it if no other proofbox runs.\n`,
     );
     expect(result.exitCode).toBe(125);
     expect(readFileSync(loginsFile(home), "utf8")).toBe(ADA);

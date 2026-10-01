@@ -78,6 +78,9 @@ export const ProvidersLive = Layer.effect(
       const deleteDown = yield* Config.option(
         Config.string("PROOFBOX_FAKE_DELETE_DOWN"),
       );
+      const createHold = yield* Config.option(
+        Config.string("PROOFBOX_FAKE_CREATE_HOLD"),
+      );
       const fake = yield* Effect.cached(
         importFor("fake", () => import("./fake/fake-provider.ts")).pipe(
           Effect.map((module) =>
@@ -89,6 +92,7 @@ export const ProvidersLive = Layer.effect(
               unreached: Option.getOrUndefined(unreached),
               listDown: Option.getOrUndefined(listDown),
               deleteDown: Option.getOrUndefined(deleteDown),
+              createHold: Option.getOrUndefined(createHold),
               snapshots: Option.isSome(snapshotsRoot)
                 ? {
                     root: snapshotsRoot.value,

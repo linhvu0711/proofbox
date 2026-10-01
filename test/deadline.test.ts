@@ -11,6 +11,7 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
   Chunk,
+  ConfigProvider,
   Duration,
   Effect,
   Fiber,
@@ -46,8 +47,20 @@ const makeProviders = () => {
   );
 };
 const layers = () => {
+  // Its own runtime dir and no HOME: create marks itself nowhere real,
+  // and takes no logins lock in the developer's HOME.
+  const runtime = mkdtempSync(
+    join(
+      process.platform === "darwin" ? "/tmp" : tmpdir(),
+      "proofbox-runtime-",
+    ),
+  );
+  tempRoots.push(runtime);
   const providers = makeProviders();
   return Layer.mergeAll(
+    Layer.setConfigProvider(
+      ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+    ),
     NodeContext.layer,
     CliOutput.Test,
     providers,
