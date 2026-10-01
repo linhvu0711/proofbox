@@ -1,11 +1,14 @@
 import { mkdir, rm } from "node:fs/promises";
-import { Duration, Effect, Schedule } from "effect";
+import { Data, Duration, Effect, Schedule } from "effect";
 
 const hasCode = (cause: unknown, code: string) =>
   typeof cause === "object" &&
   cause !== null &&
   "code" in cause &&
   cause.code === code;
+
+// A held lock, inside this file only: it tells the retry to try again.
+class LockHeldError extends Data.TaggedError("LockHeldError") {}
 
 // mkdir is atomic, so a lock dir serializes overlapping commands: the
 // loser retries until `wait` is up, then fails with `busy`. A busy lock
@@ -21,7 +24,6 @@ export const withFileLock =
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | LockError, R> => {
-    const busy = options.busy();
     const take = Effect.tryPromise({
       try: async () => {
         try {
@@ -38,16 +40,21 @@ export const withFileLock =
     }).pipe(
       Effect.filterOrFail(
         (held) => held,
-        () => busy,
+        () => new LockHeldError(),
       ),
     );
     return Effect.acquireUseRelease(
       Effect.retry(take, {
-        while: (error) => error === busy,
+        while: (error) => error instanceof LockHeldError,
         schedule: Schedule.spaced(Duration.millis(100)).pipe(
           Schedule.upTo(options.wait),
         ),
-      }),
+      }).pipe(
+        Effect.catchIf(
+          (error) => error instanceof LockHeldError,
+          () => Effect.fail(options.busy()),
+        ),
+      ),
       () => effect,
       () =>
         Effect.promise(() =>
