@@ -23,7 +23,7 @@ The name of a Sandbox, prefixed by its Provider and, for a Provider with regions
 _Avoid_: handle, session id
 
 **Keeper**:
-A background process on the Caller's machine that holds one open connection to one Sandbox, so each command takes well under a second. `create` starts it, any command restarts it if it is gone, and it stops when its Sandbox is gone. It only saves time: losing it changes nothing.
+A background process on the Caller's machine that holds one open connection to one Sandbox, so each command takes well under a second. `create` starts it, any command restarts it if it is gone, and it stops when its Sandbox is gone. It pushes the Deadline for each command it runs, never on a timer of its own. It only saves time: losing it changes nothing.
 _Avoid_: daemon, agent, server, session
 
 **Deadline**:
