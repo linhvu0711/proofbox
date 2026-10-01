@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { startNoise } from "./support/noise.ts";
 
@@ -452,6 +454,83 @@ describe("Recording and the Proof video", () => {
     expect(result.stderr).toBe(
       `No Recording is running on ${id}; run record start first\n`,
     );
+  });
+
+  it("mark --wait with no Recording is refused", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["mark", id, "waiting", "--wait"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      `No Recording is running on ${id}; run record start first\n`,
+    );
+  });
+
+  it("a Wait mark is in the Action log with its reason", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "xdotool",
+      "mousemove",
+      "720",
+      "450",
+    ]);
+    const reason = String.raw`it's "quoted" \ done`;
+    // When
+    const marked = await runCli(env, ["mark", id, reason, "--wait"]);
+    // Then
+    expect(marked.exitCode, marked.stderr).toBe(0);
+    const cat = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/action-log.jsonl",
+    ]);
+    const last = cat.stdout.trim().split("\n").at(-1) ?? "";
+    const { t: _t, ...rest } = Schema.decodeUnknownSync(
+      Schema.parseJson(ActionLogLine),
+    )(last);
+    expect(rest).toEqual({ kind: "wait", x: 720, y: 450, reason });
+  });
+
+  it("a Wait mark starts no step and saves no Proof screenshot", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    const out = join(dir, "proof.mp4");
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(500);
+    await runCli(env, ["mark", id, "waiting for the menu", "--wait"]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${out}\n${join(dir, "proof-1.png")}\n`);
   });
 
   it("a Recording where nothing changed on screen makes no video", async () => {

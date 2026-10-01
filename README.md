@@ -87,6 +87,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `scroll <id> <x> <y> <up\|down\|left\|right> [steps]` | Scrolls. |
 | `drag <id> <x1> <y1> <x2> <y2>` | Drags. |
 | `mark <id> <label>` | Sets a Step mark during a Recording. |
+| `mark <id> <label> --wait` | Sets a Wait mark: the Still part it falls in, or the next one in its step, keeps its "» N s later" label with the reason after it. It starts no step (ADR 0018). |
 | `record start <id>` | Starts a Recording. |
 | `record stop <id> --out <file>` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. `--max-size 10MB` sets the Size limit. |
 | `record stop <id> --discard` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). |

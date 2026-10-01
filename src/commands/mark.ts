@@ -6,6 +6,7 @@ import { RECORD_HELPER } from "./record.ts";
 export const setMark = Effect.fn("mark.setMark")(function* (options: {
   readonly id: string;
   readonly label: string;
+  readonly wait: boolean;
 }) {
   if (
     options.label.length < 1 ||
@@ -18,8 +19,8 @@ export const setMark = Effect.fn("mark.setMark")(function* (options: {
   const marked = yield* runHelper(
     options.id,
     RECORD_HELPER,
-    ["mark", options.label],
-    { outcome: "no Step mark was set" },
+    options.wait ? ["wait", JSON.stringify(options.label)] : ["mark", options.label],
+    { outcome: options.wait ? "no Wait mark was set" : "no Step mark was set" },
   );
   if (marked.code === 5) {
     return yield* new NoRecordingError({ id: options.id });

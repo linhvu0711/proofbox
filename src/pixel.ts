@@ -15,7 +15,7 @@ export const ACTION_LOG_PATHS: Readonly<Record<Os, string>> = {
   macos: "/var/lib/proofbox/action-log.jsonl",
 };
 
-export const ActionLogLine = Schema.Struct({
+const ActionLine = Schema.Struct({
   t: Schema.Number,
   kind: Schema.Literal(
     "screenshot",
@@ -32,6 +32,16 @@ export const ActionLogLine = Schema.Struct({
   toY: Schema.optional(Schema.Number.pipe(Schema.int())),
   step: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
+
+const WaitLine = Schema.Struct({
+  t: Schema.Number,
+  kind: Schema.Literal("wait"),
+  x: Schema.Number.pipe(Schema.int()),
+  y: Schema.Number.pipe(Schema.int()),
+  reason: Schema.String,
+});
+
+export const ActionLogLine = Schema.Union(ActionLine, WaitLine);
 
 export const PACE_HUMAN = {
   glideMs: 400,
