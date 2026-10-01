@@ -44,13 +44,17 @@ log() {
   fi
 }
 
-# shot: write a full-size PNG of the screen to stdout.
+# shot: write a PNG of the screen to stdout at the screen's size in points
+# (W x H), so a spot in it is the spot click, scroll, and drag take.
+# screencapture writes 2x on a Retina screen; sips scales it down here,
+# before the bytes cross the link.
 shot() {
   f=$(mktemp /tmp/proofbox-shot.XXXXXX)
+  p="$f.png"
   # `|| rc=$?` keeps set -e from leaving before the file is removed.
   rc=0
-  { /usr/sbin/screencapture -x -t png "$f" && cat "$f"; } || rc=$?
-  rm -f "$f"
+  { /usr/sbin/screencapture -x -t png "$p" && /usr/bin/sips -z "$H" "$W" "$p" >/dev/null && cat "$p"; } || rc=$?
+  rm -f "$f" "$p"
   return "$rc"
 }
 

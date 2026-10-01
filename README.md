@@ -80,7 +80,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. |
-| `screenshot <id> --out <file>` | Saves a PNG of the screen. |
+| `screenshot <id> --out <file>` | Saves a PNG of the screen at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |
 | `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
 | `type <id> <text>` | Types text. |
 | `key <id> <keys>` | Presses keys, for example `ctrl+s` or `Return`. |
@@ -95,7 +95,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `list [--json]` | Lists your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. |
 | `delete <id>` | Deletes a Sandbox. |
 
-Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action.
+Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`.
 
 A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
 

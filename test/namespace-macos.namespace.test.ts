@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { openEventsPage, readEvents } from "./support/events.ts";
 import { destroyHost, liveInstances } from "./support/namespace-live.ts";
+import { findColor } from "./support/png.ts";
 
 // Real Namespace Macs cost money and the workspace quota holds one 6x14 Mac
 // at a time, so each describe makes one Mac, shares it, and deletes it.
@@ -242,7 +243,7 @@ describe("Namespace macOS Provider", () => {
     }
   });
 
-  it("screenshot --out writes a 2560x1600 PNG", async () => {
+  it("screenshot --out writes a 1280x800 PNG", async () => {
     // Given: the Mac from beforeAll
     const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
     // When
@@ -250,8 +251,8 @@ describe("Namespace macOS Provider", () => {
     // Then
     expect(result.exitCode).toBe(0);
     const bytes = readFileSync(out);
-    expect(bytes.readUInt32BE(16)).toBe(2560);
-    expect(bytes.readUInt32BE(20)).toBe(1600);
+    expect(bytes.readUInt32BE(16)).toBe(1280);
+    expect(bytes.readUInt32BE(20)).toBe(800);
   });
 
   it("a point outside 1280x800 is refused", async () => {
@@ -351,6 +352,30 @@ describe("Namespace macOS Provider", () => {
       });
     });
 
+    it("click --screenshot writes a 1280x800 PNG", async () => {
+      // Given: the events page open
+      const out = join(
+        mkdtempSync(join(tmpdir(), "proofbox-shot-")),
+        "shot.png",
+      );
+      // When
+      const result = await runCli(env, [
+        "click",
+        id,
+        "640",
+        "400",
+        "--pace",
+        "fast",
+        "--screenshot",
+        out,
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const bytes = readFileSync(out);
+      expect(bytes.readUInt32BE(16)).toBe(1280);
+      expect(bytes.readUInt32BE(20)).toBe(800);
+    });
+
     it("scroll sends wheel steps down and up", async () => {
       // Given: the events page open
       // When
@@ -390,6 +415,37 @@ describe("Namespace macOS Provider", () => {
         y: 400,
         button: 0,
       });
+    });
+
+    it("a marker found in the screenshot's pixels is where click lands", async () => {
+      // Given: the events page open (with the marker)
+      const out = join(
+        mkdtempSync(join(tmpdir(), "proofbox-shot-")),
+        "shot.png",
+      );
+      const shot = await runCli(env, ["screenshot", id, "--out", out]);
+      expect(shot.exitCode).toBe(0);
+      const at = findColor(
+        readFileSync(out),
+        (r, g, b) => r > 200 && g < 80 && b > 200,
+      );
+      expect(at).toBeDefined();
+      if (at === undefined) {
+        throw new Error("no marker in the screenshot");
+      }
+      // When
+      const result = await runCli(env, [
+        "click",
+        id,
+        String(at.x),
+        String(at.y),
+        "--pace",
+        "fast",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      expect(events).toContainEqual({ type: "marker" });
     });
   });
 });
