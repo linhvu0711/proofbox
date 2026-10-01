@@ -18,7 +18,11 @@ export const pressKey = Effect.fn("key.pressKey")(function* (options: {
     ["key", options.keys, String(pace.settleMs), shot],
     {
       screenshot: options.screenshot,
-      limit: { _tag: "Act", name: "key", extra: Duration.zero },
+      limit: {
+        _tag: "Act",
+        name: "key",
+        extra: Duration.millis(pace.settleMs),
+      },
     },
   );
 }, Effect.scoped);

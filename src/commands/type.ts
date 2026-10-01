@@ -18,7 +18,13 @@ export const typeText = Effect.fn("type.typeText")(function* (options: {
     ["type", String(pace.letterMs), String(pace.settleMs), shot, options.text],
     {
       screenshot: options.screenshot,
-      limit: { _tag: "Act", name: "type", extra: Duration.zero },
+      limit: {
+        _tag: "Act",
+        name: "type",
+        extra: Duration.millis(
+          options.text.length * pace.letterMs + pace.settleMs,
+        ),
+      },
     },
   );
 }, Effect.scoped);

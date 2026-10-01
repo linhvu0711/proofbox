@@ -37,7 +37,14 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
     {
       screenshot: options.screenshot,
       points: [[options.x, options.y]],
-      limit: { _tag: "Act", name: "scroll", extra: Duration.zero },
+      // The helper turns the wheel once per step, 50 ms apart.
+      limit: {
+        _tag: "Act",
+        name: "scroll",
+        extra: Duration.millis(
+          pace.glideMs + options.steps * 50 + pace.settleMs,
+        ),
+      },
     },
   );
 }, Effect.scoped);

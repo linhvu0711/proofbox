@@ -31,7 +31,11 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
     {
       screenshot: options.screenshot,
       points: [[options.x, options.y]],
-      limit: { _tag: "Act", name: "click", extra: Duration.zero },
+      limit: {
+        _tag: "Act",
+        name: "click",
+        extra: Duration.millis(pace.glideMs + pace.settleMs),
+      },
     },
   );
 }, Effect.scoped);

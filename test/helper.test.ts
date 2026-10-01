@@ -366,4 +366,65 @@ describe("Helper call time limits", () => {
         });
       }),
   );
+
+  it.effect("a click gets 2 min plus its glide and settle", () =>
+    Effect.gen(function* () {
+      // Given: human pace, glide 400 ms and settle 700 ms
+      const sandbox = yield* macSandbox(() => Stream.never);
+      // When
+      const error = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            Effect.flip(
+              clickAt({
+                id: sandbox.id,
+                x: 1,
+                y: 1,
+                button: "left",
+                pace: "human",
+              }),
+            ),
+          );
+          yield* sleepsFrom(120_000);
+          yield* TestClock.adjust("122 seconds");
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      // Then
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Sandbox ${sandbox.id} did not answer the click in 2 min 1 s\\.`,
+        ),
+      );
+    }),
+  );
+
+  it.effect("a type that runs 150 s still succeeds", () =>
+    Effect.gen(function* () {
+      // Given: six letters at 25 s each
+      const sandbox = yield* macSandbox(() =>
+        Stream.fromEffect(Effect.as(Effect.sleep("150 seconds"), exit(0))),
+      );
+      // When
+      const err = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            typeText({
+              id: sandbox.id,
+              text: "abcdef",
+              pace: "fast",
+              letter: "25s",
+              typeMax: "200s",
+            }),
+          );
+          yield* sleepsFrom(150_000);
+          yield* TestClock.adjust("151 seconds");
+          yield* Fiber.join(fiber);
+          return yield* captured("err");
+        }),
+      );
+      // Then
+      expect(err).toBe("");
+    }),
+  );
 });

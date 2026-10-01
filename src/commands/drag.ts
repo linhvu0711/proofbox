@@ -34,7 +34,12 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
         [options.x1, options.y1],
         [options.x2, options.y2],
       ],
-      limit: { _tag: "Act", name: "drag", extra: Duration.zero },
+      // The pointer glides twice: to the start, then to the end.
+      limit: {
+        _tag: "Act",
+        name: "drag",
+        extra: Duration.millis(2 * pace.glideMs + pace.settleMs),
+      },
     },
   );
 }, Effect.scoped);
