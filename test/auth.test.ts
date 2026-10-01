@@ -927,6 +927,28 @@ describe("auth", () => {
     expect(existsSync(join(env.root, nameOf(theirs)))).toBe(true);
   });
 
+  it("auth logout deletes the rest when one delete fails", async () => {
+    // Given
+    const { env, home, set, unset, ids } = await fakeLoginWith(2);
+    const [first = "", second = ""] = ids;
+    const name1 = nameOf(first);
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { ...set, PROOFBOX_FAKE_DELETE_DOWN: name1 },
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake. Deleted 1 Sandbox.\n" +
+        `Could not delete ${first}: fake Sandbox ${name1} did not answer\n`,
+    );
+    expect(result.stdout).toBe(`${second}\n`);
+    expect(result.exitCode).toBe(125);
+    expect(readSaved(home)).toEqual({});
+    expect(existsSync(join(env.root, name1))).toBe(true);
+    expect(existsSync(join(env.runtime, `fake-${name1}.pid`))).toBe(false);
+  });
+
   it("auth logout names the Sandboxes of every region and the region it could not check", async () => {
     // Given: a fake login, two Sandboxes, and a fake region that does not answer
     const env = makeEnv();

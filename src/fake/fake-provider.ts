@@ -83,6 +83,8 @@ export const makeFakeProvider = (options: {
   // When set, create leaves a Max life file in the runtime dir, as Namespace
   // does, so auth logout finds the Sandboxes this machine started.
   readonly marksLocal?: boolean | undefined;
+  // When set, delete of the Sandbox with this name fails unreachable.
+  readonly deleteDown?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -360,6 +362,12 @@ export const makeFakeProvider = (options: {
   const del = (sandbox: SandboxRef) =>
     Effect.gen(function* () {
       const name = sandbox.name;
+      if (name === options.deleteDown) {
+        return yield* new ProviderUnavailableError({
+          provider: "fake",
+          reason: `fake Sandbox ${name} did not answer`,
+        });
+      }
       // The Max life file goes with the Sandbox, whether it was still
       // there or already gone, as Namespace drops its runtime files.
       const unmark =

@@ -49,6 +49,9 @@ export const ProvidersLive = Layer.effect(
       const listDown = yield* Config.option(
         Config.string("PROOFBOX_FAKE_LIST_DOWN"),
       );
+      const deleteDown = yield* Config.option(
+        Config.string("PROOFBOX_FAKE_DELETE_DOWN"),
+      );
       providers.set(
         "fake",
         fake.makeFakeProvider({
@@ -58,6 +61,7 @@ export const ProvidersLive = Layer.effect(
           marksLocal: true,
           unreached: Option.getOrUndefined(unreached),
           listDown: Option.getOrUndefined(listDown),
+          deleteDown: Option.getOrUndefined(deleteDown),
           snapshots: Option.isSome(snapshotsRoot)
             ? {
                 root: snapshotsRoot.value,

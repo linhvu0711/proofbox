@@ -334,6 +334,7 @@ export const logoutOfProvider = (name: string) =>
     const local = yield* localSandboxes(provider.idPrefix);
     const localIds = new Set(local.map(idOf));
     const deleted: Array<string> = [];
+    const failed: Array<string> = [];
     for (const ref of local) {
       const id = idOf(ref);
       // "gone" counts too: the host is already down, and delete dropped
@@ -342,6 +343,8 @@ export const logoutOfProvider = (name: string) =>
       yield* keeper.stop(id);
       if (Either.isRight(result)) {
         deleted.push(id);
+      } else {
+        failed.push(`Could not delete ${id}: ${result.left.message}`);
       }
     }
     const before = yield* changeLogins((saved) => {
@@ -389,6 +392,14 @@ export const logoutOfProvider = (name: string) =>
           yield* output.err(`${id} still runs, started elsewhere.\n`);
         }
       }
+    }
+    for (const line of failed) {
+      yield* output.err(`${line}\n`);
+    }
+    if (failed.length > 0) {
+      yield* output.setExitCode(125);
+    }
+    if (Either.isRight(listed)) {
       for (const miss of listed.right.unreached) {
         yield* output.err(`Could not check ${miss.where}: ${miss.reason}\n`);
       }
