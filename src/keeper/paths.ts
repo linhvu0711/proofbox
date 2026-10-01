@@ -17,6 +17,8 @@ export interface KeeperPaths {
   readonly dir: string;
   readonly socket: string;
   readonly pid: string;
+  // Held by a Keeper from its socket check until it listens.
+  readonly startLock: string;
   readonly key: string;
   // The host keys the Namespace SSH gateway pinned for the host.
   readonly knownHosts: string;
@@ -62,6 +64,7 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
     dir,
     socket: join(dir, `${stem}.sock`),
     pid: join(dir, `${stem}.pid`),
+    startLock: join(dir, `${stem}.start-lock`),
     key: join(dir, `${stem}.key`),
     knownHosts: join(dir, `${stem}.known-hosts`),
     control: join(dir, `${stem}.ctl`),
