@@ -123,7 +123,8 @@ export const markCreate = (
       dir,
       `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
     );
-    const started = yield* startOf(process.pid);
+    const own = yield* startOf(process.pid);
+    const started = own._tag === "Started" ? own.at : "";
     yield* Effect.tryPromise({
       try: () =>
         writeFile(path, `${process.pid}\n${started}\n`, { mode: 0o600 }),
@@ -139,21 +140,67 @@ export const markCreate = (
 export const unmarkCreate = (path: string) =>
   Effect.promise(() => rm(path, { force: true }).catch(() => {}));
 
-// When a process started, as `ps` tells it, or "" when it is gone or `ps`
-// cannot say. `ps` lives in /bin or /usr/bin on macOS and Linux, and the
-// C locale keeps the text the same in every process.
-const startOf = (pid: number) =>
-  Effect.promise(
-    () =>
-      new Promise<string>((resolve) => {
-        execFile(
-          "ps",
-          ["-o", "lstart=", "-p", String(pid)],
-          { env: { PATH: "/bin:/usr/bin", LC_ALL: "C" } },
-          (error, stdout) => resolve(error === null ? stdout.trim() : ""),
-        );
-      }),
+// When a process started: on Linux its start tick in /proc, which every
+// Linux has, else the text of /bin/ps, which macOS always has. Gone means
+// the process is not there; Unknown means neither could say.
+type ProcessStart =
+  | { readonly _tag: "Started"; readonly at: string }
+  | { readonly _tag: "Gone" }
+  | { readonly _tag: "Unknown" };
+
+const hasErrorCode = (cause: unknown, code: string) =>
+  typeof cause === "object" &&
+  cause !== null &&
+  "code" in cause &&
+  cause.code === code;
+
+const startOf = (pid: number): Effect.Effect<ProcessStart> =>
+  Effect.promise(() =>
+    process.platform === "linux"
+      ? readFile(`/proc/${pid}/stat`, "utf8").then(
+          (stat): ProcessStart => {
+            // Field 22, counted past the parenthesized name, which may
+            // hold spaces.
+            const at = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+            return at === undefined
+              ? { _tag: "Unknown" }
+              : { _tag: "Started", at };
+          },
+          (cause): ProcessStart =>
+            hasErrorCode(cause, "ENOENT")
+              ? { _tag: "Gone" }
+              : { _tag: "Unknown" },
+        )
+      : new Promise<ProcessStart>((resolve) => {
+          // The C locale keeps the text the same in every process.
+          execFile(
+            "/bin/ps",
+            ["-o", "lstart=", "-p", String(pid)],
+            { env: { LC_ALL: "C" } },
+            (error, stdout) => {
+              const at = stdout.trim();
+              resolve(
+                at !== ""
+                  ? { _tag: "Started", at }
+                  : error !== null && typeof error.code === "number"
+                    ? { _tag: "Gone" }
+                    : { _tag: "Unknown" },
+              );
+            },
+          );
+        }),
   );
+
+// A process that is gone answers ESRCH; EPERM means it runs as someone
+// else, which is still alive.
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    return hasErrorCode(cause, "EPERM");
+  }
+};
 
 // The marks of the creates still running for one Provider. A mark whose
 // process is gone, or whose process id now belongs to a process that
@@ -196,9 +243,17 @@ export const liveCreates = (
     const live: Array<string> = [];
     for (const mark of marks) {
       const [pid = "", started = ""] = mark.text.split("\n");
-      const now = /^\d+$/.test(pid) ? yield* startOf(Number(pid)) : "";
-      // A mark without a start time counts while its process id runs.
-      if (now !== "" && (started === "" || started === now)) {
+      if (!/^\d+$/.test(pid)) {
+        continue;
+      }
+      const now = yield* startOf(Number(pid));
+      // With no start time to compare, a running process id counts: logout
+      // would rather wait than miss a host.
+      const running =
+        now._tag === "Started"
+          ? started === "" || started === now.at
+          : now._tag === "Unknown" && isAlive(Number(pid));
+      if (running) {
         live.push(mark.name);
       }
     }
