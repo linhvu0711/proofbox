@@ -97,10 +97,10 @@ const stderr = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stderr", bytes });
 
 // Turns the events of a `checksScript` call into the Caller's: the start
 // mark and the trailer go, and the two counts land on the Exit event.
-// Stderr before the start mark is the runtime's own (the script never
-// started): a gone container there fails with `gone()`, and any other text
-// goes out as it is. After the mark, only a stderr tail that could start
-// the trailer is held back, until the next chunk or the Exit.
+// Stderr before the start mark is the runtime's own: with no mark (the
+// script never started), a gone container there fails with `gone()`; any
+// other text goes out as it is. After the mark, only a stderr tail that
+// could start the trailer is held back, until the next chunk or the Exit.
 export const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
   gone: () => SandboxGoneError,
@@ -116,16 +116,20 @@ export const splitChecks = <E>(
           return Effect.succeed([event]);
         case "Stderr": {
           held = Buffer.concat([held, event.bytes]);
+          // The runtime's own stderr before the mark (an ssh or Docker
+          // warning) goes out as it is.
+          let before = Buffer.alloc(0);
           if (!started) {
             const mark = held.indexOf(CHECKS_START, 0, "latin1");
             if (mark === -1) {
               return Effect.succeed([]);
             }
             started = true;
+            before = held.subarray(0, mark);
             held = held.subarray(mark + CHECKS_START.length);
           }
           const at = tailStart(held);
-          const out = held.subarray(0, at);
+          const out = Buffer.concat([before, held.subarray(0, at)]);
           held = held.subarray(at);
           return Effect.succeed(out.length === 0 ? [] : [stderr(out)]);
         }

@@ -114,6 +114,25 @@ describe("command checks", () => {
       }),
   );
 
+  it.effect("a runtime warning before the start mark reaches the Caller", () =>
+    Effect.gen(function* () {
+      // Given / When: the mark split over two chunks, after a warning
+      const events = yield* split(
+        err("Warning: remote host notice\n\x1fproof"),
+        err("box-start\n"),
+        out("done\n"),
+        err(checksTrailer(0, 0)),
+        exit(0),
+      );
+      // Then
+      expect(events).toEqual([
+        { _tag: "Stderr", text: "Warning: remote host notice\n" },
+        { _tag: "Stdout", text: "done\n" },
+        { _tag: "Exit", code: 0, kills: { before: 0, after: 0 } },
+      ]);
+    }),
+  );
+
   it.effect("other text before the start mark passes through", () =>
     Effect.gen(function* () {
       // Given / When
