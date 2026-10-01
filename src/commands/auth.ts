@@ -476,11 +476,20 @@ export const logoutOfProvider = (name: string) =>
     yield* output.err(`Logged out of ${provider.name}.${note}\n`);
     // A Sandbox from another machine stops by that machine's login; it
     // stays.
+    // An Unfinished Sandbox from elsewhere stays too, but it uses quota:
+    // say so.
     // Without a scan there is no telling local from elsewhere: say neither.
     if (Either.isRight(listed) && !scanFailed) {
       for (const id of listed.right.infos.map(idOf)) {
         if (!localIds.has(id)) {
           yield* output.err(`${id} still runs, started elsewhere.\n`);
+        }
+      }
+      for (const id of listed.right.unfinished.map(idOf)) {
+        if (!localIds.has(id)) {
+          yield* output.err(
+            `Unfinished Sandbox ${id}, started elsewhere: it counts against your ${provider.name} quota until it is deleted or its Deadline passes.\n`,
+          );
         }
       }
     }

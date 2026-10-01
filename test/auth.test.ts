@@ -935,6 +935,42 @@ describe("auth", () => {
     expect(existsSync(join(env.root, nameOf(theirs)))).toBe(true);
   });
 
+  it("auth logout names an Unfinished Sandbox started elsewhere and leaves it", async () => {
+    // Given: a Sandbox folder another machine's create never finished (no
+    // sandbox.json), on the same fake account
+    const { env, set, unset } = await fakeLoginWith(0);
+    mkdirSync(join(env.root, "uuuuuu"));
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Logged out of fake.\nUnfinished Sandbox fake:uuuuuu, started elsewhere: it counts against your fake quota until it is deleted or its Deadline passes.\n",
+    );
+    expect(result.stdout).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(env.root, "uuuuuu"))).toBe(true);
+  });
+
+  it("auth logout deletes an Unfinished Sandbox this machine started", async () => {
+    // Given: an Unfinished Sandbox with this machine's Max life file
+    const { env, set, unset } = await fakeLoginWith(0);
+    mkdirSync(join(env.root, "uuuuuu"));
+    writeFileSync(join(env.runtime, "fake-uuuuuu.max-life"), "");
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stderr).toBe("Logged out of fake. Deleted 1 Sandbox.\n");
+    expect(result.stdout).toBe("fake:uuuuuu\n");
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(join(env.root, "uuuuuu"))).toBe(false);
+  });
+
   it("auth logout deletes the rest when one delete fails", async () => {
     // Given
     const { env, home, set, unset, ids } = await fakeLoginWith(2);
@@ -1113,6 +1149,26 @@ describe("auth", () => {
     );
     expect(result.exitCode).toBe(125);
     expect(readSaved(home)).toEqual({});
+  });
+
+  it("auth logout names no Unfinished Sandbox when it cannot read the runtime dir", async () => {
+    // Given: an Unfinished Sandbox, and a runtime dir that is a regular
+    // file, so logout cannot tell whether this machine started it
+    const { env, set, unset } = await fakeLoginWith(0);
+    mkdirSync(join(env.root, "uuuuuu"));
+    const file = join(mkdtempSync(join(tmpdir(), "proofbox-file-")), "f");
+    trackTempDir(dirname(file));
+    writeFileSync(file, "x");
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set: { ...set, PROOFBOX_RUNTIME_DIR: file },
+      unset,
+    });
+    // Then
+    expect(result.stderr).toMatch(
+      /^Logged out of fake\.\nCould not check this machine's Sandboxes: .+\n$/,
+    );
+    expect(result.exitCode).toBe(125);
   });
 
   it("auth logout namespace still reports when it cannot read the runtime dir", async () => {
