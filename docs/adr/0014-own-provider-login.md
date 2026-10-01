@@ -6,7 +6,7 @@ Namespace has no public login for outside apps. The browser login uses two priva
 
 The Provider login holds the region new Sandboxes go to, but a Sandbox id carries its own region (`ns:us:abc123`), because each Namespace region sees only its own instances. A later login with another region still reaches older Sandboxes. One Provider login works in every region; only the address differs. So `list` and `auth logout`, which start from no id, ask every region proofbox knows and show each Sandbox with its region.
 
-`auth logout` always removes the Provider login. It names the Sandboxes that still run, and when it cannot reach the Provider (no network, expired login) it says it could not check. Sandboxes left behind stop at their Deadline (ADR 0003).
+`auth logout` always removes the Provider login. First it deletes the Sandboxes this machine started, names the ones started elsewhere, and says what it could not check or delete (ADR 0016).
 
 Each Provider declares its login ways (browser, token, or none), so a Provider with a token page in its dashboard, a device-code login, or no login at all fits the same `auth` commands.
 
