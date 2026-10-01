@@ -99,10 +99,10 @@ const saveLogins = (logins: LoginsFile) =>
     });
   });
 
-// Each auth command reads, changes one slot, and writes; the lock keeps
-// an overlapping command's slot from being dropped by the last write.
-// Returns the logins as read under the lock.
-export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
+// The lock every change to logins.json runs under. Create and logout also
+// hold it while they check for a login and for a running create, so a
+// create either shows up for logout or finds no login (ADR 0016).
+export const withLoginsLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const path = yield* loginsPath;
     const dir = dirname(path);
@@ -122,11 +122,20 @@ export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
       busy: () => new LoginsBusyError({ lockDir }),
       failed: () =>
         new BadLoginsFileError({ path, reason: "could not be written" }),
-    })(
-      Effect.gen(function* () {
-        const logins = yield* readLogins;
-        yield* saveLogins(change(logins));
-        return logins;
-      }),
-    );
+    })(effect);
   });
+
+// Reads, changes one slot, and writes; only for code that holds the
+// logins lock already. Returns the logins as read.
+export const rewriteLogins = (change: (logins: LoginsFile) => LoginsFile) =>
+  Effect.gen(function* () {
+    const logins = yield* readLogins;
+    yield* saveLogins(change(logins));
+    return logins;
+  });
+
+// Each auth command reads, changes one slot, and writes; the lock keeps
+// an overlapping command's slot from being dropped by the last write.
+// Returns the logins as read under the lock.
+export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
+  withLoginsLock(rewriteLogins(change));

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readdir } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, Effect } from "effect";
@@ -94,5 +94,72 @@ export const localSandboxes = (
           ? { name: rest, region: undefined }
           : { name: rest.slice(colon + 1), region: rest.slice(0, colon) },
       ];
+    });
+  });
+
+// A create still running leaves a create mark, `<prefix>-creating-<pid>`,
+// in the runtime dir from its login check until its Max life file is
+// written: its host can exist before that file does, so logout waits for
+// it (ADR 0016).
+export const markCreate = (
+  prefix: string,
+): Effect.Effect<string, ProviderError> =>
+  Effect.gen(function* () {
+    const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
+      .dir;
+    const path = join(dir, `${prefix}-creating-${process.pid}`);
+    yield* Effect.tryPromise({
+      try: () => writeFile(path, `${process.pid}\n`, { mode: 0o600 }),
+      catch: (cause) =>
+        new ProviderError({
+          provider: prefix,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    });
+    return path;
+  });
+
+export const unmarkCreate = (path: string) =>
+  Effect.promise(() => rm(path, { force: true }).catch(() => {}));
+
+// A process that is gone answers ESRCH; EPERM means it runs as someone
+// else, which is still alive.
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    return (
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "EPERM"
+    );
+  }
+};
+
+// The process ids of the creates still running for one Provider. A mark
+// left by a create that crashed names a dead process and is skipped.
+export const liveCreates = (
+  prefix: string,
+): Effect.Effect<ReadonlyArray<number>, ProviderError> =>
+  Effect.gen(function* () {
+    const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" }))
+      .dir;
+    return yield* Effect.tryPromise({
+      try: async () =>
+        (await readdir(dir)).flatMap((entry) => {
+          const pid = /^(\d+)$/.exec(
+            entry.startsWith(`${prefix}-creating-`)
+              ? entry.slice(`${prefix}-creating-`.length)
+              : "",
+          )?.[1];
+          return pid !== undefined && isAlive(Number(pid)) ? [Number(pid)] : [];
+        }),
+      catch: (cause) =>
+        new ProviderError({
+          provider: prefix,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
     });
   });

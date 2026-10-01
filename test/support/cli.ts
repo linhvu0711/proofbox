@@ -126,6 +126,9 @@ export const runCli = (
     readonly set?: Readonly<Record<string, string>>;
     readonly unset?: ReadonlyArray<string>;
     readonly input?: string;
+    // Sees stderr as it comes, while the command still runs; `interrupt`
+    // sends it SIGINT, as Ctrl-C does.
+    readonly onStderr?: (chunk: string, interrupt: () => void) => void;
   } = {},
 ): Promise<CliResult> =>
   new Promise((resolve) => {
@@ -161,5 +164,11 @@ export const runCli = (
     );
     if (options.input !== undefined) {
       child.stdin?.end(options.input);
+    }
+    const onStderr = options.onStderr;
+    if (onStderr !== undefined) {
+      child.stderr?.on("data", (chunk: Buffer | string) =>
+        onStderr(String(chunk), () => child.kill("SIGINT")),
+      );
     }
   });

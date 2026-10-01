@@ -10,6 +10,7 @@ import {
   Either,
   Option,
   Redacted,
+  Schedule,
 } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { parseSpan, TOKEN_SPAN } from "../deadline.ts";
@@ -29,11 +30,14 @@ import {
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { keeperPaths, localSandboxes } from "../keeper/paths.ts";
+import { keeperPaths, liveCreates, localSandboxes } from "../keeper/paths.ts";
 import {
   changeLogins,
+  type LoginsFile,
   readLogins,
+  rewriteLogins,
   type SavedLogin,
+  withLoginsLock,
 } from "../login/logins-file.ts";
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
@@ -347,33 +351,86 @@ export const logoutOfProvider = (name: string) =>
         region: ref.region,
         name: ref.name,
       });
-    // A runtime dir it cannot read must not keep the login: the failure is
-    // named and the login still goes.
-    const scanned = yield* Effect.either(localSandboxes(provider.idPrefix));
-    const local = Either.isRight(scanned) ? scanned.right : [];
-    const localIds = new Set(local.map(idOf));
+    const localIds = new Set<string>();
     const deleted: Array<string> = [];
-    const failed: Array<string> = Either.isLeft(scanned)
-      ? [`Could not check this machine's Sandboxes: ${scanned.left.reason}`]
-      : [];
-    for (const ref of local) {
-      const id = idOf(ref);
-      // "gone" counts too: the host is already down, and delete dropped
-      // its files.
-      const result = yield* Effect.either(withSavedLogin(provider.delete(ref)));
-      yield* keeper.stop(id);
-      if (Either.isRight(result)) {
-        deleted.push(id);
-      } else {
-        failed.push(`Could not delete ${id}: ${result.left.message}`);
+    const failed: Array<string> = [];
+    let scanFailed = false;
+    // Waits for the creates still running, then deletes every Sandbox
+    // this machine started that it has not tried yet.
+    const sweep = Effect.gen(function* () {
+      const running = yield* liveCreates(provider.idPrefix).pipe(
+        Effect.orElseSucceed(() => []),
+      );
+      if (running.length > 0) {
+        yield* output.err(
+          running.length === 1
+            ? "Waiting for 1 create to finish…\n"
+            : `Waiting for ${running.length} creates to finish…\n`,
+        );
+        yield* liveCreates(provider.idPrefix).pipe(
+          Effect.orElseSucceed(() => []),
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(500)),
+            until: (left) => left.length === 0,
+          }),
+        );
       }
-    }
-    const before = yield* changeLogins((saved) => {
-      const rest = { ...saved };
-      delete rest[provider.name];
-      return rest;
+      // A runtime dir it cannot read must not keep the login: the failure
+      // is named and the login still goes.
+      const scanned = yield* Effect.either(localSandboxes(provider.idPrefix));
+      if (Either.isLeft(scanned)) {
+        if (!scanFailed) {
+          scanFailed = true;
+          failed.push(
+            `Could not check this machine's Sandboxes: ${scanned.left.reason}`,
+          );
+        }
+        return;
+      }
+      for (const ref of scanned.right) {
+        const id = idOf(ref);
+        if (localIds.has(id)) {
+          continue;
+        }
+        localIds.add(id);
+        // "gone" counts too: the host is already down, and delete dropped
+        // its files.
+        const result = yield* Effect.either(
+          withSavedLogin(provider.delete(ref)),
+        );
+        yield* keeper.stop(id);
+        if (Either.isRight(result)) {
+          deleted.push(id);
+        } else {
+          failed.push(`Could not delete ${id}: ${result.left.message}`);
+        }
+      }
     });
-    if (before[provider.name] === undefined) {
+    // The last look for running creates and the login's removal share the
+    // logins lock with each create's login check: a create that marked
+    // itself in the meantime sends logout back to wait for it.
+    let before: Option.Option<LoginsFile> = Option.none();
+    while (Option.isNone(before)) {
+      yield* sweep;
+      before = yield* withLoginsLock(
+        Effect.gen(function* () {
+          const running = yield* liveCreates(provider.idPrefix).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          if (running.length > 0) {
+            return Option.none();
+          }
+          return Option.some(
+            yield* rewriteLogins((saved) => {
+              const rest = { ...saved };
+              delete rest[provider.name];
+              return rest;
+            }),
+          );
+        }),
+      );
+    }
+    if (before.value[provider.name] === undefined) {
       yield* output.err(`No saved login for ${provider.name}.\n`);
       return;
     }
@@ -420,7 +477,7 @@ export const logoutOfProvider = (name: string) =>
     // A Sandbox from another machine stops by that machine's login; it
     // stays.
     // Without a scan there is no telling local from elsewhere: say neither.
-    if (Either.isRight(listed) && Either.isRight(scanned)) {
+    if (Either.isRight(listed) && !scanFailed) {
       for (const id of listed.right.infos.map(idOf)) {
         if (!localIds.has(id)) {
           yield* output.err(`${id} still runs, started elsewhere.\n`);

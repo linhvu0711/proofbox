@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   idleDefault,
@@ -17,8 +17,15 @@ import {
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
+import { markCreate, unmarkCreate } from "../keeper/paths.ts";
+import { readLogins, withLoginsLock } from "../login/logins-file.ts";
 import { Progress } from "../progress.ts";
-import { lacksFeature, type Os, Providers } from "../provider.ts";
+import {
+  lacksFeature,
+  type Os,
+  type Provider,
+  Providers,
+} from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
@@ -26,6 +33,38 @@ import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
+
+// A create that may act with the saved login marks itself while it runs,
+// and checks for that login and writes the mark under the logins lock: a
+// logout either waits for this create or has removed the login already
+// (ADR 0016). Without a saved login there is nothing for logout to remove,
+// and the Provider's own login check decides; nor does a Provider with no
+// login need a mark.
+const markWhileLoggedIn = (provider: Provider) =>
+  Effect.gen(function* () {
+    if (provider.login._tag === "None") {
+      return Option.none<string>();
+    }
+    // A logins file it cannot read leaves the login to the Provider too.
+    const saved = readLogins.pipe(
+      Effect.map((logins) => logins[provider.name] !== undefined),
+      Effect.orElseSucceed(() => false),
+    );
+    if (!(yield* saved)) {
+      return Option.none<string>();
+    }
+    return yield* withLoginsLock(
+      Effect.gen(function* () {
+        return (yield* saved)
+          ? Option.some(yield* markCreate(provider.idPrefix))
+          : Option.none<string>();
+      }),
+    ).pipe(
+      Effect.catchTag("ConfigError", () =>
+        Effect.succeed(Option.none<string>()),
+      ),
+    );
+  });
 
 export const createSandbox = (options: {
   readonly os: Os;
@@ -132,13 +171,20 @@ export const createSandbox = (options: {
             script,
             files,
           });
-    const info = yield* provider.create({
-      os: options.os,
-      idle,
-      maxLife,
-      size,
-      snapshot: fp,
-    });
+    // The mark goes once the Max life file is there for logout to find.
+    const info = yield* Effect.acquireUseRelease(
+      markWhileLoggedIn(provider),
+      () =>
+        provider.create({
+          os: options.os,
+          idle,
+          maxLife,
+          size,
+          snapshot: fp,
+        }),
+      (mark) =>
+        Option.match(mark, { onNone: () => Effect.void, onSome: unmarkCreate }),
+    );
     const sandbox = { name: info.name, region: info.region };
     // A Sandbox that started from the Snapshot already has the Setup
     // script's work in it.

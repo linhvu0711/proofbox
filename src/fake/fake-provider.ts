@@ -17,6 +17,7 @@ import {
   Effect,
   type Option,
   Redacted,
+  Schedule,
   Schema,
   Stream,
 } from "effect";
@@ -85,6 +86,10 @@ export const makeFakeProvider = (options: {
   readonly marksLocal?: boolean | undefined;
   // When set, delete of the Sandbox with this name fails unreachable.
   readonly deleteDown?: string | undefined;
+  // When set, create stops after the Sandbox exists and before its Max
+  // life file, until a file at this path exists: a create still running,
+  // as a slow Namespace host makes one.
+  readonly createHold?: string | undefined;
 }): Provider => {
   const root = options.root;
   const fail = (reason: string) =>
@@ -261,6 +266,15 @@ export const makeFakeProvider = (options: {
         snapshot: entry === undefined ? undefined : req.snapshot,
       });
       yield* writeFileInfo(name, file);
+      const hold = options.createHold;
+      if (hold !== undefined) {
+        yield* Effect.sync(() => existsSync(hold)).pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(50)),
+            until: (released) => released,
+          }),
+        );
+      }
       if (options.marksLocal === true) {
         const maxLife = (yield* keeperPaths({ provider: "fake", name }))
           .maxLife;

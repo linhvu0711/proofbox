@@ -430,7 +430,7 @@ export class LoginsBusyError extends Data.TaggedError("LoginsBusyError")<{
   readonly lockDir: string;
 }> {
   get message() {
-    return `Another proofbox auth command holds ${this.lockDir}. Try again, or delete it if no other proofbox runs.`;
+    return `Another proofbox command holds ${this.lockDir}. Try again, or delete it if no other proofbox runs.`;
   }
 }
 
