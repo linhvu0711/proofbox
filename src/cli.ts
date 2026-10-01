@@ -3,6 +3,7 @@ import { Effect, Option } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
+  makeRobotToken,
   showAuthStatus,
 } from "./commands/auth.ts";
 import { clickAt } from "./commands/click.ts";
@@ -295,8 +296,18 @@ const authLogout = Command.make(
   ({ provider }) => logoutOfProvider(provider),
 );
 
+const authToken = Command.make(
+  "token",
+  {
+    provider: Args.text({ name: "provider" }),
+    name: Options.text("name").pipe(Options.optional),
+    expires: Options.text("expires").pipe(Options.optional),
+  },
+  ({ provider, name, expires }) => makeRobotToken({ provider, name, expires }),
+);
+
 const auth = Command.make("auth").pipe(
-  Command.withSubcommands([authLogin, authStatus, authLogout]),
+  Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
 );
 
 const upload = Command.make(

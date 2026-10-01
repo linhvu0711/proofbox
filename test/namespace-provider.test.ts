@@ -84,6 +84,7 @@ const fakeApi = (
     },
     sshConfig: () => Effect.die("unused"),
     checkToken: () => Effect.die("unused"),
+    makeToken: () => Effect.die("unused"),
   };
 };
 

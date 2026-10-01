@@ -26,10 +26,18 @@ import {
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { loginToProvider, logoutOfProvider } from "../src/commands/auth.ts";
+import {
+  loginToProvider,
+  logoutOfProvider,
+  makeRobotToken,
+} from "../src/commands/auth.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { changeLogins } from "../src/login/logins-file.ts";
-import { type Provider, Providers } from "../src/provider.ts";
+import {
+  type Provider,
+  Providers,
+  type TokenRequest,
+} from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 import {
   type FakeNamespace,
@@ -1650,5 +1658,426 @@ describe("auth", () => {
     expect(() =>
       statSync(join(home, ".config", "proofbox", "logins.json")),
     ).toThrow();
+  });
+
+  it("auth token namespace prints the token on stdout and a shown-once note on stderr", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { json: { bearerToken: "nsrt_robot_1" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stdout).toBe("nsrt_robot_1\n");
+    expect(result.stderr).toBe(
+      'Made namespace token "ci". It is shown only this once: store it now.\n',
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth token namespace asks Namespace for a workspace token with only the rights proofbox needs", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { json: { bearerToken: "nsrt_robot_1" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    const created = ns.calls.filter(
+      (call) => call.method === "CreateRevokableToken",
+    );
+    expect(created).toHaveLength(1);
+    const call = created[0];
+    if (call === undefined) {
+      expect.unreachable("no CreateRevokableToken call");
+    }
+    expect(call.region).toBe("");
+    expect(call.authorization).toBe(`Bearer ${TENANT_1}`);
+    expect(call.body).toEqual({
+      name: "ci",
+      description: "Made by proofbox auth token",
+      expiresAt: expect.any(String),
+      access: {
+        grants: [
+          {
+            resourceType: "instance",
+            resourceId: "*",
+            actions: [
+              "create",
+              "get",
+              "list",
+              "wait",
+              "refresh",
+              "destroy",
+              "ssh",
+            ],
+          },
+          {
+            resourceType: "containerregistry/image",
+            resourceId: "*",
+            actions: ["get", "update"],
+          },
+        ],
+      },
+    });
+  });
+
+  effectIt.effect("auth token sets the expiry --expires after now", () =>
+    Effect.gen(function* () {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      trackTempDir(root);
+      const home = makeHome(
+        '{"robot":{"way":"browser","session":"s1","account":"team-1","expiresAt":"3000-01-01T00:00:00.000Z"}}',
+      );
+      const requests = yield* Ref.make<ReadonlyArray<TokenRequest>>([]);
+      const providers = Layer.succeed(
+        Providers,
+        new Map<string, Provider>([
+          [
+            "robot",
+            {
+              ...makeFakeProvider({ root, watch: "none" }),
+              name: "robot",
+              login: {
+                _tag: "Ways",
+                checkToken: () => Effect.die("unused"),
+                browser: {
+                  start: Effect.succeed({
+                    loginId: "L1",
+                    url: "http://127.0.0.1:9/login/L1",
+                  }),
+                  complete: () => Effect.never,
+                  makeToken: (_session, request) =>
+                    Ref.update(requests, (list) => [...list, request]).pipe(
+                      Effect.as(Redacted.make("nsrt_robot_1")),
+                    ),
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      yield* Effect.gen(function* () {
+        // When
+        yield* makeRobotToken({
+          provider: "robot",
+          name: Option.some("ci"),
+          expires: Option.some("30d"),
+        });
+        // Then
+        expect(yield* Ref.get(requests)).toEqual([
+          { name: "ci", expiresAt: new Date("1970-01-31T00:00:00.000Z") },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["HOME", home]])),
+        ),
+        Effect.provide(NodeContext.layer),
+      );
+    }),
+  );
+
+  effectIt.effect("auth token reads 1y as 365 days", () =>
+    Effect.gen(function* () {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      trackTempDir(root);
+      const home = makeHome(
+        '{"robot":{"way":"browser","session":"s1","account":"team-1","expiresAt":"3000-01-01T00:00:00.000Z"}}',
+      );
+      const requests = yield* Ref.make<ReadonlyArray<TokenRequest>>([]);
+      const providers = Layer.succeed(
+        Providers,
+        new Map<string, Provider>([
+          [
+            "robot",
+            {
+              ...makeFakeProvider({ root, watch: "none" }),
+              name: "robot",
+              login: {
+                _tag: "Ways",
+                checkToken: () => Effect.die("unused"),
+                browser: {
+                  start: Effect.succeed({
+                    loginId: "L1",
+                    url: "http://127.0.0.1:9/login/L1",
+                  }),
+                  complete: () => Effect.never,
+                  makeToken: (_session, request) =>
+                    Ref.update(requests, (list) => [...list, request]).pipe(
+                      Effect.as(Redacted.make("nsrt_robot_1")),
+                    ),
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      yield* Effect.gen(function* () {
+        // When
+        yield* makeRobotToken({
+          provider: "robot",
+          name: Option.some("ci"),
+          expires: Option.some("1y"),
+        });
+        // Then
+        expect(yield* Ref.get(requests)).toEqual([
+          { name: "ci", expiresAt: new Date("1971-01-01T00:00:00.000Z") },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["HOME", home]])),
+        ),
+        Effect.provide(NodeContext.layer),
+      );
+    }),
+  );
+
+  it("auth token namespace with only the env token says to log in", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      {
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+          PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+          PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+        },
+      },
+    );
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Not logged in to namespace. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(ns.calls).toEqual([]);
+  });
+
+  it("auth token namespace with no login says to log in", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set: { HOME: home }, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Not logged in to namespace. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace when Namespace cannot be reached says to check the network", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      {
+        set: {
+          HOME: home,
+          PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+          PROOFBOX_NAMESPACE_TOKEN_URL: "http://127.0.0.1:9",
+        },
+        unset: ["PROOFBOX_NAMESPACE_TOKEN"],
+      },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "Could not reach Namespace. Check your network and try again.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token fake says fake cannot make tokens", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "fake", "--name", "ci", "--expires", "30d"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe("fake cannot make tokens.\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace without --expires says it is required", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace --expires over one year gives the limit", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "366d"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace with an --expires it cannot read gives the limit", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30x"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe(
+      "--expires is required (for example 30d, at most 1y).\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace without --name says it is required", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--expires", "30d"],
+      { set: { HOME: home } },
+    );
+    // Then
+    expect(result.stderr).toBe("--name is required (for example ci).\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token docker says docker needs no login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "token", "docker"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe("docker needs no login.\n");
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace without the right to make tokens says to ask an admin", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { error: { code: "permission_denied", message: "denied" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Your Namespace account cannot make tokens. Ask a workspace admin.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth token namespace with a session Namespace refuses says the login expired", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(NS_BROWSER);
+    const ns = await fakeNamespaceSignin(undefined, (call) =>
+      call.method === "CreateRevokableToken"
+        ? { error: { code: "unauthenticated", message: "bad token" } }
+        : { json: {} },
+    );
+    const set = {
+      HOME: home,
+      PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+      PROOFBOX_NAMESPACE_TOKEN_URL: iamUrl(ns),
+    };
+    // When
+    const result = await runCli(
+      env,
+      ["auth", "token", "namespace", "--name", "ci", "--expires", "30d"],
+      { set, unset: ["PROOFBOX_NAMESPACE_TOKEN"] },
+    );
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Your Provider login for namespace expired. Run: proofbox auth login namespace\n",
+    );
+    expect(result.exitCode).toBe(125);
   });
 });

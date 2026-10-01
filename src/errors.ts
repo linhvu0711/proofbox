@@ -408,6 +408,14 @@ export class TokenPermissionError extends Data.TaggedError(
   }
 }
 
+export class TokenDeniedError extends Data.TaggedError("TokenDeniedError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `Your ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} account cannot make tokens. Ask a workspace admin.`;
+  }
+}
+
 export class BadLoginsFileError extends Data.TaggedError("BadLoginsFileError")<{
   readonly path: string;
   readonly reason: string;
@@ -492,6 +500,24 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
 }> {
   get message() {
     return `No token on stdin. Run: echo <token> | proofbox auth login ${this.provider} --token`;
+  }
+}
+
+export class NoTokenMakingError extends Data.TaggedError("NoTokenMakingError")<{
+  readonly provider: string;
+}> {
+  get message() {
+    return `${this.provider} cannot make tokens.`;
+  }
+}
+
+export class BadTokenFlagError extends Data.TaggedError("BadTokenFlagError")<{
+  readonly flag: "name" | "expires";
+}> {
+  get message() {
+    return this.flag === "name"
+      ? "--name is required (for example ci)."
+      : "--expires is required (for example 30d, at most 1y).";
   }
 }
 
