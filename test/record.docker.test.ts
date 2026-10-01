@@ -404,6 +404,158 @@ describe("Recording and the Proof video", () => {
     expect(edit.stdout).toMatch(/:text=» \d+ s later:expansion=none:/);
   });
 
+  it("a Wait mark puts its reason on the label in the Proof video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await wait(6000);
+    await runCli(env, ["mark", id, "waiting for the menu", "--wait"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(1000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/recordings/1/edit.txt",
+    ]);
+    expect(edit.stdout).toMatch(
+      /:text=» \d+ s later · waiting for the menu:expansion=none:/,
+    );
+  });
+
+  it("record stop warns about a Wait mark that found no Still part", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await wait(6000);
+    await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
+    await runCli(env, [
+      "click",
+      id,
+      "740",
+      "500",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(300);
+    const marked = await runCli(env, [
+      "mark",
+      id,
+      "nobody waits here",
+      "--wait",
+    ]);
+    expect(marked.exitCode, marked.stderr).toBe(0);
+    // When — stop at once, so the still part after the Wait mark stays
+    // under 3 s and cannot take it.
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      'proofbox: Wait mark "nobody waits here" found no free Still part in step 1\n',
+    );
+  });
+
+  it("record stop names a Wait mark before the first Step mark", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(6000);
+    await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
+    await runCli(env, [
+      "click",
+      id,
+      "740",
+      "500",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(300);
+    const marked = await runCli(env, [
+      "mark",
+      id,
+      "nobody waits here",
+      "--wait",
+    ]);
+    expect(marked.exitCode, marked.stderr).toBe(0);
+    // When — stop at once, so the still part after the Wait mark stays
+    // under 3 s and cannot take it.
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      'proofbox: Wait mark "nobody waits here" found no free Still part before the first Step mark\n',
+    );
+  });
+
   it("record start twice is refused", async () => {
     // Given
     const env = makeEnv({ docker: true });
