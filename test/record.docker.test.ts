@@ -74,7 +74,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "proof.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     const out = join(dir, "proof.mp4");
     expect(result.stdout).toBe(`${out}\n`);
     const bytes = readFileSync(out);
@@ -124,7 +124,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "proof.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     const probe = await runCli(env, [
       "exec",
       id,
@@ -168,7 +168,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "proof.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     const out = join(dir, "proof.mp4");
     const shot1 = join(dir, "proof-1.png");
     const shot2 = join(dir, "proof-2.png");
@@ -211,7 +211,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "proof.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     const probe = await runCli(env, [
       "exec",
       id,
@@ -291,7 +291,7 @@ describe("Recording and the Proof video", () => {
     // When
     const result = await runCli(env, ["record", "stop", id, "--discard"]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe(
       "proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv\n",
@@ -445,7 +445,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "proof.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(
       result.stderr.startsWith("proofbox: building the Proof video\n"),
     ).toBe(true);
