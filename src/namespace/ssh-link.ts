@@ -65,9 +65,7 @@ const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
 const lastLine = (text: string) => {
   const lines = text.trim().split("\n");
   return (
-    lines.filter((line) => !line.startsWith("debug")).pop() ??
-    lines.pop() ??
-    ""
+    lines.filter((line) => !line.startsWith("debug")).pop() ?? lines.pop() ?? ""
   );
 };
 
