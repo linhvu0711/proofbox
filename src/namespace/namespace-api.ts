@@ -347,220 +347,232 @@ export const makeNamespaceApi = (deps: {
   const loggedRegistry = () =>
     Effect.flatMap(deps.login, (hand) => registryFor(hand.token));
 
-  const list = (region: string, labels: ReadonlyArray<LabelEntry>) =>
-    Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      const labelFilter = labels.map((label) => ({
-        name: label.name,
-        value: label.value,
-        op: LabelFilterEntry_LabelFilterOp.EQUAL,
-      }));
-      const found: InstanceListed[] = [];
-      let cursor: Uint8Array = new Uint8Array();
-      while (true) {
-        const page = yield* Effect.tryPromise({
-          try: () =>
-            client.compute.listInstances({
-              labelFilter,
-              paginationCursor: cursor,
-            }),
-          catch: fromConnect("ListInstances"),
+  const list = Effect.fn("NamespaceApi.list")(function* (
+    region: string,
+    labels: ReadonlyArray<LabelEntry>,
+  ) {
+    const client = yield* loggedClient(region);
+    const labelFilter = labels.map((label) => ({
+      name: label.name,
+      value: label.value,
+      op: LabelFilterEntry_LabelFilterOp.EQUAL,
+    }));
+    const found: InstanceListed[] = [];
+    let cursor: Uint8Array = new Uint8Array();
+    while (true) {
+      const page = yield* Effect.tryPromise({
+        try: () =>
+          client.compute.listInstances({
+            labelFilter,
+            paginationCursor: cursor,
+          }),
+        catch: fromConnect("ListInstances"),
+      });
+      for (const instance of page.instances) {
+        found.push({
+          id: instance.instanceId,
+          labels: Object.fromEntries(
+            instance.labels.map((label) => [label.name, label.value]),
+          ),
+          region:
+            instance.hwDeployment?.geoContinent === ""
+              ? undefined
+              : instance.hwDeployment?.geoContinent,
+          createdAt:
+            instance.createdAt === undefined
+              ? undefined
+              : timestampDate(instance.createdAt),
+          starting:
+            instance.status === InstanceMetadata_Status.PENDING ||
+            instance.status === InstanceMetadata_Status.CREATING,
         });
-        for (const instance of page.instances) {
-          found.push({
-            id: instance.instanceId,
-            labels: Object.fromEntries(
-              instance.labels.map((label) => [label.name, label.value]),
-            ),
-            region:
-              instance.hwDeployment?.geoContinent === ""
-                ? undefined
-                : instance.hwDeployment?.geoContinent,
-            createdAt:
-              instance.createdAt === undefined
-                ? undefined
-                : timestampDate(instance.createdAt),
-            starting:
-              instance.status === InstanceMetadata_Status.PENDING ||
-              instance.status === InstanceMetadata_Status.CREATING,
-          });
-        }
-        if (page.paginationCursor.length === 0) {
-          return found;
-        }
-        cursor = page.paginationCursor;
       }
-    });
+      if (page.paginationCursor.length === 0) {
+        return found;
+      }
+      cursor = page.paginationCursor;
+    }
+  });
 
   // A claims-bearing token gives its tenant and expiry; an opaque one
   // (real revocable tokens are `nsrt_`) is still checked with the one
   // ListInstances call, and account and expiry stay unknown.
-  const checkToken = (
+  const checkToken = Effect.fn("NamespaceApi.checkToken")(function* (
     token: Redacted.Redacted<string>,
     region: Option.Option<string>,
-  ) =>
-    Effect.gen(function* () {
-      const client = yield* clientFor(
-        Option.getOrElse(region, () => DEFAULT_REGION),
-        token,
-      ).pipe(Effect.mapError(() => unreachable()));
-      yield* Effect.tryPromise({
-        try: () => client.compute.listInstances({ maxEntries: 1n }),
-        catch: fromConnect("ListInstances"),
-      }).pipe(
-        // checkToken's failure ways stay narrow; an odd answer reads as
-        // unreachable.
-        Effect.mapError((error) =>
-          error instanceof TokenRejectedError ||
-          error instanceof TokenPermissionError ||
-          error instanceof ProviderUnavailableError
-            ? error
-            : unreachable(),
-        ),
-      );
-      const claims = extractClaims(Redacted.value(token));
-      const tenantId = claims?.tenant_id;
-      const exp = claims?.exp;
-      return typeof tenantId === "string" && typeof exp === "number"
-        ? { account: tenantId, expiresAt: new Date(exp * 1000) }
-        : ({} satisfies ProviderAccount);
-    });
+  ) {
+    const client = yield* clientFor(
+      Option.getOrElse(region, () => DEFAULT_REGION),
+      token,
+    ).pipe(Effect.mapError(() => unreachable()));
+    yield* Effect.tryPromise({
+      try: () => client.compute.listInstances({ maxEntries: 1n }),
+      catch: fromConnect("ListInstances"),
+    }).pipe(
+      // checkToken's failure ways stay narrow; an odd answer reads as
+      // unreachable.
+      Effect.mapError((error) =>
+        error instanceof TokenRejectedError ||
+        error instanceof TokenPermissionError ||
+        error instanceof ProviderUnavailableError
+          ? error
+          : unreachable(),
+      ),
+    );
+    const claims = extractClaims(Redacted.value(token));
+    const tenantId = claims?.tenant_id;
+    const exp = claims?.exp;
+    return typeof tenantId === "string" && typeof exp === "number"
+      ? { account: tenantId, expiresAt: new Date(exp * 1000) }
+      : ({} satisfies ProviderAccount);
+  });
 
-  const create = (region: string, req: CreateReq) =>
-    Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      const made = yield* Effect.tryPromise({
-        try: () =>
-          client.compute.createInstance({
-            shape: {
-              os: req.shape.os,
-              machineArch: req.shape.machineArch,
-              virtualCpu: req.shape.virtualCpu,
-              memoryMegabytes: req.shape.memoryMegabytes,
-              selectors: req.shape.selectors.map((label) => ({
-                name: label.name,
-                value: label.value,
-              })),
-            },
-            labels: req.labels.map((label) => ({
+  const create = Effect.fn("NamespaceApi.create")(function* (
+    region: string,
+    req: CreateReq,
+  ) {
+    const client = yield* loggedClient(region);
+    const made = yield* Effect.tryPromise({
+      try: () =>
+        client.compute.createInstance({
+          shape: {
+            os: req.shape.os,
+            machineArch: req.shape.machineArch,
+            virtualCpu: req.shape.virtualCpu,
+            memoryMegabytes: req.shape.memoryMegabytes,
+            selectors: req.shape.selectors.map((label) => ({
               name: label.name,
               value: label.value,
             })),
-            deadline: timestampFromDate(req.deadline),
-            experimental: {
-              authorizedSshKeys: [...req.authorizedSshKeys],
-            },
-            documentedPurpose: "proofbox Sandbox",
-          }),
-        catch: fromConnect("CreateInstance"),
-      });
-      const instanceId = made.metadata?.instanceId;
-      if (instanceId === undefined || instanceId === "") {
-        return yield* new ProviderError({
-          provider: "namespace",
-          reason: "ComputeService.CreateInstance made no instance id",
-        });
-      }
-      return instanceId;
+          },
+          labels: req.labels.map((label) => ({
+            name: label.name,
+            value: label.value,
+          })),
+          deadline: timestampFromDate(req.deadline),
+          experimental: {
+            authorizedSshKeys: [...req.authorizedSshKeys],
+          },
+          documentedPurpose: "proofbox Sandbox",
+        }),
+      catch: fromConnect("CreateInstance"),
     });
+    const instanceId = made.metadata?.instanceId;
+    if (instanceId === undefined || instanceId === "") {
+      return yield* new ProviderError({
+        provider: "namespace",
+        reason: "ComputeService.CreateInstance made no instance id",
+      });
+    }
+    return instanceId;
+  });
 
-  const wait = (region: string, instanceId: string) =>
-    Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      yield* Effect.tryPromise({
-        try: () => client.compute.waitInstanceSync({ instanceId }),
-        catch: fromConnect("WaitInstanceSync", { region, instanceId }),
-      });
+  const wait = Effect.fn("NamespaceApi.wait")(function* (
+    region: string,
+    instanceId: string,
+  ) {
+    const client = yield* loggedClient(region);
+    yield* Effect.tryPromise({
+      try: () => client.compute.waitInstanceSync({ instanceId }),
+      catch: fromConnect("WaitInstanceSync", { region, instanceId }),
     });
+  });
 
-  const destroy = (region: string, instanceId: string) =>
-    Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      yield* Effect.tryPromise({
-        try: () => client.compute.destroyInstance({ instanceId }),
-        catch: fromConnect("DestroyInstance", { region, instanceId }),
-      });
+  const destroy = Effect.fn("NamespaceApi.destroy")(function* (
+    region: string,
+    instanceId: string,
+  ) {
+    const client = yield* loggedClient(region);
+    yield* Effect.tryPromise({
+      try: () => client.compute.destroyInstance({ instanceId }),
+      catch: fromConnect("DestroyInstance", { region, instanceId }),
     });
+  });
 
-  const extend = (region: string, instanceId: string, seconds: number) =>
-    Effect.gen(function* () {
-      const client = yield* loggedClient(region);
-      yield* Effect.tryPromise({
-        try: () =>
-          client.compute.extendInstance({
-            instanceId,
-            ensureMinimum: { seconds: BigInt(seconds), nanos: 0 },
-          }),
-        catch: fromConnect("ExtendInstance", { region, instanceId }),
-      });
+  const extend = Effect.fn("NamespaceApi.extend")(function* (
+    region: string,
+    instanceId: string,
+    seconds: number,
+  ) {
+    const client = yield* loggedClient(region);
+    yield* Effect.tryPromise({
+      try: () =>
+        client.compute.extendInstance({
+          instanceId,
+          ensureMinimum: { seconds: BigInt(seconds), nanos: 0 },
+        }),
+      catch: fromConnect("ExtendInstance", { region, instanceId }),
     });
+  });
 
   // GetSSHConfig answers an `sshHostKeys` field the SDK's proto does not
   // model yet, so this one call goes over Connect JSON itself: a POST to
   // `/<service>/<method>` with a JSON body, errors in Connect's shape.
-  const sshConfig = (region: string, instanceId: string) =>
-    Effect.gen(function* () {
-      const hand = yield* deps.login;
-      const base = (yield* template.pipe(
-        Effect.mapError(
-          (error) =>
-            new ProviderError({ provider: "namespace", reason: error.message }),
-        ),
-      )).replaceAll("{region}", region);
-      const response = yield* Effect.tryPromise({
-        try: async () => {
-          const res = await fetch(
-            `${base}/namespace.cloud.compute.v1beta.ComputeService/GetSSHConfig`,
-            {
-              method: "POST",
-              headers: {
-                authorization: `Bearer ${Redacted.value(hand.token)}`,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({ instanceId }),
+  const sshConfig = Effect.fn("NamespaceApi.sshConfig")(function* (
+    region: string,
+    instanceId: string,
+  ) {
+    const hand = yield* deps.login;
+    const base = (yield* template.pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderError({ provider: "namespace", reason: error.message }),
+      ),
+    )).replaceAll("{region}", region);
+    const response = yield* Effect.tryPromise({
+      try: async () => {
+        const res = await fetch(
+          `${base}/namespace.cloud.compute.v1beta.ComputeService/GetSSHConfig`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${Redacted.value(hand.token)}`,
+              "content-type": "application/json",
             },
-          );
-          const body: unknown = await res.json().catch(() => undefined);
-          return { status: res.status, body };
-        },
-        catch: () => unreachable(),
-      });
-      const decoded = yield* Schema.decodeUnknown(SshConfigBody)(
-        response.body,
-      ).pipe(Effect.option);
-      if (response.status !== 200) {
-        const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
-          response.body,
-        ).pipe(
-          Effect.option,
-          Effect.map((body) => Option.getOrUndefined(body)),
+            body: JSON.stringify({ instanceId }),
+          },
         );
-        return yield* httpError("GetSSHConfig", response.status, errorBody, {
-          region,
-          instanceId,
-        });
-      }
-      if (Option.isNone(decoded)) {
-        return yield* new ProviderError({
-          provider: "namespace",
-          reason: "ComputeService.GetSSHConfig gave an incomplete answer",
-        });
-      }
-      const body = decoded.value;
-      return {
-        username: body.username,
-        endpoint: body.endpoint,
-        privateKey: new Uint8Array(Buffer.from(body.sshPrivateKey, "base64")),
-        hostKeys: body.sshHostKeys.map((key) =>
-          Buffer.from(key, "base64").toString("utf8"),
-        ),
-      } satisfies SshConfig;
+        const body: unknown = await res.json().catch(() => undefined);
+        return { status: res.status, body };
+      },
+      catch: () => unreachable(),
     });
+    const decoded = yield* Schema.decodeUnknown(SshConfigBody)(
+      response.body,
+    ).pipe(Effect.option);
+    if (response.status !== 200) {
+      const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
+        response.body,
+      ).pipe(
+        Effect.option,
+        Effect.map((body) => Option.getOrUndefined(body)),
+      );
+      return yield* httpError("GetSSHConfig", response.status, errorBody, {
+        region,
+        instanceId,
+      });
+    }
+    if (Option.isNone(decoded)) {
+      return yield* new ProviderError({
+        provider: "namespace",
+        reason: "ComputeService.GetSSHConfig gave an incomplete answer",
+      });
+    }
+    const body = decoded.value;
+    return {
+      username: body.username,
+      endpoint: body.endpoint,
+      privateKey: new Uint8Array(Buffer.from(body.sshPrivateKey, "base64")),
+      hostKeys: body.sshHostKeys.map((key) =>
+        Buffer.from(key, "base64").toString("utf8"),
+      ),
+    } satisfies SshConfig;
+  });
 
   // `<repo>@sha256:<digest>` splits at the first `@` into the Registry's
   // `repository` and `digest`, without host and tenant.
-  const ensureImageExpiry = (image: string, hours: number) =>
-    Effect.gen(function* () {
+  const ensureImageExpiry = Effect.fn("NamespaceApi.ensureImageExpiry")(
+    function* (image: string, hours: number) {
       const client = yield* loggedRegistry();
       const at = image.indexOf("@");
       yield* Effect.tryPromise({
@@ -580,65 +592,65 @@ export const makeNamespaceApi = (deps: {
           "update registry images",
         ),
       });
-    });
+    },
+  );
 
   // A tenant token mints a revokable robot token over the public IAM
   // endpoint: name, description, expiry, and the grants, the same
   // request Namespace's own CLI sends for a token with no user.
-  const makeToken = (
+  const makeToken = Effect.fn("NamespaceApi.makeToken")(function* (
     tenant: Redacted.Redacted<string>,
     request: TokenRequest,
-  ) =>
-    Effect.gen(function* () {
-      const baseUrl = yield* tokenUrl.pipe(
-        Effect.mapError(
-          (error) =>
-            new ProviderError({ provider: "namespace", reason: error.message }),
-        ),
-      );
-      const client = createIAMClient({
+  ) {
+    const baseUrl = yield* tokenUrl.pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderError({ provider: "namespace", reason: error.message }),
+      ),
+    );
+    const client = createIAMClient({
+      tokenSource: fromBearerToken(Redacted.value(tenant)),
+      transport: createGlobalTransport({
         tokenSource: fromBearerToken(Redacted.value(tenant)),
-        transport: createGlobalTransport({
-          tokenSource: fromBearerToken(Redacted.value(tenant)),
-          baseUrl,
-        }),
-      });
-      const made = yield* Effect.tryPromise({
-        try: () =>
-          client.tokens.createRevokableToken({
-            name: request.name,
-            description: "Made by proofbox auth token",
-            expiresAt: timestampFromDate(request.expiresAt),
-            access: { grants: ROBOT_GRANTS },
-          }),
-        catch: (cause) => {
-          if (
-            !(cause instanceof ConnectError) ||
-            cause.code === Code.Unavailable ||
-            cause.code === Code.DeadlineExceeded
-          ) {
-            return unreachable();
-          }
-          if (cause.code === Code.PermissionDenied) {
-            return new TokenDeniedError({ provider: "namespace" });
-          }
-          if (cause.code === Code.Unauthenticated) {
-            return new LoginExpiredError({ provider: "namespace" });
-          }
-          return new ProviderError({
-            provider: "namespace",
-            reason: `TokenService.CreateRevokableToken failed: ${cause.rawMessage}`,
-          });
-        },
-      });
-      if (made.bearerToken === "") {
-        return yield* new ProviderError({
-          provider: "namespace",
-          reason: "TokenService.CreateRevokableToken gave no token",
-        });
-      }
-      return Redacted.make(made.bearerToken);
+        baseUrl,
+      }),
     });
+    const made = yield* Effect.tryPromise({
+      try: () =>
+        client.tokens.createRevokableToken({
+          name: request.name,
+          description: "Made by proofbox auth token",
+          expiresAt: timestampFromDate(request.expiresAt),
+          access: { grants: ROBOT_GRANTS },
+        }),
+      catch: (cause) => {
+        if (
+          !(cause instanceof ConnectError) ||
+          cause.code === Code.Unavailable ||
+          cause.code === Code.DeadlineExceeded
+        ) {
+          return unreachable();
+        }
+        if (cause.code === Code.PermissionDenied) {
+          return new TokenDeniedError({ provider: "namespace" });
+        }
+        if (cause.code === Code.Unauthenticated) {
+          return new LoginExpiredError({ provider: "namespace" });
+        }
+        return new ProviderError({
+          provider: "namespace",
+          reason: `TokenService.CreateRevokableToken failed: ${cause.rawMessage}`,
+        });
+      },
+    });
+    if (made.bearerToken === "") {
+      return yield* new ProviderError({
+        provider: "namespace",
+        reason: "TokenService.CreateRevokableToken gave no token",
+      });
+    }
+    return Redacted.make(made.bearerToken);
+  });
 
   return {
     create,

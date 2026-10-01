@@ -33,8 +33,8 @@ const alive = (token: string, now: number, margin: number) => {
   return typeof exp === "number" && exp * 1000 - now > margin;
 };
 
-export const tenantTokenFor = (session: Redacted.Redacted<string>) =>
-  Effect.gen(function* () {
+export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
+  function* (session: Redacted.Redacted<string>) {
     const fail = (reason: string) =>
       new ProviderError({ provider: "namespace", reason });
     const text = Redacted.value(session);
@@ -84,7 +84,8 @@ export const tenantTokenFor = (session: Redacted.Redacted<string>) =>
         return Redacted.make(token);
       }),
     );
-  });
+  },
+);
 
 // The saved Namespace login the Compute calls run on: a browser session
 // traded for a short tenant token.

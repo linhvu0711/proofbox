@@ -55,32 +55,35 @@ const badAnswer = (method: string) =>
     reason: `SigninService.${method} gave an incomplete answer`,
   });
 
-const post = (method: string, body: unknown, bearer?: string) =>
-  Effect.gen(function* () {
-    const base = yield* iamUrl.pipe(
-      Effect.mapError(
-        (error) =>
-          new ProviderError({ provider: "namespace", reason: error.message }),
-      ),
-    );
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const res = await fetch(`${base}/nsl.signin.SigninService/${method}`, {
-          method: "POST",
-          headers: {
-            ...(bearer === undefined
-              ? {}
-              : { authorization: `Bearer ${bearer}` }),
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(body),
-        });
-        const json: unknown = await res.json().catch(() => undefined);
-        return { status: res.status, body: json };
-      },
-      catch: () => unreachable(),
-    });
+const post = Effect.fn("namespaceSignin.post")(function* (
+  method: string,
+  body: unknown,
+  bearer?: string,
+) {
+  const base = yield* iamUrl.pipe(
+    Effect.mapError(
+      (error) =>
+        new ProviderError({ provider: "namespace", reason: error.message }),
+    ),
+  );
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(`${base}/nsl.signin.SigninService/${method}`, {
+        method: "POST",
+        headers: {
+          ...(bearer === undefined
+            ? {}
+            : { authorization: `Bearer ${bearer}` }),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      const json: unknown = await res.json().catch(() => undefined);
+      return { status: res.status, body: json };
+    },
+    catch: () => unreachable(),
   });
+});
 
 // The SigninService wire names are snake_case; the Schema fields keep
 // camelCase and name their wire key.
@@ -132,35 +135,34 @@ const CompletedLogin = Schema.Struct({
 
 // A 30-day login: opens the wait for a click on the login page and names
 // the page's URL.
-export const startLogin = () =>
-  Effect.gen(function* () {
-    const answer = yield* post(
-      "StartLogin",
-      Schema.encodeSync(StartLoginBody)({
-        supportedKinds: ["tenant"],
-        sessionDurationSecs: 2_592_000,
-      }),
-    );
-    if (answer.status !== 200) {
-      return yield* signinError("StartLogin", answer.status, answer.body);
-    }
-    const decoded = yield* Schema.decodeUnknown(StartedLogin)(answer.body).pipe(
-      Effect.option,
-    );
-    if (Option.isNone(decoded)) {
-      return yield* badAnswer("StartLogin");
-    }
-    if (decoded.value.kind !== "tenant") {
-      return yield* new ProviderError({
-        provider: "namespace",
-        reason: `SigninService.StartLogin made a ${decoded.value.kind} login`,
-      });
-    }
-    return { loginId: decoded.value.loginId, url: decoded.value.loginUrl };
-  });
+export const startLogin = Effect.fn("namespaceSignin.startLogin")(function* () {
+  const answer = yield* post(
+    "StartLogin",
+    Schema.encodeSync(StartLoginBody)({
+      supportedKinds: ["tenant"],
+      sessionDurationSecs: 2_592_000,
+    }),
+  );
+  if (answer.status !== 200) {
+    return yield* signinError("StartLogin", answer.status, answer.body);
+  }
+  const decoded = yield* Schema.decodeUnknown(StartedLogin)(answer.body).pipe(
+    Effect.option,
+  );
+  if (Option.isNone(decoded)) {
+    return yield* badAnswer("StartLogin");
+  }
+  if (decoded.value.kind !== "tenant") {
+    return yield* new ProviderError({
+      provider: "namespace",
+      reason: `SigninService.StartLogin made a ${decoded.value.kind} login`,
+    });
+  }
+  return { loginId: decoded.value.loginId, url: decoded.value.loginUrl };
+});
 
-export const completeLogin = (loginId: string) =>
-  Effect.gen(function* () {
+export const completeLogin = Effect.fn("namespaceSignin.completeLogin")(
+  function* (loginId: string) {
     const body = Schema.encodeSync(LoginIdBody)({ loginId });
     let answer = yield* post("CompleteTenantLogin", body);
     while (endedEarly(answer)) {
@@ -189,12 +191,13 @@ export const completeLogin = (loginId: string) =>
       account: row.tenantName,
       expiresAt: new Date(exp * 1000),
     };
-  });
+  },
+);
 
 // A session trades for a one-hour tenant token: the Bearer every
 // Compute call then uses, and one that works in every region.
-export const issueTenantToken = (session: string) =>
-  Effect.gen(function* () {
+export const issueTenantToken = Effect.fn("namespaceSignin.issueTenantToken")(
+  function* (session: string) {
     const answer = yield* post(
       "IssueTenantTokenFromSession",
       Schema.encodeSync(TenantTokenBody)({ tokenDurationSecs: 3600 }),
@@ -218,4 +221,5 @@ export const issueTenantToken = (session: string) =>
       return yield* badAnswer("IssueTenantTokenFromSession");
     }
     return decoded.value.tenantToken;
-  });
+  },
+);
