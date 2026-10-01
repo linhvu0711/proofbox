@@ -1,7 +1,6 @@
 import { timestampDate, timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
 import {
-  type ComputeClient,
   createComputeClient,
   createGlobalTransport,
   createIAMClient,
@@ -309,14 +308,13 @@ export const makeNamespaceApi = (deps: {
 
   const clientFor = (region: string, token: Redacted.Redacted<string>) =>
     template.pipe(
-      Effect.map(
-        (url) =>
-          createComputeClient({
-            transport: createRegionTransport(region, {
-              tokenSource: fromBearerToken(Redacted.value(token)),
-              baseUrl: url.replaceAll("{region}", region),
-            }),
-          }) as ComputeClient,
+      Effect.map((url) =>
+        createComputeClient({
+          transport: createRegionTransport(region, {
+            tokenSource: fromBearerToken(Redacted.value(token)),
+            baseUrl: url.replaceAll("{region}", region),
+          }),
+        }),
       ),
       Effect.mapError(
         (error) =>
@@ -390,7 +388,7 @@ export const makeNamespaceApi = (deps: {
         if (page.paginationCursor.length === 0) {
           return found;
         }
-        cursor = page.paginationCursor as Uint8Array<ArrayBuffer>;
+        cursor = page.paginationCursor;
       }
     });
 
