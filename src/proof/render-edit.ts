@@ -2,6 +2,12 @@ import type { EditPlan } from "./edit-plan.ts";
 
 const num = (value: number): string => value.toFixed(3).replace(/\.?0+$/, "");
 
+// The label text reaches ffmpeg escaped twice and drawn with
+// expansion=none: \, ' and : for the option level, then \, ', [, ], , and
+// ; of that result for the graph level, with no quotes around it.
+const drawtextText = (text: string): string =>
+  text.replace(/[\\':]/g, "\\$&").replace(/[\\'[\],;]/g, "\\$&");
+
 export const renderEdit = (
   plan: EditPlan,
   options: {
@@ -37,8 +43,8 @@ export const renderEdit = (
     const label =
       clip.label === undefined
         ? ""
-        : `,drawtext=fontfile=${options.font}:text='${clip.label}'` +
-          `:fontsize=${size}:fontcolor=white:box=1` +
+        : `,drawtext=fontfile=${options.font}:text=${drawtextText(clip.label)}` +
+          `:expansion=none:fontsize=${size}:fontcolor=white:box=1` +
           `:boxcolor=black@0.6:boxborderw=${size / 2}` +
           `:x=(w-text_w)/2:y=h-text_h-${bar}`;
     return (
