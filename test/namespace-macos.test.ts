@@ -18,7 +18,7 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import { CHECKS_START, endLine } from "../src/command-checks.ts";
 import { macKillCount } from "../src/namespace/mac-host.ts";
 import type {
   CreateReq,
@@ -912,7 +912,7 @@ describe("Namespace macOS Provider", () => {
                     _tag: "Stdout",
                     bytes: new TextEncoder().encode("26.0\n"),
                   },
-                  text(checksTrailer(1, 1)),
+                  text(endLine(0, 5, { before: 1, after: 1 })),
                   { _tag: "Exit", code: 0 },
                 ],
               }

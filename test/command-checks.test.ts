@@ -8,7 +8,7 @@ import { afterEach, describe, expect } from "vitest";
 import {
   CHECKS_START,
   checksScript,
-  checksTrailer,
+  endLine,
   pushFailedTrailer,
   splitChecks,
 } from "../src/command-checks.ts";
@@ -68,7 +68,7 @@ describe("command checks", () => {
         err(CHECKS_START),
         out("out"),
         err("err"),
-        err(checksTrailer(2, 3)),
+        err(endLine(0, 3, { before: 2, after: 3 })),
         exit(0),
       );
       // Then
@@ -86,7 +86,7 @@ describe("command checks", () => {
       const events = yield* split(
         err(CHECKS_START),
         err("err\n\x1fproof"),
-        err("box-checks 0 1\n"),
+        err("box-checks 0 1 0 0\n"),
         exit(0),
       );
       // Then
@@ -126,7 +126,7 @@ describe("command checks", () => {
         err("Warning: remote host notice\n\x1fproof"),
         err("box-start\n"),
         out("done\n"),
-        err(checksTrailer(0, 0)),
+        err(endLine(0, 5, { before: 0, after: 0 })),
         exit(0),
       );
       // Then
@@ -169,7 +169,9 @@ describe("command checks", () => {
       // Then
       const pushed = Number(readFileSync(deadlineFile, "utf8")) - t0;
       expect([60, 61]).toContain(pushed);
-      expect(stderr).toBe(CHECKS_START + checksTrailer(4, 4));
+      expect(stderr).toBe(
+        CHECKS_START + endLine(0, 0, { before: 4, after: 4 }),
+      );
     }),
   );
 
@@ -200,7 +202,9 @@ describe("command checks", () => {
         );
         // Then
         expect(run.stdout).toBe("out");
-        expect(run.stderr).toBe(`${CHECKS_START}err${checksTrailer(4, 4)}`);
+        expect(run.stderr).toBe(
+          `${CHECKS_START}err${endLine(3, 3, { before: 4, after: 4 })}`,
+        );
         expect(run.status).toBe(3);
       }),
   );
@@ -270,6 +274,149 @@ describe("command checks", () => {
       expect(error.message).toBe(
         "Provider docker failed: could not write the Deadline: mv: cannot move: Read-only file system",
       );
+    }),
+  );
+  it.effect("the exit code comes from the End line", () =>
+    Effect.gen(function* () {
+      // Given / When: the link exits 0, the command exited 3
+      const events = yield* split(
+        err(CHECKS_START),
+        out("out"),
+        err(endLine(3, 3, { before: 2, after: 3 })),
+        exit(0),
+      );
+      // Then
+      expect(events).toEqual([
+        { _tag: "Stdout", text: "out" },
+        { _tag: "Exit", code: 3, kills: { before: 2, after: 3 } },
+      ]);
+    }),
+  );
+
+  it.effect("the End line counts every byte of a 3.5 MB output", () =>
+    Effect.sync(() => {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+      tempRoots.push(root);
+      // When
+      const run = spawnSync(
+        "sh",
+        [
+          "-c",
+          script,
+          "sh",
+          "900",
+          "900",
+          "head",
+          "-c",
+          "3670016",
+          "/dev/zero",
+        ],
+        {
+          env: { ...process.env, DL: join(root, "deadline") },
+          encoding: "utf8",
+          maxBuffer: 8 * 1024 * 1024,
+        },
+      );
+      // Then
+      expect({
+        stdout: run.stdout.length,
+        stderr: run.stderr,
+        status: run.status,
+      }).toEqual({
+        stdout: 3670016,
+        stderr: CHECKS_START + endLine(0, 3670016, { before: 4, after: 4 }),
+        status: 0,
+      });
+    }),
+  );
+
+  it.effect("the End line counts one byte as 1", () =>
+    Effect.sync(() => {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+      tempRoots.push(root);
+      // When
+      const run = spawnSync(
+        "sh",
+        ["-c", script, "sh", "900", "900", "printf", "x"],
+        {
+          env: { ...process.env, DL: join(root, "deadline") },
+          encoding: "utf8",
+        },
+      );
+      // Then
+      expect(run.stderr).toBe(
+        CHECKS_START + endLine(0, 1, { before: 4, after: 4 }),
+      );
+    }),
+  );
+
+  it.effect(
+    "the End line waits for a background writer that holds stdout",
+    () =>
+      Effect.sync(() => {
+        // Given
+        const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+        tempRoots.push(root);
+        // When
+        const run = spawnSync(
+          "sh",
+          [
+            "-c",
+            script,
+            "sh",
+            "900",
+            "900",
+            "sh",
+            "-c",
+            "printf abc; (sleep 2; printf def) &",
+          ],
+          {
+            env: { ...process.env, DL: join(root, "deadline") },
+            encoding: "utf8",
+          },
+        );
+        // Then
+        expect({ stdout: run.stdout, stderr: run.stderr }).toEqual({
+          stdout: "abcdef",
+          stderr: CHECKS_START + endLine(0, 6, { before: 4, after: 4 }),
+        });
+      }),
+  );
+
+  it.effect("a background process off stdout does not hold the End line", () =>
+    Effect.sync(() => {
+      // Given
+      const root = mkdtempSync(join(tmpdir(), "proofbox-checks-"));
+      tempRoots.push(root);
+      const start = Date.now();
+      // When
+      const run = spawnSync(
+        "sh",
+        [
+          "-c",
+          script,
+          "sh",
+          "900",
+          "900",
+          "sh",
+          "-c",
+          "printf abc; nohup sleep 5 >/dev/null 2>&1 &",
+        ],
+        {
+          env: { ...process.env, DL: join(root, "deadline") },
+          encoding: "utf8",
+        },
+      );
+      // Then
+      expect({
+        fast: Date.now() - start < 2000,
+        stderr: run.stderr,
+      }).toEqual({
+        fast: true,
+        stderr: CHECKS_START + endLine(0, 3, { before: 4, after: 4 }),
+      });
     }),
   );
 });

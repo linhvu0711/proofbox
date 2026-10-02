@@ -17,7 +17,7 @@ import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import {
   CHECKS_START,
-  checksTrailer,
+  endLine,
   pushFailedTrailer,
 } from "../src/command-checks.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
@@ -1242,7 +1242,7 @@ const warmNamespace = (
   answer: () => Stream.Stream<ExecEvent, ProviderUnavailableError> = () =>
     Stream.fromIterable<ExecEvent>([
       stderrEvent(CHECKS_START),
-      stderrEvent(checksTrailer(0, 0)),
+      stderrEvent(endLine(0, 0, { before: 0, after: 0 })),
       { _tag: "Exit", code: 0 },
     ]),
 ) =>

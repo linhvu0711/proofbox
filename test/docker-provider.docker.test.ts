@@ -169,6 +169,20 @@ describe("Docker Provider", () => {
     expect(uidPwd.stdout).toBe("1000\n/home/app\n");
   });
 
+  it("exec passes the exit code from the End line", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const run = await runCli(env, ["exec", id, "--", "sh", "-c", "exit 3"]);
+    // Then
+    expect({ exitCode: run.exitCode, stdout: run.stdout }).toEqual({
+      exitCode: 3,
+      stdout: "",
+    });
+  });
+
   it("exec through the Keeper moves the Deadline file to idle from now", async () => {
     // Given
     const env = makeEnv({ docker: true });

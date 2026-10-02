@@ -80,6 +80,14 @@ describe("Namespace macOS Provider", () => {
     expect(millis).toBeLessThan(2000);
   });
 
+  it("exec on a Mac passes the exit code from the End line", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const run = await runCli(env, ["exec", id, "--", "sh", "-c", "exit 3"]);
+    // Then
+    expect(run.exitCode).toBe(3);
+  });
+
   it("the Tool bundle on the Mac has the pinned hashes", async () => {
     // Given: the Mac from beforeAll
     // When

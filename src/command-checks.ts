@@ -1,17 +1,18 @@
 import { Effect, Stream } from "effect";
 import type { ProviderError, SandboxGoneError } from "./errors.ts";
-import type { ExecEvent, SandboxInfo } from "./provider.ts";
+import type { ExecEvent, MemoryKills, SandboxInfo } from "./provider.ts";
 
 // One remote call runs a command with its checks around it (ADR 0015): the
 // Deadline pushed by the idle time before and after it, and the
 // memory-kill count read just before and just after it. The script marks
-// the start of its own stderr and ends it with a trailer that holds the
-// two counts; `splitChecks` takes both out again.
+// the start of its own stderr and ends it with the End line (ADR 0021):
+// the two counts, the command's exit code, and how many bytes of stdout
+// it made; `splitChecks` takes both out again.
 
 export const CHECKS_START = "\x1fproofbox-start\n";
 
-export const checksTrailer = (before: number, after: number) =>
-  `\n\x1fproofbox-checks ${before} ${after}\n`;
+export const endLine = (code: number, bytes: number, kills: MemoryKills) =>
+  `\n\x1fproofbox-checks ${kills.before} ${kills.after} ${code} ${bytes}\n`;
 
 // The shell for one Provider's checks. `push` writes the Deadline in `$d`
 // (epoch seconds), `kills` prints the kill count, and `run` runs `"$@"` as
@@ -30,9 +31,12 @@ const FAIL_DETAIL_MAX = 200;
 
 // Runs as `sh -c <script> sh <idleSeconds> <leftSeconds> <argv...>`. The
 // Deadline is set on the Sandbox's own clock, as `extend` does. A failed
-// push ends the script with the fail trailer in place of the counts, as a
-// failed push ended `exec` before the Keeper did it: before the command,
-// the command does not run. A failed count reads as 0.
+// push ends the script with the fail trailer in place of the End line, as
+// a failed push ended `exec` before the Keeper did it: before the command,
+// the command does not run. A failed count reads as 0. The command's
+// stdout goes through `dd`, which counts it once every writer of it is
+// done; the command runs in a subshell with fds 5 and 6 closed, so a
+// background process it leaves does not hold the count open.
 export const checksScript = (shell: ChecksShell) =>
   [
     "idle=$1",
@@ -43,11 +47,13 @@ export const checksScript = (shell: ChecksShell) =>
     "printf '\\037proofbox-start\\n' >&2",
     "push || pushfail",
     `k1=$( { ${shell.kills}; } 2>/dev/null)`,
-    shell.run,
-    "code=$?",
+    "exec 5>&1",
+    `r=$( { { ( ${shell.run} ) 5>&- 6>&-; echo "c $?" >&6; } | LC_ALL=C dd bs=65536 2>&1 >&5 5>&-; } 6>&1 )`,
+    `code=$(printf '%s\\n' "$r" | sed -n 's/^c //p')`,
+    `n=$(printf '%s\\n' "$r" | sed -n 's/^\\([0-9][0-9]*\\) byte.*/\\1/p')`,
     `k2=$( { ${shell.kills}; } 2>/dev/null)`,
     "push || pushfail",
-    `printf '\\n\\037proofbox-checks %s %s\\n' "\${k1:-0}" "\${k2:-0}" >&2`,
+    `printf '\\n\\037proofbox-checks %s %s %s %s\\n' "\${k1:-0}" "\${k2:-0}" "$code" "$n" >&2`,
     "exit $code",
   ].join("; ");
 
@@ -88,7 +94,7 @@ const couldStart = (text: string, head: string, rest: RegExp) =>
 
 // True when `text` is a trailer or the first part of one.
 const couldStartTrailer = (text: string) =>
-  couldStart(text, TRAILER_HEAD, /^(\d*|\d+ \d*|\d+ \d+\n)$/) ||
+  couldStart(text, TRAILER_HEAD, /^((\d+ ){0,3}\d*|(\d+ ){3}\d+\n)$/) ||
   couldStart(text, FAIL_HEAD, /^[^\n]*\n?$/);
 
 // Where in `bytes` a held tail starts: the first place from which the rest
@@ -175,7 +181,9 @@ export const splitChecks = <E>(
             return Effect.fail(on.pushFailed(detail || "the write failed"));
           }
           const trailer = text.startsWith(TRAILER_HEAD)
-            ? /^(\d+) (\d+)\n$/.exec(text.slice(TRAILER_HEAD.length))
+            ? /^(\d+) (\d+) (\d+) (\d+)\n$/.exec(
+                text.slice(TRAILER_HEAD.length),
+              )
             : null;
           if (trailer === null) {
             return Effect.succeed(
@@ -185,6 +193,7 @@ export const splitChecks = <E>(
           return Effect.succeed([
             {
               ...event,
+              code: Number(trailer[3]),
               kills: { before: Number(trailer[1]), after: Number(trailer[2]) },
             },
           ]);
