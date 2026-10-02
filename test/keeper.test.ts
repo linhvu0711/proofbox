@@ -1115,6 +1115,74 @@ describe("Keeper", () => {
   );
 
   it.scoped(
+    "Sandbox info through a Keeper that closes after it reads the request on a gone Sandbox fails with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name);
+        rmSync(join(env.root, sandbox.name), { recursive: true, force: true });
+        // When
+        const error = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.flip, Effect.provide(sandbox.layers));
+        // Then
+        expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info through a Keeper that closes after it reads the request reads the Provider",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: the Sandbox stays
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name);
+        // When
+        const info = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.provide(sandbox.layers));
+        // Then
+        expect({ name: info.name, get: sandbox.calls.get }).toEqual({
+          name: sandbox.name,
+          get: 1,
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info through a Keeper that closes after it reads the request keeps its error when the Provider cannot be reached",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env, {
+          get: () =>
+            Effect.fail(
+              new ProviderUnavailableError({
+                provider: "fake",
+                reason: "fake Provider did not answer",
+              }),
+            ),
+        });
+        yield* closingKeeper(sandbox.name);
+        // When
+        const error = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.flip, Effect.provide(sandbox.layers));
+        // Then
+        expect(error.message).toBe(
+          "Provider fake failed: Keeper closed the connection before it answered",
+        );
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
     "a Pixel helper through a warm Keeper asks the Provider nothing from the CLI",
     () => {
       const env = makeEnv();

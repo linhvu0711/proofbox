@@ -538,10 +538,12 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
 
       // The one reply to a request that is not a command.
       const oneReply = (socket: Socket, provider: string) =>
-        Effect.async<ReplyFrame, ProviderError>((resume) => {
+        Effect.async<ReplyFrame, ProviderError | KeeperLostError>((resume) => {
           let pending = "";
           let done = false;
-          const finish = (result: Effect.Effect<ReplyFrame, ProviderError>) => {
+          const finish = (
+            result: Effect.Effect<ReplyFrame, ProviderError | KeeperLostError>,
+          ) => {
             if (!done) {
               done = true;
               socket.destroy();
@@ -550,6 +552,8 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           };
           const fail = (reason: string) =>
             finish(Effect.fail(new ProviderError({ provider, reason })));
+          const lost = (reason: string) =>
+            finish(Effect.fail(new KeeperLostError({ reason })));
           socket.on("data", (chunk) => {
             pending += chunk.toString("utf8");
             const newline = pending.indexOf("\n");
@@ -567,9 +571,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             }
           });
           socket.once("close", () =>
-            fail("Keeper closed the connection before it answered"),
+            lost("Keeper closed the connection before it answered"),
           );
-          socket.once("error", (error) => fail(error.message));
+          socket.once("error", (error) => lost(error.message));
         });
 
       // The Sandbox as the warm Keeper read it at connect, with no remote
@@ -609,7 +613,13 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         if (Option.isNone(socket)) {
           return yield* id.provider.get(id);
         }
-        const reply = yield* oneReply(socket.value, id.provider.name);
+        const reply = yield* oneReply(socket.value, id.provider.name).pipe(
+          Effect.catchTag("KeeperLostError", (lost) =>
+            Effect.map(readAfterLost(id.provider, id, lost), (info) => ({
+              info,
+            })),
+          ),
+        );
         if ("info" in reply) {
           return reply.info;
         }
