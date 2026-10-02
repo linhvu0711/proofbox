@@ -59,12 +59,12 @@ class KeeperLostError extends Data.TaggedError("KeeperLostError")<{
 
 // The Sandbox as the Provider reads it once the Keeper is lost: a gone
 // Sandbox fails gone, and any other failure keeps the lost reason.
-const readAfterLost = (
+const readAfterLost = Effect.fn("keeperClient.readAfterLost")(function* (
   provider: Provider,
   sandbox: SandboxRef,
   lost: KeeperLostError,
-) =>
-  Effect.catchIf(
+) {
+  return yield* Effect.catchIf(
     provider.get(sandbox),
     (error) => !(error instanceof SandboxGoneError),
     () =>
@@ -72,6 +72,7 @@ const readAfterLost = (
         new ProviderError({ provider: provider.name, reason: lost.reason }),
       ),
   );
+});
 
 // The Caller side may send a stream whose failure is an upload error, not a
 // ProviderError (packFiles can fail with UploadFailedError or
