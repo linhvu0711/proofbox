@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
 
 export const pressKey = Effect.fn("key.pressKey")(function* (options: {
@@ -16,6 +16,13 @@ export const pressKey = Effect.fn("key.pressKey")(function* (options: {
   yield* runPixel(
     options.id,
     ["key", options.keys, String(pace.settleMs), shot],
-    { screenshot: options.screenshot },
+    {
+      screenshot: options.screenshot,
+      limit: {
+        _tag: "Act",
+        name: "key",
+        extra: Duration.millis(pace.settleMs),
+      },
+    },
   );
 }, Effect.scoped);

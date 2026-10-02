@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { BadStepsError } from "../errors.ts";
 import { resolvePace, runPixel } from "../pixel.ts";
 
@@ -34,6 +34,17 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    { screenshot: options.screenshot, points: [[options.x, options.y]] },
+    {
+      screenshot: options.screenshot,
+      points: [[options.x, options.y]],
+      // The helper turns the wheel once per step, 50 ms apart.
+      limit: {
+        _tag: "Act",
+        name: "scroll",
+        extra: Duration.millis(
+          pace.glideMs + options.steps * 50 + pace.settleMs,
+        ),
+      },
+    },
   );
 }, Effect.scoped);

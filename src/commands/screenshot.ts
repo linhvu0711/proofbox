@@ -5,6 +5,8 @@ export const takeScreenshot = Effect.fn("screenshot.takeScreenshot")(function* (
   rawId: string,
   out: string,
 ) {
-  const bytes = yield* runPixel(rawId, ["screenshot"]);
+  const bytes = yield* runPixel(rawId, ["screenshot"], {
+    limit: { _tag: "Read", name: "screenshot" },
+  });
   yield* writeOut(out, bytes);
 }, Effect.scoped);

@@ -79,7 +79,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
-| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. |
+| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
 | `screenshot <id> --out <file>` | Saves a PNG of the screen at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |
 | `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
 | `type <id> <text>` | Types text. |
@@ -99,7 +99,7 @@ Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <fi
 
 A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
 
-A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
+A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A screen command, `mark`, `record`, or a download that gets no answer gives up after 2 minutes plus its own pace or Recording time, and exits `125`; a screenshot or a download tries once more first. The Keeper writes one line per command to `<runtime folder>/<provider>-<name>.log` (`$TMPDIR/proofbox-<uid>/` unless `PROOFBOX_RUNTIME_DIR` is set): the program, bytes, exit code, time, and how it ended, never the arguments or the input. It keeps one older file, `.log.1`, and stays after `delete`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Safety
 

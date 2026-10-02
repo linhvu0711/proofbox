@@ -87,4 +87,28 @@ describe("exec", () => {
       "hi\n",
     );
   });
+
+  it("exec has no time limit", async () => {
+    // Given: a created Sandbox id, and a helper wait of 1 s
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When: the command runs for 2 s
+    const result = await runCli(
+      env,
+      ["exec", id, "--", "sh", "-c", "sleep 2; echo done"],
+      { set: { PROOFBOX_ANSWER_WAIT: "1s" } },
+    );
+    // Then
+    expect({ stdout: result.stdout, exitCode: result.exitCode }).toEqual({
+      stdout: "done\n",
+      exitCode: 0,
+    });
+  });
 });

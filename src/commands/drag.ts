@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
 
 export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
@@ -34,6 +34,12 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
         [options.x1, options.y1],
         [options.x2, options.y2],
       ],
+      // The pointer glides twice: to the start, then to the end.
+      limit: {
+        _tag: "Act",
+        name: "drag",
+        extra: Duration.millis(2 * pace.glideMs + pace.settleMs),
+      },
     },
   );
 }, Effect.scoped);

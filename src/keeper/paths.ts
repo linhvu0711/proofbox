@@ -65,6 +65,7 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
     socket: join(dir, `${stem}.sock`),
     pid: join(dir, `${stem}.pid`),
     startLock: join(dir, `${stem}.start-lock`),
+    log: join(dir, `${stem}.log`),
     key: join(dir, `${stem}.key`),
     knownHosts: join(dir, `${stem}.known-hosts`),
     control: join(dir, `${stem}.ctl`),

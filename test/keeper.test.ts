@@ -19,20 +19,24 @@ import {
   Effect,
   Fiber,
   Ref,
+  Stream,
   TestClock,
   TestServices,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
+import { ProviderError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { liveCreates, markCreate, unmarkCreate } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { startKeeper } from "./support/keeper.ts";
+import { sleepsNear } from "./support/clock.ts";
+import { eventually, startKeeper } from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,6 +133,14 @@ const capturedOut = Effect.gen(function* () {
   const output = yield* CliOutput;
   return Chunk.toReadonlyArray(yield* Ref.get(output.captured.out)).join("");
 });
+
+// Whether a process whose command line holds `pattern` runs on this machine.
+const running = (pattern: string) =>
+  Effect.sync(() => spawnSync("pgrep", ["-f", pattern]).status === 0);
+
+// A sleep length no other run of these tests uses, so a command left over
+// from an earlier run never counts.
+const nap = `61.${process.pid}`;
 
 describe("Keeper", () => {
   afterEach(cleanupEnvs);
@@ -753,7 +765,10 @@ describe("Keeper", () => {
           keeper.id,
           { feature: "desktop", paths: { linux: "echo" } },
           ["clicked"],
-          { outcome: "click" },
+          {
+            outcome: "click",
+            limit: { _tag: "Act", name: "click", extra: Duration.zero },
+          },
         ).pipe(Effect.provide(keeper.layers));
         // Then
         expect(result.stdout.toString("utf8")).toBe("clicked\n");
@@ -762,6 +777,212 @@ describe("Keeper", () => {
       }).pipe(runtimeConfig(env));
     },
   );
+
+  it.scoped(
+    "a Caller who leaves ends the command and its Deadline push",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a command that runs for a minute through a warm Keeper
+        const keeper = yield* warmKeeper(env);
+        yield* TestClock.adjust("10 minutes");
+        const caller = yield* Effect.fork(
+          Effect.scoped(
+            Effect.flatMap(KeeperClient, (client) =>
+              Effect.flatMap(client.exec(keeper.id, ["sleep", nap]), (events) =>
+                Stream.runDrain(events),
+              ),
+            ),
+          ).pipe(Effect.provide(keeper.layers)),
+        );
+        yield* eventually(running(`sleep ${nap}`));
+        // When: the Caller leaves, as Ctrl-C does
+        yield* Fiber.interrupt(caller);
+        yield* eventually(Effect.map(running(`sleep ${nap}`), (on) => !on));
+        yield* TestClock.adjust("14 minutes");
+        // Then
+        expect({
+          deadline: yield* keeper.deadline,
+          running: yield* running(`sleep ${nap}`),
+        }).toEqual({ deadline: "1970-01-01T00:25:00.000Z", running: false });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped("a Caller who gives up ends the command in the Keeper", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a helper call that runs for a minute through a warm Keeper
+      const keeper = yield* warmKeeper(env, { desktop: true });
+      yield* TestClock.adjust("10 minutes");
+      const caller = yield* Effect.fork(
+        runHelper(
+          keeper.id,
+          { feature: "desktop", paths: { linux: "sleep" } },
+          [nap],
+          {
+            outcome: "click",
+            limit: { _tag: "Act", name: "click", extra: Duration.zero },
+          },
+        ).pipe(Effect.provide(keeper.layers), Effect.flip),
+      );
+      yield* eventually(running(`sleep ${nap}`));
+      yield* sleepsNear(720_000);
+      // When: its time limit passes
+      yield* TestClock.adjust("121 seconds");
+      yield* Fiber.join(caller);
+      yield* eventually(Effect.map(running(`sleep ${nap}`), (on) => !on));
+      // Then
+      expect(yield* running(`sleep ${nap}`)).toBe(false);
+    }).pipe(runtimeConfig(env));
+  });
+  it.scoped(
+    "a Caller who gives up after its input ends is logged as gave up",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a helper call whose input is sent whole, then runs a minute
+        const keeper = yield* warmKeeper(env, { desktop: true });
+        yield* TestClock.adjust("10 minutes");
+        const caller = yield* Effect.fork(
+          runHelper(
+            keeper.id,
+            { feature: "desktop", paths: { linux: "sleep" } },
+            [nap],
+            {
+              outcome: "build",
+              stdin: Stream.make(new TextEncoder().encode("script\n")),
+              limit: { _tag: "Act", name: "build", extra: Duration.zero },
+            },
+          ).pipe(Effect.provide(keeper.layers), Effect.flip),
+        );
+        yield* eventually(running(`sleep ${nap}`));
+        yield* sleepsNear(720_000);
+        // When: its time limit passes
+        yield* TestClock.adjust("121 seconds");
+        yield* Fiber.join(caller);
+        const log = join(env.runtime, `fake-${keeper.name}.log`);
+        yield* eventually(
+          Effect.sync(
+            () =>
+              existsSync(log) &&
+              readFileSync(log, "utf8").includes("exec sleep"),
+          ),
+        );
+        // Then
+        expect(readFileSync(log, "utf8")).toMatch(/ exec sleep .* gave up\n$/);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped("a failed command logs its error kind, not its text", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a Provider whose exec fails with the command line in its text
+      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const info = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const failing: Provider = {
+        ...fake,
+        connect: (ref) =>
+          Effect.map(fake.connect(ref), (connection) => ({
+            ...connection,
+            exec: () =>
+              Stream.fail(
+                new ProviderError({
+                  provider: "fake",
+                  reason: "spawn ENOENT (docker exec sh -c echo tok-2718)",
+                }),
+              ),
+          })),
+      };
+      const id = `fake:${info.name}`;
+      const layers = yield* startKeeper(id, failing);
+      // When
+      yield* execInSandbox(id, ["echo", "tok-2718"]).pipe(
+        Effect.provide(layers),
+        Effect.ignore,
+      );
+      // Then
+      const log = readFileSync(
+        join(env.runtime, `fake-${info.name}.log`),
+        "utf8",
+      );
+      expect({
+        ended: log.trimEnd().split(" ").slice(-2).join(" "),
+        secret: log.includes("tok-2718"),
+      }).toEqual({ ended: "error: ProviderError", secret: false });
+    }).pipe(runtimeConfig(env));
+  });
+
+  it.scoped("the Keeper writes one log line per request", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given
+      const keeper = yield* warmKeeper(env);
+      yield* TestClock.adjust("10 minutes");
+      // When
+      yield* execInSandbox(keeper.id, ["echo", "hi"]).pipe(
+        Effect.provide(keeper.layers),
+      );
+      // Then
+      expect(
+        readFileSync(join(env.runtime, `fake-${keeper.name}.log`), "utf8"),
+      ).toBe(
+        "1970-01-01T00:10:00Z info - out=0 err=0 exit=- took=0.0s done\n1970-01-01T00:10:00Z exec sh out=3 err=0 exit=0 took=0.0s done\n",
+      );
+    }).pipe(runtimeConfig(env));
+  });
+
+  it("the Keeper log never holds exec arguments", async () => {
+    // Given
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    // When
+    await runCli(env, ["exec", id, "--", "echo", "tok-3141"]);
+    // Then
+    const log = readFileSync(join(env.runtime, `fake-${name}.log`), "utf8");
+    expect(log.includes("tok-3141")).toBe(false);
+  });
+
+  it("the Keeper log stays after delete", async () => {
+    // Given
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    await runCli(env, ["exec", id, "--", "true"]);
+    // When
+    await runCli(env, ["delete", id]);
+    // Then
+    expect(existsSync(join(env.runtime, `fake-${name}.log`))).toBe(true);
+  });
+
+  it("exec still works when the Keeper log cannot be written", async () => {
+    // Given: a folder where the log file goes
+    const env = makeEnv();
+    const id = (
+      await runCli(env, ["create", "--os", "linux", "--provider", "fake"])
+    ).stdout.trim();
+    const name = id.slice("fake:".length);
+    mkdirSync(join(env.runtime, `fake-${name}.log`));
+    // When
+    const result = await runCli(env, ["exec", id, "--", "echo", "hi"]);
+    // Then
+    expect({ stdout: result.stdout, exitCode: result.exitCode }).toEqual({
+      stdout: "hi\n",
+      exitCode: 0,
+    });
+  });
 });
 
 const ownsPid1 = () => {
