@@ -76,8 +76,9 @@ const runtimeConfig = (env: { runtime: string }) =>
 
 // A fake Sandbox made at t=0 with a Keeper run in this process, and the
 // layers a command needs to reach it. The Provider counts the `get` and
-// `extend` calls made to it from the CLI side; the Keeper's own checks go
-// through its Connection and are not counted.
+// `extend` calls made to it from the CLI side in `calls`, and the Keeper's
+// own reads of the Sandbox over its Connection (the gone-watch) in
+// `watched`.
 const warmKeeper = (
   env: { root: string; runtime: string },
   options: {
@@ -95,6 +96,7 @@ const warmKeeper = (
       })
       .pipe(Effect.provideService(Progress, noProgress));
     const calls = { get: 0, extend: 0 };
+    const watched = { get: 0 };
     const linux = fake.offers.linux;
     const counted: Provider = {
       ...fake,
@@ -117,6 +119,14 @@ const warmKeeper = (
           calls.extend += 1;
           return fake.extend(ref, deadline);
         }),
+      connect: (ref) =>
+        Effect.map(fake.connect(ref), (connection) => ({
+          ...connection,
+          get: Effect.suspend(() => {
+            watched.get += 1;
+            return connection.get;
+          }),
+        })),
     };
     const id = `fake:${info.name}`;
     const layers = yield* startKeeper(id, counted);
@@ -126,7 +136,7 @@ const warmKeeper = (
       fake.get({ name: info.name, region: undefined }),
       (read) => read.deadline.toISOString(),
     );
-    return { id, name: info.name, calls, layers, deadline };
+    return { id, name: info.name, calls, watched, layers, deadline };
   });
 
 const capturedOut = Effect.gen(function* () {
@@ -748,6 +758,24 @@ describe("Keeper", () => {
         );
         // Then
         expect(error.message).toBe(`Sandbox ${keeper.id} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "the gone-watch first reads the Sandbox one interval after the Keeper serves",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const keeper = yield* warmKeeper(env);
+        yield* TestServices.provideLive(Effect.sleep("200 millis"));
+        const before = keeper.watched.get;
+        // When
+        yield* TestClock.adjust("2 seconds");
+        yield* eventually(Effect.sync(() => keeper.watched.get >= 1));
+        // Then
+        expect([before, keeper.watched.get]).toEqual([0, 1]);
       }).pipe(runtimeConfig(env));
     },
   );

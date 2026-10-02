@@ -1316,15 +1316,6 @@ const warmNamespace = (
     });
     writeFileSync(paths.maxLife, "4102444800\n");
     const layers = yield* startKeeper(NS_ID, provider);
-    // The gone-watch reads once as soon as the Keeper serves, then every
-    // 2 s: wait for that first read (after connect's own), so it is not
-    // counted as the command's.
-    yield* eventually(
-      Effect.sync(
-        () =>
-          runs.filter((line) => line.includes("docker inspect")).length >= 2,
-      ),
-    );
     counts.run = 0;
     counts.stream = 0;
     counts.execStream = 0;

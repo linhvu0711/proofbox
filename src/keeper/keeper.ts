@@ -443,9 +443,10 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
       if (!started) {
         return;
       }
-      // The gone-watch reads over the Keeper's own link; a gone Sandbox
-      // fails it and ends the Keeper.
-      yield* Effect.repeat(connection.get, Schedule.spaced("2 seconds"));
+      // The gone-watch reads over the Keeper's own link, first one interval
+      // after the Keeper serves: connect has just read the Sandbox. A gone
+      // Sandbox fails it and ends the Keeper.
+      yield* Effect.schedule(connection.get, Schedule.spaced("2 seconds"));
     }),
   );
 
