@@ -126,6 +126,9 @@ export const runCli = (
     readonly set?: Readonly<Record<string, string>>;
     readonly unset?: ReadonlyArray<string>;
     readonly input?: string;
+    // The most stdout or stderr the test keeps; past it the command is
+    // killed. Node's own default is 1 MiB.
+    readonly maxBuffer?: number;
     // Sees stderr as it comes, while the command still runs; `interrupt`
     // sends it SIGINT, as Ctrl-C does.
     readonly onStderr?: (chunk: string, interrupt: () => void) => void;
@@ -151,7 +154,14 @@ export const runCli = (
       // The Namespace Provider's create builds the Base image on a fresh
       // host, which can run for minutes, and on failure may still need a
       // few seconds to delete the host before the process exits.
-      { cwd: repoRoot, env: childEnv, timeout: 480_000 },
+      {
+        cwd: repoRoot,
+        env: childEnv,
+        timeout: 480_000,
+        ...(options.maxBuffer === undefined
+          ? {}
+          : { maxBuffer: options.maxBuffer }),
+      },
       (error, stdout, stderr) => {
         resolve({
           stdout,

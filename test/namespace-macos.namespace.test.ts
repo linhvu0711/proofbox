@@ -102,7 +102,9 @@ describe("Namespace macOS Provider", () => {
     // When
     for (let i = 0; i < 25; i++) {
       const start = performance.now();
-      const run = await runCli(env, ["exec", id, "--", "cat", "/tmp/big"]);
+      const run = await runCli(env, ["exec", id, "--", "cat", "/tmp/big"], {
+        maxBuffer: 8 * 1024 * 1024,
+      });
       runs.push({
         exitCode: run.exitCode,
         bytes: run.stdout.length,
