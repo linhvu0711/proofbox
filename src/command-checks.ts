@@ -1,4 +1,4 @@
-import { Deferred, Effect, Stream } from "effect";
+import { Deferred, Duration, Effect, Stream } from "effect";
 import type { ProviderError, SandboxGoneError } from "./errors.ts";
 import type { ExecEvent, MemoryKills, SandboxInfo } from "./provider.ts";
 
@@ -32,7 +32,14 @@ const FAIL_DETAIL_MAX = 200;
 // How long a command whose End line and stdout are all in waits for the
 // link to close, so the Keeper log can tell a link that did not close
 // (ADR 0021).
-const CLOSE_WAIT = "1 second";
+const CLOSE_WAIT = Duration.seconds(1);
+// How long after the End line stdout may still be short before the call
+// fails.
+const LATE_OUTPUT = Duration.seconds(5);
+
+// Why a call fails when stdout that the End line counted never came.
+const lostReason = (code: number, missing: number) =>
+  `lost ${missing} bytes of the command's output on the way. The command did run and exited ${code}, so running it again runs it twice.`;
 
 // Runs as `sh -c <script> sh <idleSeconds> <leftSeconds> <argv...>`. The
 // Deadline is set on the Sandbox's own clock, as `extend` does. A failed
@@ -136,7 +143,7 @@ const endLineOf = (text: string) => {
 };
 
 // The wait that starts at the End line ticks once it is over.
-type Tick = { readonly _tag: "CloseWait" };
+type Tick = { readonly _tag: "CloseWait" } | { readonly _tag: "Late" };
 
 // Turns the events of a `checksScript` call into the Caller's: the start
 // mark and the End line go, and the End line's exit code and counts land
@@ -147,12 +154,15 @@ type Tick = { readonly _tag: "CloseWait" };
 // stderr tail that could start the End line is held back, until the next
 // chunk or the Exit. The command ends at its End line, not at the link's
 // exit (ADR 0021): once all the stdout it counts is in, it waits at most
-// `CLOSE_WAIT` for the link to close, then ends with `stillOpen`.
+// `CLOSE_WAIT` for the link to close, then ends with `stillOpen`. Stdout
+// still short 5 s after the End line, or when the link closes, fails
+// with `lost()`.
 export const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
   on: {
     readonly gone: () => SandboxGoneError;
     readonly pushFailed: (detail: string) => ProviderError;
+    readonly lost: (reason: string) => ProviderError;
   },
 ): Stream.Stream<ExecEvent, E | SandboxGoneError | ProviderError> =>
   Stream.unwrap(
@@ -221,7 +231,16 @@ export const splitChecks = <E>(
           case "CloseWait":
             closeWaitOver = true;
             return Effect.succeed(endedOpen());
+          case "Late":
+            return end !== undefined && seen < end.bytes
+              ? Effect.fail(on.lost(lostReason(end.code, end.bytes - seen)))
+              : Effect.succeed([]);
           case "Exit": {
+            if (end !== undefined && seen < end.bytes) {
+              return Effect.fail(
+                on.lost(lostReason(end.code, end.bytes - seen)),
+              );
+            }
             if (end !== undefined) {
               return Effect.succeed([
                 { _tag: "Exit", code: end.code, kills: end.kills },
@@ -239,8 +258,20 @@ export const splitChecks = <E>(
         }
       };
       const ticks = Stream.fromEffect(Deferred.await(endSeen)).pipe(
-        Stream.mapEffect(() =>
-          Effect.as(Effect.sleep(CLOSE_WAIT), { _tag: "CloseWait" } as const),
+        Stream.flatMap(() =>
+          Stream.concat(
+            Stream.fromEffect(
+              Effect.as(Effect.sleep(CLOSE_WAIT), {
+                _tag: "CloseWait",
+              } as const),
+            ),
+            Stream.fromEffect(
+              Effect.as(
+                Effect.sleep(Duration.subtract(LATE_OUTPUT, CLOSE_WAIT)),
+                { _tag: "Late" } as const,
+              ),
+            ),
+          ),
         ),
       );
       return Stream.merge(events, ticks, { haltStrategy: "left" }).pipe(

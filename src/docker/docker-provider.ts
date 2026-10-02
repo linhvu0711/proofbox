@@ -410,6 +410,7 @@ export const makeDockerProvider = (options: {
                 gone: () => gone(sandbox.name),
                 pushFailed: (detail) =>
                   fail(`could not write the Deadline: ${detail}`),
+                lost: (reason) => fail(reason),
               },
             ),
           ),

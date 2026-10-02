@@ -44,6 +44,7 @@ const splitStream = (events: Stream.Stream<ExecEvent>) =>
         provider: "docker",
         reason: `could not write the Deadline: ${detail}`,
       }),
+    lost: (reason) => new ProviderError({ provider: "docker", reason }),
   }).pipe(
     Stream.runCollect,
     Effect.map((collected) =>
@@ -531,5 +532,45 @@ describe("command checks", () => {
           "Provider docker failed: could not write the Deadline: disk full",
         );
       }),
+  );
+  it.effect("output still short 5 s after the End line fails", () =>
+    Effect.gen(function* () {
+      // Given: 3 of 6 bytes, and the link never closes
+      const events = Stream.concat(
+        Stream.fromIterable([
+          err(CHECKS_START),
+          out("abc"),
+          err(endLine(0, 6, { before: 0, after: 0 })),
+        ]),
+        Stream.never,
+      );
+      // When
+      const fiber = yield* Effect.fork(Effect.flip(splitStream(events)));
+      yield* sleepsNear(1_000);
+      yield* TestClock.adjust("1 second");
+      yield* sleepsNear(5_000);
+      yield* TestClock.adjust("4 seconds");
+      const error = yield* Fiber.join(fiber);
+      // Then
+      expect(error.message).toBe(
+        "Provider docker failed: lost 3 bytes of the command's output on the way. The command did run and exited 0, so running it again runs it twice.",
+      );
+    }),
+  );
+
+  it.effect("a link that closes with output still short fails at once", () =>
+    Effect.gen(function* () {
+      // Given / When
+      const error = yield* split(
+        err(CHECKS_START),
+        out("abc"),
+        err(endLine(2, 6, { before: 0, after: 0 })),
+        exit(2),
+      ).pipe(Effect.flip);
+      // Then
+      expect(error.message).toBe(
+        "Provider docker failed: lost 3 bytes of the command's output on the way. The command did run and exited 2, so running it again runs it twice.",
+      );
+    }),
   );
 });

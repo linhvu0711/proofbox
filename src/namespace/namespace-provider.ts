@@ -1031,6 +1031,7 @@ export const makeNamespaceProvider = (deps: {
                 gone: () => gone(ref),
                 pushFailed: (detail) =>
                   fail(`could not write the Deadline: ${detail}`),
+                lost: (reason) => fail(reason),
               },
             ).pipe(
               Stream.tap((event) =>

@@ -1402,6 +1402,31 @@ describe("Namespace Provider through the Keeper", () => {
   );
 
   it.scoped(
+    "exec with output lost on the way fails with the lost byte count",
+    () =>
+      Effect.gen(function* () {
+        // Given: the End line counts 6 bytes, 3 arrive, the link closes
+        const ns = yield* warmNamespace(() =>
+          Stream.fromIterable<ExecEvent>([
+            stderrEvent(CHECKS_START),
+            { _tag: "Stdout", bytes: new TextEncoder().encode("abc") },
+            stderrEvent(endLine(0, 6, { before: 0, after: 0 })),
+            { _tag: "Exit", code: 0 },
+          ]),
+        );
+        // When
+        const error = yield* execInSandbox(NS_ID, ["true"]).pipe(
+          Effect.provide(ns.layers),
+          Effect.flip,
+        );
+        // Then
+        expect(error.message).toBe(
+          "Provider namespace failed: lost 3 bytes of the command's output on the way. The command did run and exited 0, so running it again runs it twice.",
+        );
+      }).pipe(runtimeConfig()),
+  );
+
+  it.scoped(
     "a failed Deadline write ends the command with the write's error",
     () =>
       Effect.gen(function* () {
