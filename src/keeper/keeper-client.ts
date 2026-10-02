@@ -322,6 +322,28 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           ),
         );
 
+      // The request, the first line to a Keeper. A failure keeps the
+      // socket's code as its reason, as connectSocket does, so a Keeper that
+      // left before it read the request is told apart; the socket goes.
+      const writeRequest = (socket: Socket, provider: string, frame: unknown) =>
+        Effect.async<void, ProviderError>((resume) => {
+          socket.write(`${JSON.stringify(frame)}\n`, (error) => {
+            if (error) {
+              socket.destroy();
+            }
+            resume(
+              error
+                ? Effect.fail(
+                    new ProviderError({
+                      provider,
+                      reason: codeOf(error) || error.message,
+                    }),
+                  )
+                : Effect.void,
+            );
+          });
+        });
+
       const writeLine = (socket: Socket, provider: string, frame: unknown) =>
         Effect.async<void, ProviderError>((resume) => {
           socket.write(`${JSON.stringify(frame)}\n`, (error) =>
@@ -349,7 +371,21 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           provider: id.prefix,
           name: fileStem(id),
         });
-        const connect = connectSocket(paths.socket, id.provider.name);
+        // The Keeper never read a request it dropped, so after a new Keeper
+        // starts the request goes again.
+        const connect = connectSocket(paths.socket, id.provider.name).pipe(
+          Effect.tap((socket) =>
+            writeRequest(
+              socket,
+              id.provider.name,
+              encodeRequest(
+                options?.stdin === undefined
+                  ? { exec: [...argv] }
+                  : { exec: [...argv], stdin: true },
+              ),
+            ),
+          ),
+        );
         // With no Keeper, the Provider says first whether the Sandbox is
         // still there: a gone one fails here, with no Keeper started for it.
         const socket = yield* connect.pipe(
@@ -369,15 +405,6 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           );
           return yield* execDirect(provider, id, argv, options);
         }
-        yield* writeLine(
-          socket.value,
-          id.provider.name,
-          encodeRequest(
-            options?.stdin === undefined
-              ? { exec: [...argv] }
-              : { exec: [...argv], stdin: true },
-          ),
-        );
         const feederError = yield* Ref.make<StdinError | undefined>(undefined);
         if (options?.stdin !== undefined) {
           const stdin = options.stdin;
@@ -518,18 +545,34 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           provider: id.prefix,
           name: fileStem(id),
         });
+        // No Keeper took the request: none answers, or one left before it
+        // read it.
         const socket = yield* connectSocket(
           paths.socket,
           id.provider.name,
-        ).pipe(Effect.option);
+        ).pipe(
+          Effect.option,
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeedNone,
+              onSome: (socket) =>
+                writeRequest(
+                  socket,
+                  id.provider.name,
+                  encodeRequest({ info: true }),
+                ).pipe(
+                  Effect.as(Option.some(socket)),
+                  Effect.catchIf(
+                    (error) => KEEPER_AWAY.has(error.reason),
+                    () => Effect.succeedNone,
+                  ),
+                ),
+            }),
+          ),
+        );
         if (Option.isNone(socket)) {
           return yield* id.provider.get(id);
         }
-        yield* writeLine(
-          socket.value,
-          id.provider.name,
-          encodeRequest({ info: true }),
-        );
         const reply = yield* oneReply(socket.value, id.provider.name);
         if ("info" in reply) {
           return reply.info;

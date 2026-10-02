@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createConnection } from "node:net";
+import { createConnection, createServer, type Server } from "node:net";
 import { basename, join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
@@ -31,7 +31,12 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
-import { liveCreates, markCreate, unmarkCreate } from "../src/keeper/paths.ts";
+import {
+  keeperPaths,
+  liveCreates,
+  markCreate,
+  unmarkCreate,
+} from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
@@ -191,6 +196,23 @@ const capturedErr = Effect.gen(function* () {
   const output = yield* CliOutput;
   return Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join("");
 });
+
+// A Keeper socket for fake Sandbox `name` that drops each connection
+// before it reads the request, as a Keeper does when its Sandbox is gone.
+const droppingKeeper = (name: string) =>
+  Effect.gen(function* () {
+    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    yield* Effect.acquireRelease(
+      Effect.async<Server>((resume) => {
+        const server = createServer((client) => client.destroy());
+        server.listen(socket, () => resume(Effect.succeed(server)));
+      }),
+      (server) =>
+        Effect.promise(
+          () => new Promise<void>((done) => server.close(() => done())),
+        ),
+    );
+  });
 
 // Runs `argv` through the Keeper client and gives its failure.
 const keeperExecError = (id: string, argv: ReadonlyArray<string>) =>
@@ -918,6 +940,46 @@ describe("Keeper", () => {
         );
         // Then
         expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command through a Keeper that drops it on a gone Sandbox fails with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* droppingKeeper(sandbox.name);
+        rmSync(join(env.root, sandbox.name), { recursive: true, force: true });
+        // When
+        const error = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info through a Keeper that drops the request reads the Provider",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* droppingKeeper(sandbox.name);
+        // When
+        const info = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.provide(sandbox.layers));
+        // Then
+        expect({ name: info.name, get: sandbox.calls.get }).toEqual({
+          name: sandbox.name,
+          get: 1,
+        });
       }).pipe(runtimeConfig(env));
     },
   );
