@@ -333,6 +333,29 @@ const saveScreen = Effect.fn("macHost.saveScreen")(function* (
   return path;
 });
 
+// macOS turns the display off after 10 min with no screen input, and a
+// sleeping display gives black screenshots that a click does not wake.
+// `pmset -g` is read back, since a setting the VM ignores would pass.
+const keepScreenAwake = Effect.fn("macHost.keepScreenAwake")(function* (
+  link: Link,
+  ref: SandboxRef,
+) {
+  yield* step(
+    link,
+    "turning off the screen saver",
+    `${GUI} defaults -currentHost write com.apple.screensaver idleTime -int 0`,
+  );
+  const awake = yield* link.run(
+    `sudo -n pmset -a displaysleep 0 sleep 0 disksleep 0 && pmset -g | awk '$1=="displaysleep"{d=$2} $1=="sleep"{s=$2} END{exit !(d=="0" && s=="0")}'`,
+  );
+  if (awake.exitCode !== 0) {
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "the display can still sleep",
+    });
+  }
+});
+
 // A test screenshot, then a 1 s capture. A capture its 15 s timer kills
 // (137), or a replayd alert (the capture itself does not wait on that one),
 // means an alert is on screen.
@@ -394,6 +417,10 @@ export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   yield* progress.step(
     "making the Secrets RAM disk",
     makeSecretsDisk(link, req.ref),
+  );
+  yield* progress.step(
+    "keeping the screen awake",
+    keepScreenAwake(link, req.ref),
   );
   yield* progress.step(
     "taking a test screenshot and capture",

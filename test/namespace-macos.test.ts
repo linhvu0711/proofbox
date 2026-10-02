@@ -430,6 +430,55 @@ describe("Namespace macOS Provider", () => {
     }).pipe(withRuntime(runtimeDir())),
   );
 
+  it.effect(
+    "macOS create turns off display sleep before the test screenshot",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const at = (text: string) =>
+          lines.findIndex((line) => line.includes(text));
+        const pmset = at("sudo -n pmset -a displaysleep 0 sleep 0 disksleep 0");
+        expect(pmset).toBeGreaterThanOrEqual(0);
+        expect(pmset).toBeLessThan(at("screencapture"));
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create turns off the screen saver for runner", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      expect(yield* Ref.get(mac.commands)).toContain(
+        "sudo -n launchctl asuser 501 sudo -n -u runner defaults -currentHost write com.apple.screensaver idleTime -int 0",
+      );
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a Mac whose display can still sleep fails create and deletes the Mac",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("pmset -a") ? { exitCode: 1 } : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (the display can still sleep); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
   const PngHead = new Uint8Array([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
   ]);

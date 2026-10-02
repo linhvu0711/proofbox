@@ -263,7 +263,8 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
     | "the test screenshot is blocked"
     | "the test capture is blocked"
     | "an alert is on screen"
-    | "the Secrets RAM disk cannot be made";
+    | "the Secrets RAM disk cannot be made"
+    | "the display can still sleep";
   readonly screenshot?: string | undefined;
 }> {
   get message() {
