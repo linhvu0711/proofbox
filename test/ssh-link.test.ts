@@ -16,7 +16,7 @@ import { afterEach, describe, expect } from "vitest";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeOpenLink, makeSshForward } from "../src/namespace/ssh-link.ts";
-import { cleanupEnvs } from "./support/cli.ts";
+import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 const PEM = Buffer.from(
   "-----BEGIN OPENSSH PRIVATE KEY-----\nZm9v\n-----END OPENSSH PRIVATE KEY-----\n",
@@ -54,6 +54,7 @@ const fakeSshForward = (log: string) => {
 // other call as a remote command that reads one line of stdin.
 const fakeSshReading = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-ssh-"));
+  trackTempDir(dir);
   const binDir = join(dir, "bin");
   mkdirSync(binDir);
   const path = join(binDir, "ssh");
@@ -207,6 +208,7 @@ describe("ssh link", () => {
   it.live("run gives the remote command an empty stdin", () => {
     const fake = fakeSshReading();
     const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    trackTempDir(runtime);
     return Effect.gen(function* () {
       // Given
       const api: NamespaceApi = {
