@@ -167,9 +167,10 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                 // command counts as ended, and is logged, before it goes.
                 tally.exit = event.code;
                 execEnded = true;
-                return log(start, "done").pipe(
-                  Effect.zipRight(writeFrame(socket, frameOf(event))),
-                );
+                return log(
+                  start,
+                  event.stillOpen === true ? "done, Mac did not close" : "done",
+                ).pipe(Effect.zipRight(writeFrame(socket, frameOf(event))));
               }),
               Effect.as("done"),
               // Logged before the error goes out, as the exit is. The log

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -6,6 +6,7 @@ import {
   ConfigProvider,
   Duration,
   Effect,
+  Fiber,
   Layer,
   Option,
   Redacted,
@@ -1399,6 +1400,52 @@ describe("Namespace Provider through the Keeper", () => {
         "Provider namespace failed: lost the link to the Namespace host: the ssh link dropped mid-command",
       );
     }).pipe(runtimeConfig()),
+  );
+
+  it.scoped(
+    "a call that ends at its End line with the link open logs done, Mac did not close",
+    () =>
+      Effect.gen(function* () {
+        // Given: the End line and all its output, and the link never closes
+        const ns = yield* warmNamespace(() =>
+          Stream.concat(
+            Stream.fromIterable<ExecEvent>([
+              stderrEvent(CHECKS_START),
+              { _tag: "Stdout", bytes: new TextEncoder().encode("hi\n") },
+              stderrEvent(endLine(0, 3, { before: 0, after: 0 })),
+            ]),
+            Stream.never,
+          ),
+        );
+        // When
+        const fiber = yield* Effect.fork(
+          execInSandbox(NS_ID, ["echo", "hi"]).pipe(
+            Effect.zipRight(
+              Effect.flatMap(CliOutput, (output) => output.exitCode),
+            ),
+            Effect.provide(ns.layers),
+          ),
+        );
+        yield* eventually(
+          TestClock.adjust("500 millis").pipe(
+            Effect.zipRight(Fiber.poll(fiber)),
+            Effect.map((polled) => Option.isSome(polled)),
+          ),
+        );
+        const code = yield* Fiber.join(fiber);
+        // Then
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        });
+        expect({
+          code,
+          logged:
+            / exec sh out=3 err=0 exit=0 took=\S+ done, Mac did not close\n$/.test(
+              readFileSync(paths.log, "utf8"),
+            ),
+        }).toEqual({ code: 0, logged: true });
+      }).pipe(runtimeConfig()),
   );
 
   it.scoped(
