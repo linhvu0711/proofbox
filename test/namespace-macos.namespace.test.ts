@@ -88,6 +88,37 @@ describe("Namespace macOS Provider", () => {
     expect(run.exitCode).toBe(3);
   });
 
+  it("cat of a 3.5 MB file ends 25 times in a row", async () => {
+    // Given: a 3670016-byte file of "a", as text so runCli counts it right
+    await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "head -c 3670016 /dev/zero | tr '\\000' a > /tmp/big",
+    ]);
+    const runs: Array<{ exitCode: number; bytes: number; fast: boolean }> = [];
+    // When
+    for (let i = 0; i < 25; i++) {
+      const start = performance.now();
+      const run = await runCli(env, ["exec", id, "--", "cat", "/tmp/big"]);
+      runs.push({
+        exitCode: run.exitCode,
+        bytes: run.stdout.length,
+        fast: performance.now() - start < 10_000,
+      });
+    }
+    // Then
+    expect(runs).toEqual(
+      Array.from({ length: 25 }, () => ({
+        exitCode: 0,
+        bytes: 3670016,
+        fast: true,
+      })),
+    );
+  }, 600_000);
+
   it("the Tool bundle on the Mac has the pinned hashes", async () => {
     // Given: the Mac from beforeAll
     // When

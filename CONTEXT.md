@@ -101,7 +101,7 @@ A remote screen of a Sandbox that a person opens to watch, click, and type.
 _Avoid_: stream, preview, VNC (the protocol, not the thing)
 
 **End line**:
-The last line a Sandbox writes after each command's own output: its exit code, how many bytes of output it made, and the memory-kill counts. The Keeper takes it out before the Caller sees the output, and a command ends when its End line and all its output have arrived. Not built yet: until #118 ships, the End line holds only the memory-kill counts and a command ends at the ssh exit.
+The last line a Sandbox writes after each command's own output: its exit code, how many bytes of output it made, and the memory-kill counts. The Keeper takes it out before the Caller sees the output, and a command ends when its End line and all its output have arrived.
 _Avoid_: trailer, checks trailer, last line
 
 ### Proof

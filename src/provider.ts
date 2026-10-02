@@ -161,6 +161,8 @@ export type ExecEvent =
       readonly _tag: "Exit";
       readonly code: number;
       readonly kills?: MemoryKills;
+      // The link had not closed when the End line ended the command.
+      readonly stillOpen?: true;
     };
 
 export interface ExecOptions {

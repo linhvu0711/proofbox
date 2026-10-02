@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect";
+import { Deferred, Effect, Stream } from "effect";
 import type { ProviderError, SandboxGoneError } from "./errors.ts";
 import type { ExecEvent, MemoryKills, SandboxInfo } from "./provider.ts";
 
@@ -28,6 +28,11 @@ export const pushFailedTrailer = (detail: string) =>
 
 // The most of a failed push's own error the fail trailer carries.
 const FAIL_DETAIL_MAX = 200;
+
+// How long a command whose End line and stdout are all in waits for the
+// link to close, so the Keeper log can tell a link that did not close
+// (ADR 0021).
+const CLOSE_WAIT = "1 second";
 
 // Runs as `sh -c <script> sh <idleSeconds> <leftSeconds> <argv...>`. The
 // Deadline is set on the Sandbox's own clock, as `extend` does. A failed
@@ -116,13 +121,33 @@ const tailStart = (bytes: Buffer) => {
 
 const stderr = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stderr", bytes });
 
+// The End line in `text`, when `text` is one whole End line.
+const endLineOf = (text: string) => {
+  const fields = text.startsWith(TRAILER_HEAD)
+    ? /^(\d+) (\d+) (\d+) (\d+)\n$/.exec(text.slice(TRAILER_HEAD.length))
+    : null;
+  return fields === null
+    ? undefined
+    : {
+        code: Number(fields[3]),
+        bytes: Number(fields[4]),
+        kills: { before: Number(fields[1]), after: Number(fields[2]) },
+      };
+};
+
+// The wait that starts at the End line ticks once it is over.
+type Tick = { readonly _tag: "CloseWait" };
+
 // Turns the events of a `checksScript` call into the Caller's: the start
-// mark and the trailer go, and the two counts land on the Exit event. A
-// fail trailer fails with `pushFailed()` and the push's own error.
-// Stderr before the start mark is the runtime's own: with no mark (the
-// script never started), a gone container there fails with `gone()`; any
-// other text goes out as it is. After the mark, only a stderr tail that
-// could start the trailer is held back, until the next chunk or the Exit.
+// mark and the End line go, and the End line's exit code and counts land
+// on the Exit event. A fail trailer fails with `pushFailed()` and the
+// push's own error. Stderr before the start mark is the runtime's own:
+// with no mark (the script never started), a gone container there fails
+// with `gone()`; any other text goes out as it is. After the mark, only a
+// stderr tail that could start the End line is held back, until the next
+// chunk or the Exit. The command ends at its End line, not at the link's
+// exit (ADR 0021): once all the stdout it counts is in, it waits at most
+// `CLOSE_WAIT` for the link to close, then ends with `stillOpen`.
 export const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
   on: {
@@ -130,75 +155,98 @@ export const splitChecks = <E>(
     readonly pushFailed: (detail: string) => ProviderError;
   },
 ): Stream.Stream<ExecEvent, E | SandboxGoneError | ProviderError> =>
-  Stream.suspend(() => {
-    let started = false;
-    let held = Buffer.alloc(0);
-    const step = (
-      event: ExecEvent,
-    ): Effect.Effect<
-      ReadonlyArray<ExecEvent>,
-      SandboxGoneError | ProviderError
-    > => {
-      switch (event._tag) {
-        case "Stdout":
-          return Effect.succeed([event]);
-        case "Stderr": {
-          held = Buffer.concat([held, event.bytes]);
-          // The runtime's own stderr before the mark (an ssh or Docker
-          // warning) goes out as it is.
-          let before = Buffer.alloc(0);
-          if (!started) {
-            const mark = held.indexOf(CHECKS_START, 0, "latin1");
-            if (mark === -1) {
-              return Effect.succeed([]);
+  Stream.unwrap(
+    Effect.map(Deferred.make<void>(), (endSeen) => {
+      let started = false;
+      let held = Buffer.alloc(0);
+      // The stdout bytes so far, and the End line once it is in.
+      let seen = 0;
+      let end: ReturnType<typeof endLineOf>;
+      let closeWaitOver = false;
+      const endedOpen = (): ReadonlyArray<ExecEvent> =>
+        end !== undefined && closeWaitOver && seen >= end.bytes
+          ? [
+              {
+                _tag: "Exit",
+                code: end.code,
+                kills: end.kills,
+                stillOpen: true,
+              },
+            ]
+          : [];
+      const step = (
+        event: ExecEvent | Tick,
+      ): Effect.Effect<
+        ReadonlyArray<ExecEvent>,
+        SandboxGoneError | ProviderError
+      > => {
+        switch (event._tag) {
+          case "Stdout":
+            seen += event.bytes.length;
+            return Effect.succeed([event, ...endedOpen()]);
+          case "Stderr": {
+            held = Buffer.concat([held, event.bytes]);
+            // The runtime's own stderr before the mark (an ssh or Docker
+            // warning) goes out as it is.
+            let before = Buffer.alloc(0);
+            if (!started) {
+              const mark = held.indexOf(CHECKS_START, 0, "latin1");
+              if (mark === -1) {
+                return Effect.succeed([]);
+              }
+              started = true;
+              before = held.subarray(0, mark);
+              held = held.subarray(mark + CHECKS_START.length);
             }
-            started = true;
-            before = held.subarray(0, mark);
-            held = held.subarray(mark + CHECKS_START.length);
+            const at = tailStart(held);
+            const out = Buffer.concat([before, held.subarray(0, at)]);
+            held = held.subarray(at);
+            const passed = out.length === 0 ? [] : [stderr(out)];
+            const text = held.toString("latin1");
+            if (text.startsWith(FAIL_HEAD) && text.endsWith("\n")) {
+              const detail = held
+                .subarray(FAIL_HEAD.length, held.length - 1)
+                .toString("utf8")
+                .trim();
+              return Effect.fail(on.pushFailed(detail || "the write failed"));
+            }
+            const line = endLineOf(text);
+            if (line === undefined) {
+              return Effect.succeed(passed);
+            }
+            end = line;
+            held = Buffer.alloc(0);
+            return Effect.as(Deferred.succeed(endSeen, undefined), passed);
           }
-          const at = tailStart(held);
-          const out = Buffer.concat([before, held.subarray(0, at)]);
-          held = held.subarray(at);
-          return Effect.succeed(out.length === 0 ? [] : [stderr(out)]);
-        }
-        case "Exit": {
-          const rest = held;
-          held = Buffer.alloc(0);
-          if (!started) {
-            if (GONE.test(rest.toString("utf8"))) {
+          case "CloseWait":
+            closeWaitOver = true;
+            return Effect.succeed(endedOpen());
+          case "Exit": {
+            if (end !== undefined) {
+              return Effect.succeed([
+                { _tag: "Exit", code: end.code, kills: end.kills },
+              ]);
+            }
+            const rest = held;
+            held = Buffer.alloc(0);
+            if (!started && GONE.test(rest.toString("utf8"))) {
               return Effect.fail(on.gone());
             }
             return Effect.succeed(
               rest.length === 0 ? [event] : [stderr(rest), event],
             );
           }
-          const text = rest.toString("latin1");
-          if (text.startsWith(FAIL_HEAD) && text.endsWith("\n")) {
-            const detail = rest
-              .subarray(FAIL_HEAD.length, rest.length - 1)
-              .toString("utf8")
-              .trim();
-            return Effect.fail(on.pushFailed(detail || "the write failed"));
-          }
-          const trailer = text.startsWith(TRAILER_HEAD)
-            ? /^(\d+) (\d+) (\d+) (\d+)\n$/.exec(
-                text.slice(TRAILER_HEAD.length),
-              )
-            : null;
-          if (trailer === null) {
-            return Effect.succeed(
-              rest.length === 0 ? [event] : [stderr(rest), event],
-            );
-          }
-          return Effect.succeed([
-            {
-              ...event,
-              code: Number(trailer[3]),
-              kills: { before: Number(trailer[1]), after: Number(trailer[2]) },
-            },
-          ]);
         }
-      }
-    };
-    return events.pipe(Stream.mapEffect(step), Stream.flattenIterables);
-  });
+      };
+      const ticks = Stream.fromEffect(Deferred.await(endSeen)).pipe(
+        Stream.mapEffect(() =>
+          Effect.as(Effect.sleep(CLOSE_WAIT), { _tag: "CloseWait" } as const),
+        ),
+      );
+      return Stream.merge(events, ticks, { haltStrategy: "left" }).pipe(
+        Stream.mapEffect(step),
+        Stream.flattenIterables,
+        Stream.takeUntil((event) => event._tag === "Exit"),
+      );
+    }),
+  );

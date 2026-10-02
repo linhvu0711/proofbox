@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Stream } from "effect";
+import { Chunk, Effect, Fiber, Stream, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import {
   CHECKS_START,
@@ -14,6 +14,7 @@ import {
 } from "../src/command-checks.ts";
 import { ProviderError, SandboxGoneError } from "../src/errors.ts";
 import type { ExecEvent } from "../src/provider.ts";
+import { sleepsNear } from "./support/clock.ts";
 
 const tempRoots: string[] = [];
 
@@ -35,8 +36,8 @@ const err = (text: string): ExecEvent => ({
 const exit = (code: number): ExecEvent => ({ _tag: "Exit", code });
 
 // The split events, with each chunk's bytes as text.
-const split = (...events: ReadonlyArray<ExecEvent>) =>
-  splitChecks(Stream.fromIterable(events), {
+const splitStream = (events: Stream.Stream<ExecEvent>) =>
+  splitChecks(events, {
     gone: () => new SandboxGoneError({ id: "docker:abc123" }),
     pushFailed: (detail) =>
       new ProviderError({
@@ -53,6 +54,9 @@ const split = (...events: ReadonlyArray<ExecEvent>) =>
       ),
     ),
   );
+
+const split = (...events: ReadonlyArray<ExecEvent>) =>
+  splitStream(Stream.fromIterable(events));
 
 const script = checksScript({
   push: 'printf %s "$d" > "$DL"',
@@ -418,5 +422,114 @@ describe("command checks", () => {
         stderr: CHECKS_START + endLine(0, 3, { before: 4, after: 4 }),
       });
     }),
+  );
+  it.effect(
+    "a command ends 1 s after its End line when the link stays open",
+    () =>
+      Effect.gen(function* () {
+        // Given: the link never closes
+        const events = Stream.concat(
+          Stream.fromIterable([
+            err(CHECKS_START),
+            out("abc"),
+            err(endLine(0, 3, { before: 0, after: 0 })),
+          ]),
+          Stream.never,
+        );
+        // When
+        const fiber = yield* Effect.fork(splitStream(events));
+        yield* sleepsNear(1_000);
+        yield* TestClock.adjust("1 second");
+        const split = yield* Fiber.join(fiber);
+        // Then
+        expect(split).toEqual([
+          { _tag: "Stdout", text: "abc" },
+          {
+            _tag: "Exit",
+            code: 0,
+            kills: { before: 0, after: 0 },
+            stillOpen: true,
+          },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "output that comes 2 s after the End line still ends the call",
+    () =>
+      Effect.gen(function* () {
+        // Given: the output comes 2 s late, and the link never closes
+        const events = Stream.concat(
+          Stream.fromIterable([
+            err(CHECKS_START),
+            err(endLine(0, 3, { before: 0, after: 0 })),
+          ]),
+          Stream.concat(
+            Stream.fromEffect(Effect.as(Effect.sleep("2 seconds"), out("abc"))),
+            Stream.never,
+          ),
+        );
+        // When
+        const fiber = yield* Effect.fork(splitStream(events));
+        yield* sleepsNear(1_000, 2_000);
+        yield* TestClock.adjust("2 seconds");
+        const split = yield* Fiber.join(fiber);
+        // Then
+        expect(split).toEqual([
+          { _tag: "Stdout", text: "abc" },
+          {
+            _tag: "Exit",
+            code: 0,
+            kills: { before: 0, after: 0 },
+            stillOpen: true,
+          },
+        ]);
+      }),
+  );
+
+  it.effect("a command quiet for 600 s is not cut", () =>
+    Effect.gen(function* () {
+      // Given: 600 s with no output, then the End line and the exit
+      const events = Stream.concat(
+        Stream.fromIterable([err(CHECKS_START)]),
+        Stream.concat(
+          Stream.fromEffect(Effect.sleep("600 seconds")).pipe(Stream.drain),
+          Stream.fromIterable([
+            err(endLine(0, 0, { before: 0, after: 0 })),
+            exit(0),
+          ]),
+        ),
+      );
+      // When
+      const fiber = yield* Effect.fork(splitStream(events));
+      yield* sleepsNear(600_000);
+      yield* TestClock.adjust("600 seconds");
+      const split = yield* Fiber.join(fiber);
+      // Then
+      expect(split).toEqual([
+        { _tag: "Exit", code: 0, kills: { before: 0, after: 0 } },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "a fail line ends the call without waiting for the link to close",
+    () =>
+      Effect.gen(function* () {
+        // Given: the link never closes
+        const events = Stream.concat(
+          Stream.fromIterable([
+            err(CHECKS_START),
+            err(pushFailedTrailer("disk full")),
+          ]),
+          Stream.never,
+        );
+        // When
+        const error = yield* splitStream(events).pipe(Effect.flip);
+        // Then
+        expect(error.message).toBe(
+          "Provider docker failed: could not write the Deadline: disk full",
+        );
+      }),
   );
 });
