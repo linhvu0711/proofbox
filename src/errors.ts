@@ -264,7 +264,9 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
     | "the test capture is blocked"
     | "an alert is on screen"
     | "the Secrets RAM disk cannot be made"
-    | "the display can still sleep";
+    | "the display can still sleep"
+    | "the login password is not runner"
+    | "the login keychain does not unlock with runner";
   readonly screenshot?: string | undefined;
 }> {
   get message() {

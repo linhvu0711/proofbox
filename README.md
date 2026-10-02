@@ -33,6 +33,12 @@ To pick a Provider per OS, write `~/.config/proofbox/config`:
 
 No file means `namespace` for both. `create --provider <name>` overrides it for one Sandbox.
 
+## Inside a Sandbox
+
+On macOS, the user is `runner`, and sudo needs no password. When a macOS dialog asks for a password (a permission, the Keychain, an installer), type the Login password `runner` with `proofbox type`, the way a person does (ADR 0020). `create` checks that the password still works and fails when it does not.
+
+On Linux, the user is `app`. It has no password and no sudo.
+
 ## Install
 
 Needs Node 24.12 or later and pnpm.
