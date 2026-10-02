@@ -35,7 +35,7 @@ No file means `namespace` for both. `create --provider <name>` overrides it for 
 
 ## Inside a Sandbox
 
-On macOS, the user is `runner`, and sudo needs no password. When a macOS dialog asks for a password (a permission, the Keychain, an installer), type the Login password `runner` with `proofbox type`, the way a person does (ADR 0020). `create` checks that the password still works and fails when it does not.
+On macOS, the user is `runner`, and sudo needs no password. When a macOS dialog asks for a password (a permission, the Keychain, an installer), type the Login password `runner` with `proofbox type`, the way a person does (ADR 0020). `create` checks that the password still works and fails when it does not. System Events, Terminal, and Finder are already allowed for Apple Events. A command that controls another app (for example `osascript -e 'tell application "Safari" …'`) shows a "vmguest wants access to control" dialog once per app and waits about 2 minutes. Run it in the background (`proofbox exec "$id" -- sh -c '… &'`), take a `proofbox screenshot`, and click Allow.
 
 On Linux, the user is `app`. It has no password and no sudo.
 

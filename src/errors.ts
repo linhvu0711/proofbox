@@ -266,7 +266,8 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
     | "the Secrets RAM disk cannot be made"
     | "the display can still sleep"
     | "the login password is not runner"
-    | "the login keychain does not unlock with runner";
+    | "the login keychain does not unlock with runner"
+    | "Apple Events to System Events are blocked";
   readonly screenshot?: string | undefined;
 }> {
   get message() {

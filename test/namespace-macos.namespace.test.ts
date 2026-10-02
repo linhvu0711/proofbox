@@ -595,6 +595,67 @@ describe("Namespace macOS Provider", () => {
       expect(events).toContainEqual({ type: "marker" });
     });
   });
+
+  // A dialog holds an Apple Event until it is killed, so an answer in
+  // under 10 s means no "vmguest wants access to control" dialog showed.
+  it("an exec that controls Terminal answers at once with no dialog", async () => {
+    // Given: the Mac from beforeAll, with a Terminal window open
+    await runCli(env, ["exec", id, "--", "open", "-a", "Terminal"]);
+    await setTimeout(3000);
+    // When
+    const start = performance.now();
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "osascript",
+      "-e",
+      'tell application "Terminal" to get name of front window',
+    ]);
+    const millis = performance.now() - start;
+    // Then
+    expect(found.exitCode).toBe(0);
+    expect(found.stdout).toBe("runner — -zsh — 120×30\n");
+    expect(millis).toBeLessThan(10_000);
+  });
+
+  it("an exec that controls System Events answers at once with no dialog", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const start = performance.now();
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "osascript",
+      "-e",
+      'tell application "System Events" to get name of first process',
+    ]);
+    const millis = performance.now() - start;
+    // Then
+    expect(found.exitCode).toBe(0);
+    expect(found.stdout).toBe("loginwindow\n");
+    expect(millis).toBeLessThan(10_000);
+  });
+
+  it("an exec that controls Finder answers at once with no dialog", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const start = performance.now();
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "osascript",
+      "-e",
+      'tell application "Finder" to get name of startup disk',
+    ]);
+    const millis = performance.now() - start;
+    // Then
+    expect(found.exitCode).toBe(0);
+    expect(found.stdout).toBe("Macintosh HD\n");
+    expect(millis).toBeLessThan(10_000);
+  });
 });
 
 describe("Namespace macOS Recording", () => {

@@ -217,12 +217,22 @@ const dropToken = Effect.fn("macHost.dropToken")(function* (
 const GUI = "sudo -n launchctl asuser 501 sudo -n -u runner";
 const VMGUEST = "/opt/namespace/vmguest";
 const TCC_DB = "/Library/Application Support/com.apple.TCC/TCC.db";
+// Apple Events consent is per user and per target app, so these rows go in
+// runner's own DB; rows in the system DB still show the dialog.
+const RUNNER_TCC_DB =
+  "/Users/runner/Library/Application Support/com.apple.TCC/TCC.db";
+const APPLE_EVENTS_TARGETS = [
+  "com.apple.systemevents",
+  "com.apple.Terminal",
+  "com.apple.finder",
+];
 const REPLAYD =
   "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
 const REPLAYD_HINT = "4000-01-01T00:00:00Z";
 
-// ADR 0012: grant screen and input to vmguest in the system TCC.db, and
-// pre-answer replayd's "bypass the private window picker" alert.
+// ADR 0012: grant screen and input to vmguest in the system TCC.db, Apple
+// Events to System Events, Terminal, and Finder in runner's, and pre-answer
+// replayd's "bypass the private window picker" alert.
 const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
   const rows = [
     "kTCCServiceScreenCapture",
@@ -239,6 +249,17 @@ const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
     "granting screen and input access",
     `sudo -n sqlite3 ${shellJoin([TCC_DB])} ${shellJoin([
       `INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ${rows}`,
+    ])}`,
+  );
+  const targets = APPLE_EVENTS_TARGETS.map(
+    (target) =>
+      `('kTCCServiceAppleEvents', '${VMGUEST}', 1, 2, 4, 1, 0, '${target}', 0, CAST(strftime('%s','now') AS INTEGER))`,
+  ).join(", ");
+  yield* step(
+    link,
+    "granting Apple Events",
+    `sudo -n sqlite3 ${shellJoin([RUNNER_TCC_DB])} ${shellJoin([
+      `INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ${targets}`,
     ])}`,
   );
   // replayd keeps the approvals in memory, saves them over the file on a
@@ -418,6 +439,27 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   }
 });
 
+// One Apple Event to System Events. A blocked one waits on a dialog until it
+// is killed, so a 10 s timer kills it, and the dialog stays on screen for
+// the saved screenshot. The timer writes to /dev/null: its `sleep` outlives
+// `kill $w`, and on the link's output it would hold every create for 10 s.
+const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
+  link: Link,
+  ref: SandboxRef,
+) {
+  const sent = yield* link.run(
+    `${GUI} osascript -e 'tell application "System Events" to get name of first process' >/dev/null & p=$!; (sleep 10; kill -9 $p; pkill -9 -x osascript) >/dev/null 2>&1 & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
+  );
+  if (sent.exitCode !== 0) {
+    const screenshot = yield* saveScreen(link, ref);
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "Apple Events to System Events are blocked",
+      screenshot,
+    });
+  }
+});
+
 // Everything a Mac needs before user code arrives, in order.
 export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   link: Link,
@@ -452,7 +494,9 @@ export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   );
   yield* progress.step(
     "taking a test screenshot and capture",
-    checkScreen(link, req.ref),
+    checkScreen(link, req.ref).pipe(
+      Effect.zipRight(checkAppleEvents(link, req.ref)),
+    ),
   );
   return yield* writeMacState(link, req, createdAt);
 });
