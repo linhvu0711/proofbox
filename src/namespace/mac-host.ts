@@ -441,13 +441,14 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
 
 // One Apple Event to System Events. A blocked one waits on a dialog until it
 // is killed, so a 10 s timer kills it, and the dialog stays on screen for
-// the saved screenshot.
+// the saved screenshot. The timer writes to /dev/null: its `sleep` outlives
+// `kill $w`, and on the link's output it would hold every create for 10 s.
 const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
   link: Link,
   ref: SandboxRef,
 ) {
   const sent = yield* link.run(
-    `${GUI} osascript -e 'tell application "System Events" to get name of first process' >/dev/null & p=$!; (sleep 10; kill -9 $p 2>/dev/null; pkill -9 -x osascript) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
+    `${GUI} osascript -e 'tell application "System Events" to get name of first process' >/dev/null & p=$!; (sleep 10; kill -9 $p; pkill -9 -x osascript) >/dev/null 2>&1 & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
   );
   if (sent.exitCode !== 0) {
     const screenshot = yield* saveScreen(link, ref);
