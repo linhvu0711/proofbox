@@ -131,7 +131,7 @@ The final MP4 made from a Recording: Still parts cut, actions at real speed, Ste
 _Avoid_: demo, recording, walkthrough video
 
 **Proof screenshot**:
-A full-size PNG taken at a Step mark.
+A PNG of the screen taken at a Step mark, at the size the Caller clicks in.
 _Avoid_: capture, snap
 
 **Size limit**:

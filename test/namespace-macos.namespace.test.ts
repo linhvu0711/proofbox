@@ -746,7 +746,7 @@ describe("Namespace macOS Recording", () => {
     expect(Math.max(...picture)).toBeGreaterThanOrEqual(64);
   });
 
-  it("each mark on a Mac saves a 2560x1600 Proof screenshot", async () => {
+  it("each mark on a Mac saves a 1280x800 Proof screenshot", async () => {
     // Given: the Mac from beforeAll
     const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
     const out = join(dir, "proof.mp4");
@@ -777,8 +777,8 @@ describe("Namespace macOS Recording", () => {
     expect(stopped.stdout).toBe(`${out}\n${first}\n${second}\n`);
     for (const file of [first, second]) {
       const bytes = readFileSync(file);
-      expect(bytes.readUInt32BE(16)).toBe(2560);
-      expect(bytes.readUInt32BE(20)).toBe(1600);
+      expect(bytes.readUInt32BE(16)).toBe(1280);
+      expect(bytes.readUInt32BE(20)).toBe(800);
     }
     expect(readFileSync(first).equals(readFileSync(second))).toBe(false);
   });
@@ -866,9 +866,12 @@ describe("Namespace macOS Recording", () => {
     expect(stopped.stderr).toBe(
       `Recording on ${id} failed: the capture stopped, so no Proof video was made. Saved the screen to ${blocked}. Record the walk again.\n`,
     );
-    expect(readFileSync(blocked).subarray(0, 8)).toEqual(
+    const bytes = readFileSync(blocked);
+    expect(bytes.subarray(0, 8)).toEqual(
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
+    expect(bytes.readUInt32BE(16)).toBe(1280);
+    expect(bytes.readUInt32BE(20)).toBe(800);
   });
 
   it("record stop names a stalled capture", async () => {
