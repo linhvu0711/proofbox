@@ -22,6 +22,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { commandEvents } from "../command-events.ts";
 import { nextDeadline, pushedDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -33,7 +34,6 @@ import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import {
   type Connection,
-  type ExecEvent,
   IdleSeconds,
   Os,
   type Provider,
@@ -500,50 +500,13 @@ export const makeFakeProvider = (options: {
       argv: ReadonlyArray<string>,
       options: Parameters<Connection["exec"]>[1],
     ) =>
-      Stream.unwrapScoped(
-        Effect.gen(function* () {
-          const process = yield* Command.start(
-            Command.make("sh", "-c", shellJoin(argv)).pipe(
-              Command.workingDirectory(home),
-            ),
-          ).pipe(
-            Effect.provideService(CommandExecutor.CommandExecutor, executor),
-            Effect.mapError((error) => fail(error.message)),
-          );
-          const feed =
-            options?.stdin === undefined
-              ? undefined
-              : Stream.run(options.stdin, process.stdin).pipe(
-                  // A command may exit before its stdin reports "finish"
-                  // (tar -x stops at the end-of-archive marker); when the
-                  // process is gone the feed is done by definition.
-                  Effect.raceFirst(
-                    process.exitCode.pipe(Effect.orElseSucceed(() => {})),
-                  ),
-                  Effect.mapError((error) => fail(error.message)),
-                );
-          const outputs = Stream.merge(
-            process.stdout.pipe(
-              Stream.map((bytes): ExecEvent => ({ _tag: "Stdout", bytes })),
-            ),
-            process.stderr.pipe(
-              Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
-            ),
-          ).pipe(Stream.mapError((error) => fail(error.message)));
-          const events =
-            feed === undefined
-              ? outputs
-              : Stream.merge(
-                  outputs,
-                  Stream.fromEffect(feed).pipe(Stream.drain),
-                );
-          const exit = Stream.fromEffect(
-            process.exitCode.pipe(
-              Effect.mapError((error) => fail(error.message)),
-            ),
-          ).pipe(Stream.map((code): ExecEvent => ({ _tag: "Exit", code })));
-          return Stream.concat(events, exit);
-        }),
+      commandEvents(
+        executor,
+        Command.make("sh", "-c", shellJoin(argv)).pipe(
+          Command.workingDirectory(home),
+        ),
+        options,
+        { spawn: (error) => fail(error.message), fail },
       );
     const connection: Connection = {
       info,

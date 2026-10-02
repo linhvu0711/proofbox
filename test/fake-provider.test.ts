@@ -123,4 +123,82 @@ describe("fake Provider", () => {
       expect(events[events.length - 1]).toEqual({ _tag: "Exit", code: 0 });
     }).pipe(Effect.provide(NodeContext.layer)),
   );
+
+  it.live("fake exec gives a command with no stdin end of input at once", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox
+      const root = makeRoot();
+      const fake = makeFakeProvider({ root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      // When: a command that reads stdin runs with no stdin given
+      const collected = yield* fake
+        .connect({ name: sandbox.name, region: undefined })
+        .pipe(
+          Effect.flatMap((connection) =>
+            Stream.runCollect(
+              connection.exec(["sh", "-c", 'read x; echo "rc:$?"']),
+            ),
+          ),
+          Effect.scoped,
+          Effect.timeoutFail({
+            duration: "5 seconds",
+            onTimeout: () => "no end of input within 5 s",
+          }),
+        );
+      // Then: `read` sees end of input at once and the exit is clean
+      const events = Chunk.toReadonlyArray(collected);
+      const decoder = new TextDecoder();
+      const stdout = events
+        .filter((event) => event._tag === "Stdout")
+        .map((event) => decoder.decode(event.bytes))
+        .join("");
+      expect({ stdout, last: events[events.length - 1] }).toEqual({
+        stdout: "rc:1\n",
+        last: { _tag: "Exit", code: 0 },
+      });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.effect(
+    "fake exec fails with a ProviderError when the command cannot start",
+    () =>
+      Effect.gen(function* () {
+        // Given: a fake Sandbox whose home folder is gone
+        const root = makeRoot();
+        const fake = makeFakeProvider({ root, watch: "none" });
+        const sandbox = yield* fake
+          .create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          })
+          .pipe(Effect.provideService(Progress, noProgress));
+        rmSync(join(root, sandbox.name, "home"), {
+          recursive: true,
+          force: true,
+        });
+        // When
+        const error = yield* fake
+          .connect({ name: sandbox.name, region: undefined })
+          .pipe(
+            Effect.flatMap((connection) =>
+              Stream.runDrain(connection.exec(["true"])),
+            ),
+            Effect.scoped,
+            Effect.flip,
+          );
+        // Then: a ProviderError from the fake, naming the missing folder
+        expect(error._tag).toBe("ProviderError");
+        if (error._tag === "ProviderError") {
+          expect(error.provider).toBe("fake");
+          expect(error.reason).toContain("NotFound");
+        }
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
 });
