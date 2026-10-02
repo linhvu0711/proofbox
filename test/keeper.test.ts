@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createConnection } from "node:net";
+import { createConnection, createServer, type Server } from "node:net";
 import { basename, join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
@@ -26,17 +26,26 @@ import {
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
-import { ProviderError } from "../src/errors.ts";
+import { ProviderError, ProviderUnavailableError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
-import { liveCreates, markCreate, unmarkCreate } from "../src/keeper/paths.ts";
+import {
+  keeperPaths,
+  liveCreates,
+  markCreate,
+  unmarkCreate,
+} from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
-import { eventually, startKeeper } from "./support/keeper.ts";
+import {
+  eventually,
+  keeperClientLayers,
+  startKeeper,
+} from "./support/keeper.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -74,11 +83,11 @@ const runtimeConfig = (env: { runtime: string }) =>
     ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", env.runtime]])),
   );
 
-// A fake Sandbox made at t=0 with a Keeper run in this process, and the
-// layers a command needs to reach it. The Provider counts the `get` and
-// `extend` calls made to it from the CLI side; the Keeper's own checks go
-// through its Connection and are not counted.
-const warmKeeper = (
+// A fake Sandbox made at t=0, and a Provider that counts the `get` and
+// `extend` calls made to it from the CLI side in `calls`, and the Keeper's
+// own reads of the Sandbox over its Connection (the gone-watch) in
+// `watched`.
+const countedSandbox = (
   env: { root: string; runtime: string },
   options: {
     readonly maxLife?: Duration.Duration;
@@ -95,6 +104,7 @@ const warmKeeper = (
       })
       .pipe(Effect.provideService(Progress, noProgress));
     const calls = { get: 0, extend: 0 };
+    const watched = { get: 0 };
     const linux = fake.offers.linux;
     const counted: Provider = {
       ...fake,
@@ -117,22 +127,99 @@ const warmKeeper = (
           calls.extend += 1;
           return fake.extend(ref, deadline);
         }),
+      connect: (ref) =>
+        Effect.map(fake.connect(ref), (connection) => ({
+          ...connection,
+          get: Effect.suspend(() => {
+            watched.get += 1;
+            return connection.get;
+          }),
+        })),
     };
-    const id = `fake:${info.name}`;
-    const layers = yield* startKeeper(id, counted);
-    calls.get = 0;
-    calls.extend = 0;
+    return {
+      fake,
+      id: `fake:${info.name}`,
+      name: info.name,
+      calls,
+      watched,
+      counted,
+    };
+  });
+
+// A counted fake Sandbox with a Keeper run in this process, and the layers
+// a command needs to reach it.
+const warmKeeper = (
+  env: { root: string; runtime: string },
+  options: {
+    readonly maxLife?: Duration.Duration;
+    readonly desktop?: boolean;
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const sandbox = yield* countedSandbox(env, options);
+    const layers = yield* startKeeper(sandbox.id, sandbox.counted);
+    sandbox.calls.get = 0;
+    sandbox.calls.extend = 0;
     const deadline = Effect.map(
-      fake.get({ name: info.name, region: undefined }),
+      sandbox.fake.get({ name: sandbox.name, region: undefined }),
       (read) => read.deadline.toISOString(),
     );
-    return { id, name: info.name, calls, layers, deadline };
+    return {
+      id: sandbox.id,
+      name: sandbox.name,
+      calls: sandbox.calls,
+      watched: sandbox.watched,
+      layers,
+      deadline,
+    };
   });
+
+// A counted fake Sandbox with no Keeper running, and the layers a command
+// needs to reach it; `overrides` replace calls of the counted Provider.
+const coldSandbox = (
+  env: { root: string; runtime: string },
+  overrides: Partial<Provider> = {},
+) =>
+  Effect.map(countedSandbox(env), (sandbox) => ({
+    id: sandbox.id,
+    name: sandbox.name,
+    calls: sandbox.calls,
+    layers: keeperClientLayers({ ...sandbox.counted, ...overrides }),
+  }));
 
 const capturedOut = Effect.gen(function* () {
   const output = yield* CliOutput;
   return Chunk.toReadonlyArray(yield* Ref.get(output.captured.out)).join("");
 });
+
+const capturedErr = Effect.gen(function* () {
+  const output = yield* CliOutput;
+  return Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join("");
+});
+
+// A Keeper socket for fake Sandbox `name` that drops each connection
+// before it reads the request, as a Keeper does when its Sandbox is gone.
+const droppingKeeper = (name: string) =>
+  Effect.gen(function* () {
+    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    yield* Effect.acquireRelease(
+      Effect.async<Server>((resume) => {
+        const server = createServer((client) => client.destroy());
+        server.listen(socket, () => resume(Effect.succeed(server)));
+      }),
+      (server) =>
+        Effect.promise(
+          () => new Promise<void>((done) => server.close(() => done())),
+        ),
+    );
+  });
+
+// Runs `argv` through the Keeper client and gives its failure.
+const keeperExecError = (id: string, argv: ReadonlyArray<string>) =>
+  Effect.flatMap(KeeperClient, (client) => client.exec(id, argv)).pipe(
+    Effect.flatMap(Stream.runDrain),
+    Effect.flip,
+  );
 
 // Whether a process whose command line holds `pattern` runs on this machine.
 const running = (pattern: string) =>
@@ -748,6 +835,151 @@ describe("Keeper", () => {
         );
         // Then
         expect(error.message).toBe(`Sandbox ${keeper.id} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "the gone-watch first reads the Sandbox one interval after the Keeper serves",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const keeper = yield* warmKeeper(env);
+        yield* TestServices.provideLive(Effect.sleep("200 millis"));
+        const before = keeper.watched.get;
+        // When
+        yield* TestClock.adjust("2 seconds");
+        yield* eventually(Effect.sync(() => keeper.watched.get >= 1));
+        // Then
+        expect([before, keeper.watched.get]).toEqual([0, 1]);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command with no Keeper on a gone Sandbox fails at once with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        rmSync(join(env.root, sandbox.name), { recursive: true, force: true });
+        // When
+        const [error, err] = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.zip(capturedErr),
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect({ message: error.message, err }).toEqual({
+          message: `Sandbox fake:${sandbox.name} is gone`,
+          err: "",
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info with no Keeper on a gone Sandbox fails with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        rmSync(join(env.root, sandbox.name), { recursive: true, force: true });
+        // When
+        const error = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.flip, Effect.provide(sandbox.layers));
+        // Then
+        expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command with no Keeper fails with the Provider's message when the Provider cannot be reached",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env, {
+          get: () =>
+            Effect.fail(
+              new ProviderUnavailableError({
+                provider: "fake",
+                reason: "fake Provider did not answer",
+              }),
+            ),
+        });
+        // When
+        const [error, err] = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.zip(capturedErr),
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect({ message: error.message, err }).toEqual({
+          message: "fake Provider did not answer",
+          err: "",
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command with no Keeper on an unfinished Sandbox fails with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        rmSync(join(env.root, sandbox.name, "sandbox.json"));
+        // When
+        const error = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a command through a Keeper that drops it on a gone Sandbox fails with the gone message",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* droppingKeeper(sandbox.name);
+        rmSync(join(env.root, sandbox.name), { recursive: true, force: true });
+        // When
+        const error = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect(error.message).toBe(`Sandbox fake:${sandbox.name} is gone`);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info through a Keeper that drops the request reads the Provider",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* droppingKeeper(sandbox.name);
+        // When
+        const info = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.provide(sandbox.layers));
+        // Then
+        expect({ name: info.name, get: sandbox.calls.get }).toEqual({
+          name: sandbox.name,
+          get: 1,
+        });
       }).pipe(runtimeConfig(env));
     },
   );
