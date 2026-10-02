@@ -4,6 +4,7 @@ import { createConnection, type Socket } from "node:net";
 import { promisify } from "node:util";
 import {
   Clock,
+  Data,
   Duration,
   Effect,
   Layer,
@@ -49,6 +50,29 @@ const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 // No Keeper answers: none is there, or one left before it read the
 // request, as a Keeper does when its Sandbox is gone.
 const KEEPER_AWAY = new Set([...RETRY_CODES, "EPIPE", "ECONNRESET"]);
+
+// The Keeper closed or broke the connection before its last frame. It may
+// have read the request, so the request never goes again.
+class KeeperLostError extends Data.TaggedError("KeeperLostError")<{
+  readonly reason: string;
+}> {}
+
+// The Sandbox as the Provider reads it once the Keeper is lost: a gone
+// Sandbox fails gone, and any other failure keeps the lost reason.
+const readAfterLost = Effect.fn("keeperClient.readAfterLost")(function* (
+  provider: Provider,
+  sandbox: SandboxRef,
+  lost: KeeperLostError,
+) {
+  return yield* Effect.catchIf(
+    provider.get(sandbox),
+    (error) => !(error instanceof SandboxGoneError),
+    () =>
+      Effect.fail(
+        new ProviderError({ provider: provider.name, reason: lost.reason }),
+      ),
+  );
+});
 
 // The Caller side may send a stream whose failure is an upload error, not a
 // ProviderError (packFiles can fail with UploadFailedError or
@@ -223,7 +247,10 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       });
 
       const frames = (socket: Socket, provider: string) =>
-        Stream.asyncPush<ExecEvent, ProviderError | SandboxGoneError>((emit) =>
+        Stream.asyncPush<
+          ExecEvent,
+          ProviderError | SandboxGoneError | KeeperLostError
+        >((emit) =>
           Effect.acquireRelease(
             Effect.sync(() => {
               let pending = "";
@@ -298,8 +325,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                 if (!done) {
                   done = true;
                   emit.fail(
-                    new ProviderError({
-                      provider,
+                    new KeeperLostError({
                       reason:
                         "Keeper closed the connection before the command exited",
                     }),
@@ -309,9 +335,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               socket.once("error", (error) => {
                 if (!done) {
                   done = true;
-                  emit.fail(
-                    new ProviderError({ provider, reason: error.message }),
-                  );
+                  emit.fail(new KeeperLostError({ reason: error.message }));
                 }
               });
             }),
@@ -443,9 +467,22 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               Ref.get(feederError).pipe(
                 Effect.map(
                   (fed): Stream.Stream<never, KeeperExecError> =>
-                    fed === undefined
-                      ? Stream.fail(frameError)
-                      : Stream.fail(fed),
+                    fed !== undefined
+                      ? Stream.fail(fed)
+                      : frameError instanceof KeeperLostError
+                        ? Stream.fromEffect(
+                            Effect.flatMap(
+                              readAfterLost(provider, id, frameError),
+                              () =>
+                                Effect.fail(
+                                  new ProviderError({
+                                    provider: provider.name,
+                                    reason: frameError.reason,
+                                  }),
+                                ),
+                            ),
+                          )
+                        : Stream.fail(frameError),
                 ),
               ),
             ),
@@ -502,10 +539,12 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
 
       // The one reply to a request that is not a command.
       const oneReply = (socket: Socket, provider: string) =>
-        Effect.async<ReplyFrame, ProviderError>((resume) => {
+        Effect.async<ReplyFrame, ProviderError | KeeperLostError>((resume) => {
           let pending = "";
           let done = false;
-          const finish = (result: Effect.Effect<ReplyFrame, ProviderError>) => {
+          const finish = (
+            result: Effect.Effect<ReplyFrame, ProviderError | KeeperLostError>,
+          ) => {
             if (!done) {
               done = true;
               socket.destroy();
@@ -514,6 +553,8 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           };
           const fail = (reason: string) =>
             finish(Effect.fail(new ProviderError({ provider, reason })));
+          const lost = (reason: string) =>
+            finish(Effect.fail(new KeeperLostError({ reason })));
           socket.on("data", (chunk) => {
             pending += chunk.toString("utf8");
             const newline = pending.indexOf("\n");
@@ -531,9 +572,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             }
           });
           socket.once("close", () =>
-            fail("Keeper closed the connection before it answered"),
+            lost("Keeper closed the connection before it answered"),
           );
-          socket.once("error", (error) => fail(error.message));
+          socket.once("error", (error) => lost(error.message));
         });
 
       // The Sandbox as the warm Keeper read it at connect, with no remote
@@ -573,7 +614,13 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         if (Option.isNone(socket)) {
           return yield* id.provider.get(id);
         }
-        const reply = yield* oneReply(socket.value, id.provider.name);
+        const reply = yield* oneReply(socket.value, id.provider.name).pipe(
+          Effect.catchTag("KeeperLostError", (lost) =>
+            Effect.map(readAfterLost(id.provider, id, lost), (info) => ({
+              info,
+            })),
+          ),
+        );
         if ("info" in reply) {
           return reply.info;
         }
