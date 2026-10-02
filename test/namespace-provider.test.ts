@@ -26,6 +26,7 @@ import {
   NotLoggedInError,
   ProviderLimitError,
   ProviderUnavailableError,
+  TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import type {
@@ -55,6 +56,8 @@ const fakeApi = (
     ) => ApiError | ApiLoginError | undefined;
     // An error the nth `create` call (1-based) fails with.
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
+    // An error `ensureImageExpiry` fails with for an image.
+    readonly expiryError?: (image: string) => ApiError | undefined;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
@@ -91,8 +94,13 @@ const fakeApi = (
       );
     },
     sshConfig: () => Effect.die("unused"),
-    ensureImageExpiry: (image, hours) =>
-      note(`ensureImageExpiry ${image} ${hours}`),
+    ensureImageExpiry: (image, hours) => {
+      const error = options?.expiryError?.(image);
+      if (error !== undefined) {
+        return Effect.fail(error);
+      }
+      return note(`ensureImageExpiry ${image} ${hours}`);
+    },
     checkToken: () => Effect.die("unused"),
     makeToken: () => Effect.die("unused"),
   };
@@ -103,15 +111,28 @@ const fakeDocker = (options: {
   readonly tokenService?: number;
   // Collects the image of every `docker run`, its last argument.
   readonly images?: Array<string>;
+  // Whether the host already has the image, and whether a pull finds it.
+  readonly exists?: boolean;
+  readonly pulled?: boolean;
+  // Collect the tag of every pull and every push.
+  readonly pulls?: Array<string>;
+  readonly pushed?: Array<string>;
 }): DockerClient => {
   let labels: Record<string, string> = {};
   const ok = (stdout = "") =>
     Effect.succeed({ exitCode: 0, stdout, stderr: "" });
   return {
     serverArch: Effect.succeed("amd64"),
-    imageExists: () => Effect.succeed(true),
-    pull: () => Effect.succeed(true),
-    push: () => Effect.void,
+    imageExists: () => Effect.succeed(options.exists ?? true),
+    pull: (tag) =>
+      Effect.sync(() => {
+        options.pulls?.push(tag);
+        return options.pulled ?? true;
+      }),
+    push: (tag) =>
+      Effect.sync(() => {
+        options.pushed?.push(tag);
+      }),
     build: () => Effect.void,
     run: (args) =>
       Effect.sync(() => {
@@ -199,10 +220,27 @@ interface RunResult {
 
 const done = (stdout = ""): RunResult => ({ exitCode: 0, stdout, stderr: "" });
 
-const tenantRun = (commandLine: string) =>
-  Effect.succeed(
+// The Base tag's digests as `docker buildx imagetools inspect` prints
+// them: the index and its 2 children.
+const BASE_INDEX = JSON.stringify({
+  digest: "sha256:ba5e",
+  manifests: [{ digest: "sha256:cd34" }, { digest: "sha256:ef56" }],
+});
+
+const BASE_EXPIRY = [
+  "ensureImageExpiry proofbox-base-linux@sha256:ba5e 336",
+  "ensureImageExpiry proofbox-base-linux@sha256:cd34 336",
+  "ensureImageExpiry proofbox-base-linux@sha256:ef56 336",
+];
+
+const tenantRun = (commandLine: string) => {
+  if (commandLine.startsWith("docker buildx imagetools inspect")) {
+    return Effect.succeed(done(BASE_INDEX));
+  }
+  return Effect.succeed(
     done(commandLine.includes("metadata.json") ? "tenant_x\n" : ""),
   );
+};
 
 // A link that answers the `docker inspect` `list` runs on each host:
 // the container's labels name it by its six-letter host id, and the
@@ -229,7 +267,11 @@ const listRun = (commandLine: string) => {
 // every command line it got.
 const snapshotRun =
   (
-    answers: { readonly pull?: RunResult; readonly push?: RunResult },
+    answers: {
+      readonly pull?: RunResult;
+      readonly push?: RunResult;
+      readonly base?: RunResult;
+    },
     ran?: Array<string>,
   ) =>
   (commandLine: string) =>
@@ -243,6 +285,9 @@ const snapshotRun =
       }
       if (commandLine.startsWith("docker image inspect")) {
         return done("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n");
+      }
+      if (commandLine.startsWith("docker buildx imagetools inspect")) {
+        return answers.base ?? done(BASE_INDEX);
       }
       return done(commandLine.includes("metadata.json") ? "tenant_x\n" : "");
     });
@@ -261,6 +306,7 @@ const makeProvider = (
       region: string,
     ) => ApiError | ApiLoginError | undefined;
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
+    readonly expiryError?: (image: string) => ApiError | undefined;
     readonly region?: string;
   },
 ) =>
@@ -413,15 +459,16 @@ describe("Namespace Provider", () => {
   );
 
   it.effect(
-    "create from a known Fingerprint runs the Snapshot image and keeps it 336h",
+    "create from a known Fingerprint runs the Snapshot image and keeps it and its Base 336h",
     () =>
       Effect.gen(function* () {
-        // Given: the registry has the Snapshot
+        // Given: the registry has the Snapshot and its Base
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const images: Array<string> = [];
+        const pulls: Array<string> = [];
         const provider = makeProvider(
           calls,
-          fakeDocker({ images }),
+          fakeDocker({ images, pulls }),
           snapshotRun({}),
         );
         // When
@@ -438,10 +485,15 @@ describe("Namespace Provider", () => {
           expiry: (yield* Ref.get(calls)).filter((call) =>
             call.startsWith("ensureImageExpiry"),
           ),
+          pulls,
         }).toEqual({
           image: "nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
           snapshot: "22d0cf15eb8e",
-          expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
+          expiry: [
+            "ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336",
+            ...BASE_EXPIRY,
+          ],
+          pulls: [],
         });
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
@@ -481,11 +533,135 @@ describe("Namespace Provider", () => {
       }).toEqual({
         baseImage: true,
         snapshot: undefined,
-        expiry: [],
+        expiry: BASE_EXPIRY,
         warnings: [],
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
   });
+
+  it.effect("a create that builds the Base keeps every Base digest 336h", () =>
+    Effect.gen(function* () {
+      // Given: no Base on the host or in the registry, so create builds it
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const pushed: Array<string> = [];
+      const provider = makeProvider(
+        calls,
+        fakeDocker({ exists: false, pulled: false, pushed }),
+      );
+      // When
+      yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then
+      expect({
+        pushed: pushed.map((tag) => BASE_IMAGE.test(tag)),
+        expiry: (yield* Ref.get(calls)).filter((call) =>
+          call.startsWith("ensureImageExpiry"),
+        ),
+      }).toEqual({ pushed: [true], expiry: BASE_EXPIRY });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("a create that pulls the Base keeps every Base digest 336h", () =>
+    Effect.gen(function* () {
+      // Given: the registry has the Base, the host does not
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const pulls: Array<string> = [];
+      const pushed: Array<string> = [];
+      const provider = makeProvider(
+        calls,
+        fakeDocker({ exists: false, pulls, pushed }),
+      );
+      // When
+      yield* provider.create({
+        os: "linux",
+        idle: Duration.minutes(15),
+        maxLife: Duration.hours(3),
+      });
+      // Then
+      expect({
+        pulled: pulls.map((tag) => BASE_IMAGE.test(tag)),
+        pushed,
+        expiry: (yield* Ref.get(calls)).filter((call) =>
+          call.startsWith("ensureImageExpiry"),
+        ),
+      }).toEqual({ pulled: [true], pushed: [], expiry: BASE_EXPIRY });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a create from a Snapshot skips the Base expiry when the registry has no Base",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: the registry has the Snapshot but not its Base
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(
+          calls,
+          fakeDocker({}),
+          snapshotRun({
+            base: {
+              exitCode: 1,
+              stdout: "",
+              stderr:
+                "ERROR: nscr.io/tenant_x/proofbox-base-linux:0123456789ab: not found\n",
+            },
+          }),
+        );
+        // When
+        yield* provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+          snapshot: "22d0cf15eb8e",
+        });
+        // Then
+        expect({
+          expiry: (yield* Ref.get(calls)).filter((call) =>
+            call.startsWith("ensureImageExpiry"),
+          ),
+          warnings,
+        }).toEqual({
+          expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
+          warnings: [],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
+    },
+  );
+
+  it.effect(
+    "a failed Base expiry call warns and the Sandbox still starts",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: a token that cannot update registry images
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          expiryError: () =>
+            new TokenPermissionError({
+              provider: "namespace",
+              call: "ContainerRegistryService.UpdateImageLifetime",
+              need: "update registry images",
+            }),
+        });
+        // When
+        const info = yield* provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        });
+        // Then
+        expect({ name: info.name, warnings }).toEqual({
+          name: "abc123def4567",
+          warnings: [
+            "could not set the Base image expiry (This Namespace token lacks permission for ContainerRegistryService.UpdateImageLifetime. Use a token that can update registry images.)",
+          ],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
+    },
+  );
 
   it.effect("a failed Snapshot pull warns and runs the Base image", () => {
     const warnings: Array<string> = [];
