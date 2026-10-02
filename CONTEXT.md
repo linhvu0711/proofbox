@@ -38,6 +38,10 @@ _Avoid_: TTL, idle timer, timeout
 The hard limit on how long a Sandbox can live, 3 hours by default, however active it is.
 _Avoid_: hard TTL, lease
 
+**Login password**:
+The password of the macOS Sandbox user `runner`, which is `runner`. A Caller types it into macOS dialogs (permissions, Keychain, installers) the way a person does. Namespace sets it, and proofbox only checks it on create. It is not a Secret. A Linux Sandbox has none: its user `app` has no password and no sudo.
+_Avoid_: admin password, sudo password, user password
+
 **Sandbox size**:
 The CPU count and RAM of a Sandbox, written `4x8` (4 vCPU, 8 GB). Each Provider has a default per OS and an ordered list of bigger sizes. Not the Size limit, which is about the Proof video.
 _Avoid_: machine type, shape, spec, instance size
