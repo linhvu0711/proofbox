@@ -711,6 +711,72 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
+    "macOS create grants vmguest Apple Events to System Events, Terminal, and Finder",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const grants = lines.filter((line) =>
+          line.includes("kTCCServiceAppleEvents"),
+        );
+        expect(grants).toHaveLength(1);
+        const grant = grants[0] ?? "";
+        expect(
+          grant.startsWith(
+            "sudo -n sqlite3 '/Users/runner/Library/Application Support/com.apple.TCC/TCC.db' ",
+          ),
+        ).toBe(true);
+        expect(grant).toContain("com.apple.systemevents");
+        expect(grant).toContain("com.apple.Terminal");
+        expect(grant).toContain("com.apple.finder");
+        expect(grant).toContain("indirect_object_identifier_type");
+        const screen = lines.find((line) =>
+          line.includes("kTCCServiceScreenCapture"),
+        );
+        expect(
+          screen?.startsWith(
+            "sudo -n sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' ",
+          ),
+        ).toBe(true);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a failed Apple Events grant fails create at setting up screen access",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("kTCCServiceAppleEvents")
+            ? { exitCode: 1, stderr: "Error: unable to open database file\n" }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(
+          mac.provider
+            .create(createMac())
+            .pipe(Effect.provide(Progress.Default)),
+        );
+        // Then
+        expect(error.message).toBe(
+          "Provider namespace failed: granting Apple Events failed on the Mac: Error: unable to open database file",
+        );
+        const output = yield* CliOutput;
+        const err = Chunk.toReadonlyArray(
+          yield* Ref.get(output.captured.err),
+        ).join("");
+        expect(err).toBe(
+          "proofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
     "a Mac whose prepare outlasts the idle time gets its Deadline from the end of prepare",
     () =>
       Effect.gen(function* () {
