@@ -16,7 +16,9 @@ export type KeeperLogEntry = {
   readonly err: number;
   readonly exit: number | undefined;
   readonly tookMs: number;
-  // "done", "gave up", "Caller left", "gone", or "error: <text>".
+  // "done", "gave up", "Caller left", "gone", or "error: <kind>", as
+  // "error: ProviderError". Never an error's text: it can hold the
+  // command line.
   readonly ended: string;
 };
 

@@ -26,6 +26,7 @@ import {
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
+import { ProviderError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
@@ -873,6 +874,51 @@ describe("Keeper", () => {
       }).pipe(runtimeConfig(env));
     },
   );
+
+  it.scoped("a failed command logs its error kind, not its text", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a Provider whose exec fails with the command line in its text
+      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const info = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const failing: Provider = {
+        ...fake,
+        connect: (ref) =>
+          Effect.map(fake.connect(ref), (connection) => ({
+            ...connection,
+            exec: () =>
+              Stream.fail(
+                new ProviderError({
+                  provider: "fake",
+                  reason: "spawn ENOENT (docker exec sh -c echo tok-2718)",
+                }),
+              ),
+          })),
+      };
+      const id = `fake:${info.name}`;
+      const layers = yield* startKeeper(id, failing);
+      // When
+      yield* execInSandbox(id, ["echo", "tok-2718"]).pipe(
+        Effect.provide(layers),
+        Effect.ignore,
+      );
+      // Then
+      const log = readFileSync(
+        join(env.runtime, `fake-${info.name}.log`),
+        "utf8",
+      );
+      expect({
+        ended: log.trimEnd().split(" ").slice(-2).join(" "),
+        secret: log.includes("tok-2718"),
+      }).toEqual({ ended: "error: ProviderError", secret: false });
+    }).pipe(runtimeConfig(env));
+  });
 
   it.scoped("the Keeper writes one log line per request", () => {
     const env = makeEnv();

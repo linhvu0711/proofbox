@@ -71,6 +71,16 @@ const failText = (error: unknown) =>
       ? error.message
       : String(error);
 
+// What kind of error ended a command, for the Keeper log: its tag, never
+// its text.
+const errorKind = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "_tag" in error &&
+  typeof error._tag === "string"
+    ? error._tag
+    : "unknown";
+
 export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   rawId: string,
 ) {
@@ -162,21 +172,27 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                 );
               }),
               Effect.as("done"),
-              Effect.catchAll((error) =>
-                writeFrame(
-                  socket,
+              // Logged before the error goes out, as the exit is. The log
+              // takes only the error's kind: its text can hold the command
+              // line (ADR 0019).
+              Effect.catchAll((error) => {
+                const ended =
                   error instanceof SandboxGoneError
-                    ? { gone: error.id }
-                    : { fail: failText(error) },
-                ).pipe(
-                  Effect.orElseSucceed(() => undefined),
-                  Effect.as(
-                    error instanceof SandboxGoneError
-                      ? "gone"
-                      : `error: ${failText(error)}`,
+                    ? "gone"
+                    : `error: ${errorKind(error)}`;
+                return log(start, ended).pipe(
+                  Effect.zipRight(
+                    writeFrame(
+                      socket,
+                      error instanceof SandboxGoneError
+                        ? { gone: error.id }
+                        : { fail: failText(error) },
+                    ),
                   ),
-                ),
-              ),
+                  Effect.orElseSucceed(() => undefined),
+                  Effect.as(ended),
+                );
+              }),
               Effect.onExit((exit) =>
                 log(
                   start,
