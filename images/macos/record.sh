@@ -18,9 +18,11 @@ now() {
   /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'
 }
 
-# shot FILE: write a full-size PNG of the desktop to FILE.
+# shot FILE: write a PNG of the screen to FILE at the screen's size in points
+# (W x H), the size a screenshot has. screencapture writes 2x on a Retina
+# screen; sips scales it down here, before the bytes cross the link.
 shot() {
-  /usr/sbin/screencapture -x -t png "$1"
+  /usr/sbin/screencapture -x -t png "$1" && /usr/bin/sips -z "$H" "$W" "$1" >/dev/null
 }
 
 # log KIND [STEP|REASON]: append one line to the Action log; a Wait mark's
