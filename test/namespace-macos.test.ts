@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
+  Chunk,
   ConfigProvider,
   Duration,
   Effect,
@@ -365,6 +366,13 @@ describe("Namespace macOS Provider", () => {
       expect(at("test ! -e /var/run/nsc/token.json")).toBeLessThan(
         at("screencapture"),
       );
+      expect(lines).toContain("dscl . -authonly runner runner");
+      expect(lines).toContain(
+        "sudo -n launchctl asuser 501 sudo -n -u runner security unlock-keychain -p runner /Users/runner/Library/Keychains/login.keychain-db",
+      );
+      expect(at("hdiutil attach")).toBeLessThan(at("dscl . -authonly"));
+      expect(at("dscl . -authonly")).toBeLessThan(at("unlock-keychain"));
+      expect(at("unlock-keychain")).toBeLessThan(at("screencapture"));
       // The Mac is a Sandbox only once it is prepared.
       expect(at("/tmp/proofbox-test.mov")).toBeLessThan(at("labels.json"));
       // In a folder runner cannot write, so user code cannot fake a kill.
@@ -409,6 +417,59 @@ describe("Namespace macOS Provider", () => {
         // Then
         expect(error.message).toBe(
           "Sandbox ns:us:abc123def4567 can reach the Namespace workload token (the Docker config token); deleted the host and refused the Sandbox",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create prints checking the login password", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider
+        .create(createMac())
+        .pipe(Effect.provide(Progress.Default));
+      // Then
+      const output = yield* CliOutput;
+      const err = Chunk.toReadonlyArray(
+        yield* Ref.get(output.captured.err),
+      ).join("");
+      expect(err).toContain("proofbox: checking the login password\n");
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a login that rejects runner fails create and deletes the Mac",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("dscl . -authonly") ? { exitCode: 1 } : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (the login password is not runner); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a login keychain that rejects runner fails create and deletes the Mac",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("unlock-keychain") ? { exitCode: 51 } : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (the login keychain does not unlock with runner); deleted the Mac",
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
       }).pipe(withRuntime(runtimeDir())),

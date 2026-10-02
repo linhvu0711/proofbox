@@ -284,6 +284,30 @@ const makeSecretsDisk = Effect.fn("macHost.makeSecretsDisk")(function* (
   }
 });
 
+// ADR 0020: a Caller types runner into macOS dialogs, so create checks that
+// the login and the login keychain take it.
+const checkLoginPassword = Effect.fn("macHost.checkLoginPassword")(function* (
+  link: Link,
+  ref: SandboxRef,
+) {
+  const login = yield* link.run("dscl . -authonly runner runner");
+  if (login.exitCode !== 0) {
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "the login password is not runner",
+    });
+  }
+  const keychain = yield* link.run(
+    `${GUI} security unlock-keychain -p runner /Users/runner/Library/Keychains/login.keychain-db`,
+  );
+  if (keychain.exitCode !== 0) {
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "the login keychain does not unlock with runner",
+    });
+  }
+});
+
 // The shell that counts kills of real work in the watcher's log: macOS
 // also kills idle daemons under pressure, and those are not the command.
 export const macKillCount = (log: string) =>
@@ -417,6 +441,10 @@ export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   yield* progress.step(
     "making the Secrets RAM disk",
     makeSecretsDisk(link, req.ref),
+  );
+  yield* progress.step(
+    "checking the login password",
+    checkLoginPassword(link, req.ref),
   );
   yield* progress.step(
     "keeping the screen awake",
