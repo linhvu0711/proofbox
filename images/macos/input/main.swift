@@ -89,6 +89,10 @@ let modifiers: [String: CGEventFlags] = [
   "shift": .maskShift,
   "alt": .maskAlternate, "option": .maskAlternate,
   "super": .maskCommand, "cmd": .maskCommand, "meta": .maskCommand,
+  "Shift_L": .maskShift, "Shift_R": .maskShift,
+  "Control_L": .maskControl, "Control_R": .maskControl,
+  "Alt_L": .maskAlternate, "Alt_R": .maskAlternate,
+  "Super_L": .maskCommand, "Super_R": .maskCommand, "Meta_L": .maskCommand, "Meta_R": .maskCommand,
 ]
 
 // The key each modifier is, pressed around the combo so the system does
@@ -98,6 +102,10 @@ let modifierKeys: [String: Int] = [
   "shift": kVK_Shift,
   "alt": kVK_Option, "option": kVK_Option,
   "super": kVK_Command, "cmd": kVK_Command, "meta": kVK_Command,
+  "Shift_L": kVK_Shift, "Shift_R": kVK_RightShift,
+  "Control_L": kVK_Control, "Control_R": kVK_RightControl,
+  "Alt_L": kVK_Option, "Alt_R": kVK_RightOption,
+  "Super_L": kVK_Command, "Super_R": kVK_RightCommand, "Meta_L": kVK_Command, "Meta_R": kVK_RightCommand,
 ]
 
 let named: [String: Int] = [
@@ -121,6 +129,27 @@ let named: [String: Int] = [
   "bracketleft": kVK_ANSI_LeftBracket, "bracketright": kVK_ANSI_RightBracket,
 ]
 
+// The symbols Shift gives on a US keyboard, each with the key it is on.
+let shifted: [String: Int] = [
+  "plus": kVK_ANSI_Equal, "exclam": kVK_ANSI_1, "at": kVK_ANSI_2, "numbersign": kVK_ANSI_3,
+  "dollar": kVK_ANSI_4, "percent": kVK_ANSI_5, "asciicircum": kVK_ANSI_6, "ampersand": kVK_ANSI_7,
+  "asterisk": kVK_ANSI_8, "parenleft": kVK_ANSI_9, "parenright": kVK_ANSI_0,
+  "underscore": kVK_ANSI_Minus, "colon": kVK_ANSI_Semicolon, "quotedbl": kVK_ANSI_Quote,
+  "less": kVK_ANSI_Comma, "greater": kVK_ANSI_Period, "question": kVK_ANSI_Slash,
+  "braceleft": kVK_ANSI_LeftBracket, "braceright": kVK_ANSI_RightBracket,
+  "bar": kVK_ANSI_Backslash, "asciitilde": kVK_ANSI_Grave,
+]
+
+// The bit a real keyboard also sets for each side's modifier key
+// (NX_DEVICE*KEYMASK), so a release on one side while the other side stays
+// down still reads as a release.
+let sideFlags: [Int: CGEventFlags] = [
+  kVK_Control: CGEventFlags(rawValue: 0x1), kVK_RightControl: CGEventFlags(rawValue: 0x2000),
+  kVK_Shift: CGEventFlags(rawValue: 0x2), kVK_RightShift: CGEventFlags(rawValue: 0x4),
+  kVK_Command: CGEventFlags(rawValue: 0x8), kVK_RightCommand: CGEventFlags(rawValue: 0x10),
+  kVK_Option: CGEventFlags(rawValue: 0x20), kVK_RightOption: CGEventFlags(rawValue: 0x40),
+]
+
 func press(_ code: Int, down: Bool, flags: CGEventFlags) {
   let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(code), keyDown: down)
   event?.flags = flags
@@ -135,23 +164,47 @@ func key(_ keys: String) {
     let parts = combo.split(separator: "+").map(String.init)
     guard let last = parts.last else { continue }
     var held: [(code: Int, flag: CGEventFlags)] = []
-    for name in parts.dropLast() {
-      guard let flag = modifiers[name], let code = modifierKeys[name] else { die("unknown modifier \(name)") }
+    func hold(_ code: Int, _ flag: CGEventFlags) {
       // Names that share a key, like cmd and meta, press it once.
-      if !held.contains(where: { $0.flag == flag }) {
+      if !held.contains(where: { $0.code == code }) {
         held.append((code, flag))
       }
     }
-    guard let code = named[last] else { die("unknown key \(last)") }
+    for name in parts.dropLast() {
+      guard let flag = modifiers[name], let code = modifierKeys[name] else { die("unknown modifier \(name)") }
+      hold(code, flag)
+    }
+    // The last name is a modifier on its own, a symbol that needs Shift,
+    // or a named key. A modifier on its own is only held and let go.
+    var code: Int?
+    if let flag = modifiers[last], let modifier = modifierKeys[last] {
+      hold(modifier, flag)
+    } else if let base = shifted[last] {
+      if !held.contains(where: { $0.flag == .maskShift }) {
+        hold(kVK_Shift, .maskShift)
+      }
+      code = base
+    } else if let plain = named[last] {
+      code = plain
+    } else {
+      die("unknown key \(last)")
+    }
     var flags: CGEventFlags = []
     for modifier in held {
       flags.insert(modifier.flag)
+      flags.insert(sideFlags[modifier.code] ?? [])
       press(modifier.code, down: true, flags: flags)
     }
-    press(code, down: true, flags: flags)
-    press(code, down: false, flags: flags)
-    for modifier in held.reversed() {
-      flags.remove(modifier.flag)
+    if let code {
+      press(code, down: true, flags: flags)
+      press(code, down: false, flags: flags)
+    }
+    for (index, modifier) in held.enumerated().reversed() {
+      // A flag stays on while the key on the other side is still down.
+      flags.remove(sideFlags[modifier.code] ?? [])
+      if !held[..<index].contains(where: { $0.flag == modifier.flag }) {
+        flags.remove(modifier.flag)
+      }
       press(modifier.code, down: false, flags: flags)
     }
     pause(30)

@@ -419,6 +419,86 @@ describe("Namespace macOS Provider", () => {
       });
     });
 
+    it("key sends a lone modifier and a shifted symbol", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, ["key", id, "shift ctrl+plus"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      // Chrome on a Mac names Control+Shift+Equal "=", as a real keyboard
+      // does, so the Shift keydown inside the combo is what shows "plus".
+      const keydowns = (await readEvents(env, id)).filter(
+        (event) => event.type === "keydown",
+      );
+      expect(keydowns.slice(-4)).toEqual([
+        { type: "keydown", key: "Shift", ctrl: false, meta: false },
+        { type: "keydown", key: "Control", ctrl: true, meta: false },
+        { type: "keydown", key: "Shift", ctrl: true, meta: false },
+        { type: "keydown", key: "=", ctrl: true, meta: false },
+      ]);
+      expect(await readHeldModifiers(env, id)).toBe("none");
+    });
+
+    it("key takes every xdotool modifier name alone", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, [
+        "key",
+        id,
+        "Shift_L Shift_R Control_L Control_R Alt_L Alt_R Super_L Super_R Meta_L Meta_R shift ctrl control alt option cmd super meta",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      expect(await readHeldModifiers(env, id)).toBe("none");
+    });
+
+    it("key presses both sides of a left and right modifier chord", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, ["key", id, "Shift_L+Shift_R+a"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const keydowns = (await readEvents(env, id)).filter(
+        (event) => event.type === "keydown",
+      );
+      expect(keydowns.slice(-3)).toEqual([
+        { type: "keydown", key: "Shift", ctrl: false, meta: false },
+        { type: "keydown", key: "Shift", ctrl: false, meta: false },
+        { type: "keydown", key: "A", ctrl: false, meta: false },
+      ]);
+      expect(await readHeldModifiers(env, id)).toBe("none");
+    });
+
+    it("key sends every US shifted-symbol name", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, [
+        "key",
+        id,
+        "plus exclam at numbersign dollar percent asciicircum ampersand asterisk parenleft parenright underscore colon quotedbl less greater question braceleft braceright bar asciitilde",
+      ]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const events = await readEvents(env, id);
+      for (const key of '+!@#$%^&*()_:"<>?{}|~') {
+        expect(events).toContainEqual({
+          type: "keydown",
+          key,
+          ctrl: false,
+          meta: false,
+        });
+      }
+    });
+
+    it("key refuses an unknown key name", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, ["key", id, "nosuchkey"]);
+      // Then
+      expect(result.stderr).toContain("input: unknown key nosuchkey");
+      expect(result.exitCode).toBe(125);
+    });
+
     it("click --screenshot writes a 1280x800 PNG", async () => {
       // Given: the events page open
       const out = join(
