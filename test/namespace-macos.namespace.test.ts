@@ -128,6 +128,42 @@ describe("Namespace macOS Provider", () => {
     expect(found.stdout).toMatch(/^\/usr\/bin\/log stream /);
   });
 
+  it("display sleep and system sleep are off after create", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, ["exec", id, "--", "pmset", "-g"]);
+    // Then
+    expect(found.stdout).toMatch(/^\s*displaysleep\s+0\b/m);
+    expect(found.stdout).toMatch(/^\s*sleep\s+0\b/m);
+  });
+
+  it("the screen saver is off for runner after create", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "sudo -n launchctl asuser 501 sudo -n -u runner defaults -currentHost read com.apple.screensaver idleTime",
+    ]);
+    // Then
+    expect(found.stdout).toBe("0\n");
+  });
+
+  it("create shows keeping the screen awake before the test screenshot", () => {
+    // Given: the create result from beforeAll
+    // When
+    const stderr = created.result.stderr;
+    // Then
+    const awake = stderr.indexOf("proofbox: keeping the screen awake\n");
+    expect(awake).toBeGreaterThanOrEqual(0);
+    expect(awake).toBeLessThan(
+      stderr.indexOf("proofbox: taking a test screenshot and capture\n"),
+    );
+  });
+
   it("live on a Mac prints a local address that offers VNC password login", async () => {
     // Given: the Mac from beforeAll
     // When: `live` as a child; read its first two stdout lines
