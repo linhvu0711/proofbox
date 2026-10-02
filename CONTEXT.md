@@ -63,7 +63,7 @@ A per-OS script the Caller passes on create that installs the app's dependencies
 _Avoid_: bootstrap, install script, environment file
 
 **Base image**:
-The proofbox-owned starting point for a Sandbox: a desktop, a browser, fonts, and the recording tools.
+The proofbox-owned starting point for a Sandbox: a desktop, a browser, fonts, and the recording tools. On Namespace a Base image version is deleted after 14 days without use; a Sandbox started from it, or from a Snapshot made from it, is a use.
 _Avoid_: template, golden image
 
 **Tool bundle**:

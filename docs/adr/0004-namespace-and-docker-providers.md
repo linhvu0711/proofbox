@@ -14,6 +14,6 @@ Namespace was the only service that gives disposable macOS machines per minute f
 
 ## Consequences
 
-- Namespace Linux runs our Base image as a Docker container on a bare Namespace host, so it reuses the Docker provider's code. A Snapshot there is an image in the workspace registry with an expiry. Each reuse pushes the expiry to at least 14 days ahead (`ContainerRegistryService.UpdateImageLifetime` with ensureMinimumRemaining 336h), so a Snapshot unused for 14 days is deleted by Namespace itself.
+- Namespace Linux runs our Base image as a Docker container on a bare Namespace host, so it reuses the Docker provider's code. A Snapshot there is an image in the workspace registry with an expiry. Each reuse pushes the expiry to at least 14 days ahead (`ContainerRegistryService.UpdateImageLifetime` with ensureMinimumRemaining 336h), so a Snapshot unused for 14 days is deleted by Namespace itself. The Base image there follows the same rule: its push sets the expiry, and every Sandbox started from it or from one of its Snapshots pushes its expiry to at least 14 days ahead. Old Base versions are not expired when a new one is pushed, because a Caller with an older proofbox may still start Sandboxes from them. Not built yet: until #107 ships, a Base image is pushed with no expiry.
 - Namespace macOS has no custom images, so the Setup script runs on every Mac.
 - The Developer plan allows 12 macOS vCPU (https://namespace.so/docs/architecture/compute/resource-limits.md), so a small 4x7 Mac fits at most three at once. More Macs at once need a bigger Namespace plan.
