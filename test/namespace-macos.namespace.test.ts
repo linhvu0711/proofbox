@@ -416,6 +416,23 @@ describe("Namespace macOS Provider", () => {
       expect(await readHeldModifiers(env, id)).toBe("none");
     });
 
+    it("key presses both sides of a left and right modifier chord", async () => {
+      // Given: the input focused
+      // When
+      const result = await runCli(env, ["key", id, "Shift_L+Shift_R+a"]);
+      // Then
+      expect(result.exitCode).toBe(0);
+      const keydowns = (await readEvents(env, id)).filter(
+        (event) => event.type === "keydown",
+      );
+      expect(keydowns.slice(-3)).toEqual([
+        { type: "keydown", key: "Shift", ctrl: false, meta: false },
+        { type: "keydown", key: "Shift", ctrl: false, meta: false },
+        { type: "keydown", key: "A", ctrl: false, meta: false },
+      ]);
+      expect(await readHeldModifiers(env, id)).toBe("none");
+    });
+
     it("key sends every US shifted-symbol name", async () => {
       // Given: the input focused
       // When

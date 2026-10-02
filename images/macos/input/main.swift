@@ -140,6 +140,16 @@ let shifted: [String: Int] = [
   "bar": kVK_ANSI_Backslash, "asciitilde": kVK_ANSI_Grave,
 ]
 
+// The bit a real keyboard also sets for each side's modifier key
+// (NX_DEVICE*KEYMASK), so a release on one side while the other side stays
+// down still reads as a release.
+let sideFlags: [Int: CGEventFlags] = [
+  kVK_Control: CGEventFlags(rawValue: 0x1), kVK_RightControl: CGEventFlags(rawValue: 0x2000),
+  kVK_Shift: CGEventFlags(rawValue: 0x2), kVK_RightShift: CGEventFlags(rawValue: 0x4),
+  kVK_Command: CGEventFlags(rawValue: 0x8), kVK_RightCommand: CGEventFlags(rawValue: 0x10),
+  kVK_Option: CGEventFlags(rawValue: 0x20), kVK_RightOption: CGEventFlags(rawValue: 0x40),
+]
+
 func press(_ code: Int, down: Bool, flags: CGEventFlags) {
   let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(code), keyDown: down)
   event?.flags = flags
@@ -156,7 +166,7 @@ func key(_ keys: String) {
     var held: [(code: Int, flag: CGEventFlags)] = []
     func hold(_ code: Int, _ flag: CGEventFlags) {
       // Names that share a key, like cmd and meta, press it once.
-      if !held.contains(where: { $0.flag == flag }) {
+      if !held.contains(where: { $0.code == code }) {
         held.append((code, flag))
       }
     }
@@ -170,7 +180,9 @@ func key(_ keys: String) {
     if let flag = modifiers[last], let modifier = modifierKeys[last] {
       hold(modifier, flag)
     } else if let base = shifted[last] {
-      hold(kVK_Shift, .maskShift)
+      if !held.contains(where: { $0.flag == .maskShift }) {
+        hold(kVK_Shift, .maskShift)
+      }
       code = base
     } else if let plain = named[last] {
       code = plain
@@ -180,14 +192,19 @@ func key(_ keys: String) {
     var flags: CGEventFlags = []
     for modifier in held {
       flags.insert(modifier.flag)
+      flags.insert(sideFlags[modifier.code] ?? [])
       press(modifier.code, down: true, flags: flags)
     }
     if let code {
       press(code, down: true, flags: flags)
       press(code, down: false, flags: flags)
     }
-    for modifier in held.reversed() {
-      flags.remove(modifier.flag)
+    for (index, modifier) in held.enumerated().reversed() {
+      // A flag stays on while the key on the other side is still down.
+      flags.remove(sideFlags[modifier.code] ?? [])
+      if !held[..<index].contains(where: { $0.flag == modifier.flag }) {
+        flags.remove(modifier.flag)
+      }
       press(modifier.code, down: false, flags: flags)
     }
     pause(30)
