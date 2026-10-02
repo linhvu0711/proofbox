@@ -7,7 +7,9 @@ const describe = (cause: unknown) =>
 
 // Runs one process and streams it as ExecEvents: stdout and stderr as they
 // come, then the exit code. Given stdin is fed until it ends or the process
-// exits. `exit` may turn an exit code into a failure (ssh's 255).
+// exits. With none given the process reads end of input at once, so a
+// command that reads stdin cannot wait forever on an open pipe (ssh -T
+// forwards one). `exit` may turn an exit code into a failure (ssh's 255).
 export const commandEvents = <E>(
   executor: CommandExecutor.CommandExecutor,
   command: Command.Command,
@@ -24,7 +26,11 @@ export const commandEvents = <E>(
 ): Stream.Stream<ExecEvent, E> =>
   Stream.unwrapScoped(
     Effect.gen(function* () {
-      const process = yield* Command.start(command).pipe(
+      const process = yield* Command.start(
+        options?.stdin === undefined
+          ? Command.stdin(command, Stream.empty)
+          : command,
+      ).pipe(
         Effect.provideService(CommandExecutor.CommandExecutor, executor),
         Effect.mapError((error) => errors.spawn(error)),
       );

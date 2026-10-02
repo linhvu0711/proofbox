@@ -16,7 +16,7 @@ import { afterEach, describe, expect } from "vitest";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeOpenLink, makeSshForward } from "../src/namespace/ssh-link.ts";
-import { cleanupEnvs } from "./support/cli.ts";
+import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 const PEM = Buffer.from(
   "-----BEGIN OPENSSH PRIVATE KEY-----\nZm9v\n-----END OPENSSH PRIVATE KEY-----\n",
@@ -45,6 +45,22 @@ const fakeSshForward = (log: string) => {
   writeFileSync(
     path,
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nprintf 'debug1: Local forwarding listening on 127.0.0.1 port 40022\\n' >&2\nsleep 60\n`,
+  );
+  chmodSync(path, 0o755);
+  return { binDir, path };
+};
+
+// An `ssh` that answers every ctl probe (`-O`) with exit 0 and runs any
+// other call as a remote command that reads one line of stdin.
+const fakeSshReading = () => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-ssh-"));
+  trackTempDir(dir);
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir);
+  const path = join(binDir, "ssh");
+  writeFileSync(
+    path,
+    `#!/bin/sh\ncase " $* " in *" -O "*) exit 0 ;; esac\nread x\necho "rc:$?"\n`,
   );
   chmodSync(path, 0o755);
   return { binDir, path };
@@ -188,4 +204,55 @@ describe("ssh link", () => {
       );
     },
   );
+
+  it.live("run gives the remote command an empty stdin", () => {
+    const fake = fakeSshReading();
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    trackTempDir(runtime);
+    return Effect.gen(function* () {
+      // Given
+      const api: NamespaceApi = {
+        create: () => Effect.die("unused"),
+        wait: () => Effect.die("unused"),
+        destroy: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        list: () => Effect.die("unused"),
+        checkToken: () => Effect.die("unused"),
+        ensureImageExpiry: () => Effect.die("unused"),
+        makeToken: () => Effect.die("unused"),
+        sshConfig: () =>
+          Effect.succeed({
+            username: "abc123def4567",
+            endpoint: "ssh.iad4.namespace.so",
+            privateKey: new Uint8Array(PEM),
+            hostKeys: [HOST_KEY],
+          }),
+      };
+      const executor = yield* CommandExecutor.CommandExecutor;
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "abc123def4567",
+      });
+      const link = yield* makeOpenLink(api, executor, fake.path)(
+        { name: "abc123def4567", region: "us" },
+        paths,
+        "keeper",
+      );
+      // When
+      const result = yield* link.run("x").pipe(
+        Effect.timeoutFail({
+          duration: "5 seconds",
+          onTimeout: () => "no end of input within 5 s",
+        }),
+      );
+      // Then
+      expect(result).toEqual({ exitCode: 0, stdout: "rc:1\n", stderr: "" });
+    }).pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
 });
