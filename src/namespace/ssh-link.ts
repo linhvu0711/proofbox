@@ -175,8 +175,13 @@ export const makeOpenLink = (
       const runWith = (ssh: ReadonlyArray<string>) => (commandLine: string) =>
         Effect.scoped(
           Effect.gen(function* () {
+            // An empty stdin, as in commandEvents: ssh forwards an open
+            // pipe, and a remote command that reads it would wait forever.
             const process = yield* Command.start(
-              Command.make(sshBin, ...ssh, commandLine),
+              Command.stdin(
+                Command.make(sshBin, ...ssh, commandLine),
+                Stream.empty,
+              ),
             ).pipe(
               Effect.provideService(CommandExecutor.CommandExecutor, executor),
               Effect.mapError((error) => sshError(error)),
