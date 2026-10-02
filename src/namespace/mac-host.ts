@@ -439,6 +439,26 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   }
 });
 
+// One Apple Event to System Events. A blocked one waits on a dialog until it
+// is killed, so a 10 s timer kills it, and the dialog stays on screen for
+// the saved screenshot.
+const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
+  link: Link,
+  ref: SandboxRef,
+) {
+  const sent = yield* link.run(
+    `${GUI} osascript -e 'tell application "System Events" to get name of first process' >/dev/null & p=$!; (sleep 10; kill -9 $p 2>/dev/null; pkill -9 -x osascript) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
+  );
+  if (sent.exitCode !== 0) {
+    const screenshot = yield* saveScreen(link, ref);
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "Apple Events to System Events are blocked",
+      screenshot,
+    });
+  }
+});
+
 // Everything a Mac needs before user code arrives, in order.
 export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   link: Link,
@@ -473,7 +493,9 @@ export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   );
   yield* progress.step(
     "taking a test screenshot and capture",
-    checkScreen(link, req.ref),
+    checkScreen(link, req.ref).pipe(
+      Effect.zipRight(checkAppleEvents(link, req.ref)),
+    ),
   );
   return yield* writeMacState(link, req, createdAt);
 });

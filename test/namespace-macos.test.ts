@@ -645,6 +645,77 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
+    "a blocked Apple Event to System Events fails create, saves the screen, and deletes the Mac",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given: the check is killed by its 10 s timer
+        const mac = yield* makeMac((line) =>
+          line.includes('tell application "System Events"')
+            ? { exitCode: 137 }
+            : line.includes("/tmp/proofbox-fail.png")
+              ? { stdout: PngHead }
+              : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        const saved = join(runtime, "ns-abc123def4567-prepare.png");
+        expect(error.message).toBe(
+          `Sandbox ns:us:abc123def4567 failed the macOS prepare check (Apple Events to System Events are blocked); saved the screen to ${saved} and deleted the Mac`,
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+        const lines = yield* Ref.get(mac.commands);
+        expect(lines.some((line) => line.includes("labels.json"))).toBe(false);
+      }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect(
+    "macOS create checks Apple Events to System Events after the grant and the test capture",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const at = (text: string) =>
+          lines.findIndex((line) => line.includes(text));
+        expect(at("kTCCServiceAppleEvents")).toBeGreaterThanOrEqual(0);
+        expect(at("kTCCServiceAppleEvents")).toBeLessThan(
+          at("/tmp/proofbox-test.mov"),
+        );
+        expect(at("/tmp/proofbox-test.mov")).toBeLessThan(
+          at('tell application "System Events"'),
+        );
+        expect(at('tell application "System Events"')).toBeLessThan(
+          at("labels.json"),
+        );
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create prints only the seven prepare steps", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider
+        .create(createMac())
+        .pipe(Effect.provide(Progress.Default));
+      // Then
+      const output = yield* CliOutput;
+      const err = Chunk.toReadonlyArray(
+        yield* Ref.get(output.captured.err),
+      ).join("");
+      expect(err).toBe(
+        "proofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
+      );
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
     "macOS create refuses and deletes the Mac when the RAM disk cannot be made",
     () =>
       Effect.gen(function* () {
