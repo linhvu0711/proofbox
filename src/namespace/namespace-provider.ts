@@ -73,6 +73,7 @@ import { unreachable } from "./namespace-api.ts";
 import { tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
+import { registryRefs } from "./registry-refs.ts";
 import {
   pullSnapshot,
   pushSnapshot,
@@ -100,9 +101,10 @@ const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
 // Namespace size outside the container's limit so the host stays healthy.
 const MEMORY_RESERVE_GB = 1;
 
-// Each save and each reuse keeps a Snapshot at least two weeks; one that
-// is not used for that long expires from the registry.
-const SNAPSHOT_KEEP_HOURS = 336;
+// Each push and each use keeps a Base image version or a Snapshot at
+// least two weeks; one that is not used for that long expires from the
+// registry.
+const IMAGE_KEEP_HOURS = 336;
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -205,9 +207,29 @@ export const makeNamespaceProvider = (deps: {
   // costs registry space, so it warns and goes on.
   const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
     snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) => api.ensureImageExpiry(ref, SNAPSHOT_KEEP_HOURS)),
+      Effect.flatMap((ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS)),
       Effect.catchAll((error) =>
         progress.warn(`could not set the Snapshot expiry (${error.message})`),
+      ),
+    );
+
+  // A Base image version without an expiry is kept forever too. Its index
+  // and each child digest expire on their own; a Base the registry does
+  // not hold is skipped. Every digest gets its call even when one fails,
+  // so a child never expires before its index.
+  const keepBase = (link: Link, tag: string, progress: Progress) =>
+    registryRefs(link, tag).pipe(
+      Effect.flatMap((refs) =>
+        refs === "missing"
+          ? Effect.void
+          : Effect.validateAll(
+              refs,
+              (ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+              { discard: true },
+            ).pipe(Effect.mapError((errors) => errors[0])),
+      ),
+      Effect.catchAll((error) =>
+        progress.warn(`could not set the Base image expiry (${error.message})`),
       ),
     );
 
@@ -841,14 +863,14 @@ export const makeNamespaceProvider = (deps: {
         BASE_IMAGE_DIR,
         LINUX_TOOL_BUNDLE,
       );
+      const baseTag = `nscr.io/${registry}/${baseImageTag(version)}`;
       const snapshotImage =
         req.snapshot === undefined
           ? undefined
           : yield* pullStart(link, registry, req.snapshot, progress);
       const inner = makeDockerProvider({
         client: deps.dockerFor(link),
-        imageTag:
-          snapshotImage ?? `nscr.io/${registry}/${baseImageTag(version)}`,
+        imageTag: snapshotImage ?? baseTag,
         registry: true,
         memoryReserveGb: MEMORY_RESERVE_GB,
         // Publish the VNC port for the Live view; the host has only a
@@ -870,6 +892,9 @@ export const makeNamespaceProvider = (deps: {
         name: instanceId.slice(0, 6),
         maxLifeAt: new Date(maxLifeSeconds * 1000),
       });
+      // A Snapshot's Fingerprint holds the Base version, so this is its
+      // Base too.
+      yield* keepBase(link, baseTag, progress);
       // The Base image must hide the host's workload token from user code:
       // neither the token file nor the link-local token service may answer.
       const docker = deps.dockerFor(link);
