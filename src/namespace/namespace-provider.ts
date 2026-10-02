@@ -215,17 +215,18 @@ export const makeNamespaceProvider = (deps: {
 
   // A Base image version without an expiry is kept forever too. Its index
   // and each child digest expire on their own; a Base the registry does
-  // not hold is skipped.
+  // not hold is skipped. Every digest gets its call even when one fails,
+  // so a child never expires before its index.
   const keepBase = (link: Link, tag: string, progress: Progress) =>
     registryRefs(link, tag).pipe(
       Effect.flatMap((refs) =>
         refs === "missing"
           ? Effect.void
-          : Effect.forEach(
+          : Effect.validateAll(
               refs,
               (ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
               { discard: true },
-            ),
+            ).pipe(Effect.mapError((errors) => errors[0])),
       ),
       Effect.catchAll((error) =>
         progress.warn(`could not set the Base image expiry (${error.message})`),

@@ -663,6 +663,44 @@ describe("Namespace Provider", () => {
     },
   );
 
+  it.effect(
+    "a failed expiry call on one Base digest still keeps the other digests",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: the registry refuses the index once
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          expiryError: (image) =>
+            image === "proofbox-base-linux@sha256:ba5e"
+              ? new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason: "the Registry did not answer",
+                })
+              : undefined,
+        });
+        // When
+        yield* provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        });
+        // Then
+        expect({
+          expiry: (yield* Ref.get(calls)).filter((call) =>
+            call.startsWith("ensureImageExpiry"),
+          ),
+          warnings,
+        }).toEqual({
+          expiry: BASE_EXPIRY.slice(1),
+          warnings: [
+            "could not set the Base image expiry (the Registry did not answer)",
+          ],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
+    },
+  );
+
   it.effect("a failed Snapshot pull warns and runs the Base image", () => {
     const warnings: Array<string> = [];
     return Effect.gen(function* () {
