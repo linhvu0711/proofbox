@@ -403,7 +403,9 @@ const keepScreenAwake = Effect.fn("macHost.keepScreenAwake")(function* (
 
 // A test screenshot, then a 1 s capture. A capture its 15 s timer kills
 // (137), or a replayd alert (the capture itself does not wait on that one),
-// means an alert is on screen.
+// means an alert is on screen. The timer writes to /dev/null: its `sleep`
+// outlives `kill $w`, and on the link's output it would hold every create
+// for 15 s.
 const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   link: Link,
   ref: SandboxRef,
@@ -418,7 +420,7 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
     });
   }
   const capture = yield* link.run(
-    `${GUI} /opt/proofbox/tools/ffmpeg -loglevel error -f avfoundation -i 'Capture screen 0' -t 1 -y /tmp/proofbox-test.mov & p=$!; (sleep 15; kill -9 $p 2>/dev/null; pkill -9 -x ffmpeg) & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
+    `${GUI} /opt/proofbox/tools/ffmpeg -loglevel error -f avfoundation -i 'Capture screen 0' -t 1 -y /tmp/proofbox-test.mov & p=$!; (sleep 15; kill -9 $p; pkill -9 -x ffmpeg) >/dev/null 2>&1 & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
   );
   // The capture does not wait on replayd's alert; replayd moving the hint
   // date away from the one proofbox wrote is the sign it showed one.
