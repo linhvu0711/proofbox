@@ -46,6 +46,10 @@ const codeOf = (cause: unknown) =>
 
 const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 
+// No Keeper answers: none is there, or one left before it read the
+// request, as a Keeper does when its Sandbox is gone.
+const KEEPER_AWAY = new Set([...RETRY_CODES, "EPIPE", "ECONNRESET"]);
+
 // The Caller side may send a stream whose failure is an upload error, not a
 // ProviderError (packFiles can fail with UploadFailedError or
 // WorkFileGrewError); when that stream feeds a real Connection.exec it is
@@ -345,18 +349,19 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           provider: id.prefix,
           name: fileStem(id),
         });
-        const socket = yield* connectSocket(
-          paths.socket,
-          id.provider.name,
-        ).pipe(
-          Effect.catchIf(
-            (error) => RETRY_CODES.has(error.reason),
-            () =>
-              start(rawId).pipe(
-                Effect.zipRight(connectSocket(paths.socket, id.provider.name)),
-              ),
+        const connect = connectSocket(paths.socket, id.provider.name);
+        // With no Keeper, the Provider says first whether the Sandbox is
+        // still there: a gone one fails here, with no Keeper started for it.
+        const socket = yield* connect.pipe(
+          Effect.map(Option.some),
+          Effect.catchAll((error) =>
+            KEEPER_AWAY.has(error.reason)
+              ? Effect.zipRight(
+                  provider.get(id),
+                  Effect.option(Effect.zipRight(start(rawId), connect)),
+                )
+              : Effect.succeed(Option.none<Socket>()),
           ),
-          Effect.option,
         );
         if (socket._tag === "None") {
           yield* output.err(

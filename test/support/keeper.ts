@@ -25,11 +25,28 @@ const socketAnswers = (path: string) =>
     });
   });
 
+// The layers a command needs to reach the Keeper of a Sandbox of
+// `provider`: the CLI side, with that one Provider, so a test can count
+// what the CLI asks of it.
+export const keeperClientLayers = (provider: Provider) =>
+  KeeperClient.Default.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        CliOutput.Test,
+        Layer.succeed(
+          Providers,
+          new Map<string, ProviderEntry>([
+            [provider.name, providerEntry(provider)],
+          ]),
+        ),
+        NodeContext.layer,
+      ),
+    ),
+  );
+
 // Runs the Keeper of Sandbox `id` in this process, in the test's scope,
-// and waits until its socket answers. Gives the layers a command needs to
-// reach it: the CLI side, with the same Providers, so a test can count
-// what the CLI asks of a Provider. Needs PROOFBOX_RUNTIME_DIR in the
-// config.
+// and waits until its socket answers. Gives the layers of
+// `keeperClientLayers`. Needs PROOFBOX_RUNTIME_DIR in the config.
 export const startKeeper = (id: string, provider: Provider) =>
   Effect.gen(function* () {
     const providers = Layer.succeed(
@@ -54,11 +71,7 @@ export const startKeeper = (id: string, provider: Provider) =>
     for (let i = 0; i < 250 && !(yield* socketAnswers(socket)); i++) {
       yield* TestServices.provideLive(Effect.sleep("20 millis"));
     }
-    return KeeperClient.Default.pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(CliOutput.Test, providers, NodeContext.layer),
-      ),
-    );
+    return keeperClientLayers(provider);
   });
 
 // Waits, on the real clock, until `check` holds or about 5 s pass.
