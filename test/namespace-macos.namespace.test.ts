@@ -1161,7 +1161,7 @@ describe("Namespace macOS Recording", () => {
       "--",
       "sh",
       "-c",
-      'd=/var/lib/proofbox/recordings/$(ls /var/lib/proofbox/recordings | grep -E "^[0-9]+$" | sort -n | tail -1); cat "$d/start"; tail -2 /var/lib/proofbox/action-log.jsonl',
+      'd=/var/lib/proofbox/recordings/$(ls /var/lib/proofbox/recordings | grep -E "^[0-9]+$" | sort -n | tail -1); cat "$d/start"; echo; tail -2 /var/lib/proofbox/action-log.jsonl',
     ]);
     // Then: a wall clock would put both over 30 s after the start
     const [start, ...lines] = read.stdout.trim().split("\n");
