@@ -8,6 +8,9 @@ export default defineConfig({
       "test/**/*.docker.test.ts",
       "test/**/*.namespace.test.ts",
     ],
-    testTimeout: 20000,
+    // Many tests start CLI processes, and when the full suite runs on all
+    // cores these run 2 to 3 times slower; the limit catches a hang, not a
+    // busy machine.
+    testTimeout: 60_000,
   },
 });
