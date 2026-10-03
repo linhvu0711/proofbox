@@ -58,6 +58,7 @@ const makeMac = (
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
     const requests = yield* Ref.make<ReadonlyArray<CreateRequest>>([]);
     const commands = yield* Ref.make<ReadonlyArray<string>>([]);
+    const links = yield* Ref.make<ReadonlyArray<string>>([]);
     const detached = yield* Ref.make<
       ReadonlyArray<readonly [string, ReadonlyArray<string>]>
     >([]);
@@ -134,7 +135,8 @@ const makeMac = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: () => Effect.succeed(link),
+      openLink: (_ref, _paths, owner, via) =>
+        note(links, `${owner} ${via}`).pipe(Effect.as(link)),
       forward: (ref, port) =>
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
           Effect.zipRight(portForward(ref, port)),
@@ -145,7 +147,7 @@ const makeMac = (
       spawnDetached: (_provider, rel, args) =>
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
     });
-    return { provider, calls, requests, commands, detached };
+    return { provider, calls, requests, commands, detached, links };
   });
 
 // The Mac's own answer to `shasum -a 256 <paths>`: the pinned hashes.
@@ -209,6 +211,62 @@ const createMac = (size?: { cpu: number; ramGb: number }) => ({
 });
 
 describe("Namespace macOS Provider", () => {
+  it.scoped("every call on a made Mac opens its link through sshd", () => {
+    const runtime = runtimeDir();
+    writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+    writeFileSync(
+      join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
+    return Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac((line) =>
+        line.startsWith("cat /var/lib/proofbox/labels.json")
+          ? {
+              stdout: `${JSON.stringify({
+                "proofbox.name": "abc123def4567",
+                "proofbox.os": "macos",
+                "proofbox.created-at": "1970-01-01T00:00:00Z",
+                "proofbox.idle-seconds": "300",
+                "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+              })}\n300\n`,
+            }
+          : undefined,
+      );
+      // When
+      yield* mac.provider.get({ name: "abc123def4567", region: "us" });
+      yield* mac.provider.connect({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(yield* Ref.get(mac.links)).toEqual(["cli sshd", "keeper sshd"]);
+    }).pipe(Effect.provide(NodeContext.layer), withRuntime(runtime));
+  });
+
+  it.effect(
+    "a call on a Mac with no pinned sshd host key says an older proofbox made it",
+    () => {
+      const runtime = runtimeDir();
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        const error = yield* Effect.flip(
+          mac.provider.get({ name: "abc123def4567", region: "us" }),
+        );
+        // Then
+        expect({
+          tag: error._tag,
+          message: error.message,
+          links: yield* Ref.get(mac.links),
+        }).toEqual({
+          tag: "ProviderUnavailableError",
+          message:
+            "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567",
+          links: [],
+        });
+      }).pipe(withRuntime(runtime));
+    },
+  );
   it.effect("macOS create asks Namespace for a 4 CPU 7168 MB arm64 Mac", () =>
     Effect.gen(function* () {
       // Given
@@ -279,6 +337,10 @@ describe("Namespace macOS Provider", () => {
     () => {
       const runtime = runtimeDir();
       writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+      writeFileSync(
+        join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+      );
       return Effect.gen(function* () {
         // Given
         const mac = yield* makeMac();
@@ -887,6 +949,10 @@ describe("Namespace macOS Provider", () => {
   it.scoped("a warm exec on a Mac makes one call over the link", () => {
     const runtime = runtimeDir();
     writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+    writeFileSync(
+      join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     const text = (bytes: string): ExecEvent => ({
       _tag: "Stderr",
       bytes: new TextEncoder().encode(bytes),

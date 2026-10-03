@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  access,
   readdir,
   readFile,
   rename,
@@ -140,6 +141,11 @@ export const makeNamespaceProvider = (deps: {
   // `unfinished`: the host is there, but create never made its Sandbox.
   const gone = (ref: SandboxRef, unfinished?: true) =>
     new SandboxGoneError({ id: sandboxId(ref), unfinished });
+  const madeElsewhere = (ref: SandboxRef) =>
+    new ProviderUnavailableError({
+      provider: "namespace",
+      reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
+    });
   const brandFor = (ref: SandboxRef) => ({
     provider: "namespace",
     id: () => sandboxId(ref),
@@ -165,6 +171,18 @@ export const makeNamespaceProvider = (deps: {
     ref: SandboxRef,
     owner: "cli" | "keeper",
   ) {
+    const os = yield* osOf(ref);
+    const hostPaths = yield* refPaths(ref);
+    if (
+      os === "macos" &&
+      !(yield* Effect.promise(() =>
+        access(hostPaths.sshdKnownHosts)
+          .then(() => true)
+          .catch(() => false),
+      ))
+    ) {
+      return yield* madeElsewhere(ref);
+    }
     if (owner === "keeper") {
       yield* Effect.forkScoped(pushHostLife(api, ref, 120));
     } else {
@@ -174,7 +192,12 @@ export const makeNamespaceProvider = (deps: {
         "120",
       ]);
     }
-    return yield* deps.openLink(ref, yield* refPaths(ref), owner, "gateway");
+    return yield* deps.openLink(
+      ref,
+      hostPaths,
+      owner,
+      os === "macos" ? "sshd" : "gateway",
+    );
   });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
@@ -506,6 +529,7 @@ export const makeNamespaceProvider = (deps: {
                 ".sshkey",
                 ".sshtarget",
                 ".known-hosts",
+                ".sshd-known-hosts",
               ].map((suffix) =>
                 rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
                   () => {},
@@ -521,28 +545,45 @@ export const makeNamespaceProvider = (deps: {
     const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       live,
-      ({ os, region, instance }) => {
-        const entry = {
-          name: instance.id,
-          region,
-          os,
-          createdAt: instance.createdAt,
-        };
-        if (instance.starting === true) {
-          unfinished.push(entry);
-          return Effect.succeed(undefined);
-        }
-        return getAs(os, { name: instance.id, region }).pipe(
-          Effect.catchTag("SandboxGoneError", (error) =>
-            Effect.sync(() => {
-              if (error.unfinished === true) {
-                unfinished.push(entry);
-              }
+      ({ os, region, instance }) =>
+        Effect.gen(function* () {
+          const entry = {
+            name: instance.id,
+            region,
+            os,
+            createdAt: instance.createdAt,
+          };
+          if (instance.starting === true) {
+            unfinished.push(entry);
+            return undefined;
+          }
+          const ref = { name: instance.id, region };
+          if (os === "macos") {
+            const hostPaths = yield* refPaths(ref);
+            const pinned = yield* Effect.promise(() =>
+              access(hostPaths.sshdKnownHosts)
+                .then(() => true)
+                .catch(() => false),
+            );
+            if (!pinned) {
+              unreached.push({
+                where: `Namespace region ${region}`,
+                reason: madeElsewhere(ref).message,
+              });
               return undefined;
-            }),
-          ),
-        );
-      },
+            }
+          }
+          return yield* getAs(os, ref).pipe(
+            Effect.catchTag("SandboxGoneError", (error) =>
+              Effect.sync(() => {
+                if (error.unfinished === true) {
+                  unfinished.push(entry);
+                }
+                return undefined;
+              }),
+            ),
+          );
+        }),
       { discard: false },
     );
     return {
@@ -585,6 +626,7 @@ export const makeNamespaceProvider = (deps: {
         rm(dir.deadline, { force: true }).catch(() => {}),
         rm(dir.os, { force: true }).catch(() => {}),
         rm(dir.knownHosts, { force: true }).catch(() => {}),
+        rm(dir.sshdKnownHosts, { force: true }).catch(() => {}),
         rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
           force: true,
         }).catch(() => {}),

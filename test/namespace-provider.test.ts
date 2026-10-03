@@ -1063,6 +1063,14 @@ describe("Namespace Provider", () => {
   it.effect("list names a Mac host with no Sandbox state as unfinished", () =>
     Effect.gen(function* () {
       // Given: a Mac host whose state file was never written
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:mac000000000a",
+      });
+      writeFileSync(
+        paths.sshdKnownHosts,
+        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+      );
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
@@ -1088,6 +1096,41 @@ describe("Namespace Provider", () => {
             createdAt: new Date("2026-10-01T07:49:00Z"),
           },
         ],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list names a Mac with no pinned sshd host key as unreached", () =>
+    Effect.gen(function* () {
+      // Given
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const runs = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        (line) =>
+          Ref.update(runs, (all) => [...all, line]).pipe(
+            Effect.as({ exitCode: 0, stdout: "", stderr: "" }),
+          ),
+        { instances: [UNFINISHED_MAC] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({
+        infos: listed.infos,
+        unreached: listed.unreached,
+        runs: yield* Ref.get(runs),
+      }).toEqual({
+        infos: [],
+        unreached: [
+          {
+            where: "Namespace region us",
+            reason:
+              "Sandbox ns:us:mac000000000a was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:mac000000000a",
+          },
+        ],
+        runs: [],
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );

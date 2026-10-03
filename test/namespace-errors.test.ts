@@ -40,6 +40,25 @@ describe("Namespace errors", () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
   });
 
+  it("exec on a Mac made by an older proofbox says to delete it and create a new one", async () => {
+    // Given
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    const env = makeEnv();
+    writeFileSync(join(env.runtime, "ns-us:abc123def4567.os"), "macos");
+    // When
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      { set: nsEnv(ns) },
+    );
+    // Then
+    expect({ stderr: result.stderr, exitCode: result.exitCode }).toEqual({
+      stderr:
+        "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567\n",
+      exitCode: 125,
+    });
+  });
+
   it("create with no Namespace login says how to log in", async () => {
     // Given: no env token and no saved login
     const env = makeEnv();
