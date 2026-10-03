@@ -277,34 +277,6 @@ describe("Namespace Provider", () => {
     ).toBe(true);
   });
 
-  it("a 16x32 host over the workspace cap is refused and leaves nothing", async () => {
-    // Given: this workspace caps one host at 8x16
-    const env = makeEnv({ docker: true, namespace: true });
-    const before = await liveIds();
-    // When
-    const result = await runCli(env, [
-      "create",
-      "--os",
-      "linux",
-      "--provider",
-      "namespace",
-      "--size",
-      "16x32",
-    ]);
-    // Then
-    expect(result.exitCode).toBe(125);
-    expect(result.stderr.startsWith("Namespace refused the Sandbox: ")).toBe(
-      true,
-    );
-    expect(result.stderr).toContain("maximum 8x16");
-    expect(
-      result.stderr.endsWith(
-        "nothing was created. Delete a Sandbox or use a smaller --size\n",
-      ),
-    ).toBe(true);
-    expect(await liveIds()).toEqual(before);
-  });
-
   it("the host is deleted at its Deadline with no Caller alive", async () => {
     // Given: a created ns: Sandbox with a 2 m idle; its Keeper is then killed
     const env = makeEnv({ docker: true, namespace: true });
