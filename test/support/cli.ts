@@ -130,6 +130,8 @@ export const runCli = (
   env: CliEnv,
   args: ReadonlyArray<string>,
   options: {
+    readonly maxBuffer?: number;
+    readonly timeout?: number;
     readonly set?: Readonly<Record<string, string>>;
     readonly unset?: ReadonlyArray<string>;
     readonly input?: string;
@@ -158,7 +160,12 @@ export const runCli = (
       // The Namespace Provider's create builds the Base image on a fresh
       // host, which can run for minutes, and on failure may still need a
       // few seconds to delete the host before the process exits.
-      { cwd: repoRoot, env: childEnv, timeout: 480_000 },
+      {
+        cwd: repoRoot,
+        env: childEnv,
+        timeout: options.timeout ?? 480_000,
+        maxBuffer: options.maxBuffer ?? 1024 * 1024,
+      },
       (error, stdout, stderr) => {
         resolve({
           stdout,

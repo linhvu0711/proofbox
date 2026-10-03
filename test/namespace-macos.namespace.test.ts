@@ -80,6 +80,86 @@ describe("Namespace macOS Provider", () => {
     expect(millis).toBeLessThan(2000);
   });
 
+  it("cat of a 3.5 MB file ends 25 times in a row", async () => {
+    // Given: the Mac from beforeAll
+    const written = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "head -c 2752512 /dev/urandom | base64 | tr -d '\\n' > /tmp/big",
+    ]);
+    expect(written.exitCode, written.stderr).toBe(0);
+    // When
+    for (let n = 0; n < 25; n++) {
+      const start = performance.now();
+      const found = await runCli(env, ["exec", id, "--", "cat", "/tmp/big"], {
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      const millis = performance.now() - start;
+      // Then
+      expect(found.exitCode).toBe(0);
+      expect(found.stdout.length).toBe(3670016);
+      expect(millis).toBeLessThan(10000);
+    }
+  });
+
+  it("exec sh -c 'exit 3' on a Mac exits 3", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, ["exec", id, "--", "sh", "-c", "exit 3"]);
+    // Then
+    expect(found.exitCode).toBe(3);
+  });
+
+  it("an exec on a Mac runs while the Mac's sshd holds a session", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "ps -axo comm= | grep -c '^sshd-session: runner'",
+    ]);
+    // Then
+    expect(found.exitCode).toBe(0);
+    expect(Number(found.stdout.trim())).toBeGreaterThanOrEqual(1);
+  });
+
+  it("create leaves replayd's hint for sshd unchanged", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const found = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "plutil",
+      "-extract",
+      "/usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate",
+      "raw",
+      "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist",
+    ]);
+    // Then
+    expect(found.stdout).toBe("4000-01-01T00:00:00Z\n");
+  });
+
+  it("a quiet 600 s exec on a Mac ends with exit 0", async () => {
+    // Given: the Mac from beforeAll
+    // When
+    const start = performance.now();
+    const found = await runCli(env, ["exec", id, "--", "sleep", "600"], {
+      timeout: 700_000,
+    });
+    const millis = performance.now() - start;
+    // Then
+    expect(found.exitCode).toBe(0);
+    expect(millis).toBeGreaterThanOrEqual(600000);
+    expect(millis).toBeLessThan(660000);
+  }, 720_000);
+
   it("the Tool bundle on the Mac has the pinned hashes", async () => {
     // Given: the Mac from beforeAll
     // When
@@ -597,7 +677,7 @@ describe("Namespace macOS Provider", () => {
   });
 
   // A dialog holds an Apple Event until it is killed, so an answer in
-  // under 10 s means no "vmguest wants access to control" dialog showed.
+  // under 10 s means no "sshd-keygen-wrapper wants access to control" dialog showed.
   it("an exec that controls Terminal answers at once with no dialog", async () => {
     // Given: the Mac from beforeAll, with a Terminal window open
     await runCli(env, ["exec", id, "--", "open", "-a", "Terminal"]);
@@ -655,6 +735,52 @@ describe("Namespace macOS Provider", () => {
     expect(found.exitCode).toBe(0);
     expect(found.stdout).toBe("Macintosh HD\n");
     expect(millis).toBeLessThan(10_000);
+  });
+});
+
+describe("Namespace macOS Recording on a fresh Mac", () => {
+  let env: CliEnv;
+  let created: Awaited<ReturnType<typeof createMac>>;
+  let id: string;
+
+  beforeAll(async () => {
+    env = makeEnv({ namespace: true });
+    created = await createMac(env);
+    id = created.id;
+  });
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroyHost(id.split(":").at(-2) ?? "", id.split(":").at(-1) ?? "");
+    }
+    cleanupEnvs();
+  });
+
+  it("an 8-mark record stop on a fresh Mac saves every Proof screenshot", async () => {
+    // Given: the fresh Mac from beforeAll
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    // When
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    for (let n = 1; n <= 8; n++) {
+      const marked = await runCli(env, ["mark", id, `step ${n}: look`]);
+      expect(marked.exitCode).toBe(0);
+      await setTimeout(1000);
+    }
+    const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    expect(stopped.exitCode).toBe(0);
+    const screenshots = Array.from({ length: 8 }, (_, n) =>
+      join(dir, `proof-${n + 1}.png`),
+    );
+    expect(stopped.stdout).toBe([out, ...screenshots, ""].join("\n"));
+    for (const file of screenshots) {
+      const bytes = readFileSync(file);
+      expect(bytes.readUInt32BE(16)).toBe(1280);
+      expect(bytes.readUInt32BE(20)).toBe(800);
+    }
   });
 });
 
@@ -961,7 +1087,8 @@ describe("Namespace macOS Recording", () => {
     const out = join(dir, "proof.mp4");
     const replayd =
       "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
-    const hint = "/opt/namespace/vmguest.kScreenCapturePrivacyHintDate";
+    const hint =
+      "/usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate";
     const started = await runCli(env, ["record", "start", id]);
     expect(started.exitCode).toBe(0);
     await setTimeout(2000);
