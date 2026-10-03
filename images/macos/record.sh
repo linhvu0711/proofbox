@@ -108,7 +108,7 @@ case "$cmd" in
       fi
     fi
     if [ -z "$blocked" ]; then
-      hint=$(plutil -extract '/opt/namespace/vmguest.kScreenCapturePrivacyHintDate' raw "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist" 2>/dev/null || true)
+      hint=$(plutil -extract '/usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate' raw "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist" 2>/dev/null || true)
       if [ "$hint" != "4000-01-01T00:00:00Z" ]; then
         blocked="an alert is on screen"
       fi

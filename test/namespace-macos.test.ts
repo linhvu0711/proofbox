@@ -956,7 +956,7 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
-    "macOS create grants vmguest Apple Events to System Events, Terminal, and Finder",
+    "macOS create grants sshd Apple Events to System Events, Terminal, and Finder",
     () =>
       Effect.gen(function* () {
         // Given
@@ -979,6 +979,9 @@ describe("Namespace macOS Provider", () => {
         expect(grant).toContain("com.apple.Terminal");
         expect(grant).toContain("com.apple.finder");
         expect(grant).toContain("indirect_object_identifier_type");
+        expect(grant.replaceAll("'\\''", "'")).toContain(
+          "('kTCCServiceAppleEvents', '/usr/libexec/sshd-keygen-wrapper', 1, 2, 4, 1, 0, 'com.apple.systemevents', 0,",
+        );
         const screen = lines.find((line) =>
           line.includes("kTCCServiceScreenCapture"),
         );
@@ -988,6 +991,81 @@ describe("Namespace macOS Provider", () => {
           ),
         ).toBe(true);
       }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create grants screen and input access to the three sshd programs",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const grants = lines.filter((line) =>
+          line.includes("kTCCServiceScreenCapture"),
+        );
+        expect(grants).toHaveLength(1);
+        const grant = grants[0] ?? "";
+        expect(
+          grant.startsWith(
+            "sudo -n sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' ",
+          ),
+        ).toBe(true);
+        for (const program of [
+          "/usr/libexec/sshd-session",
+          "/usr/libexec/sshd-keygen-wrapper",
+          "/usr/sbin/sshd",
+        ]) {
+          for (const service of [
+            "kTCCServiceScreenCapture",
+            "kTCCServiceAccessibility",
+            "kTCCServicePostEvent",
+          ]) {
+            expect(grant.replaceAll("'\\''", "'")).toContain(
+              `('${service}', '${program}', 1, 2, 4, 1, 'UNUSED', 0,`,
+            );
+          }
+          const events =
+            lines.find((line) => line.includes("kTCCServiceAppleEvents")) ?? "";
+          for (const target of [
+            "com.apple.systemevents",
+            "com.apple.Terminal",
+            "com.apple.finder",
+          ]) {
+            expect(events.replaceAll("'\\''", "'")).toContain(
+              `('kTCCServiceAppleEvents', '${program}', 1, 2, 4, 1, 0, '${target}', 0,`,
+            );
+          }
+        }
+        expect(
+          lines.some((line) => line.includes("/opt/namespace/vmguest")),
+        ).toBe(false);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create pre-answers replayd for sshd-keygen-wrapper", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const approval = lines.find((line) =>
+        line.includes("kScreenCaptureApprovalLastAlerted"),
+      );
+      expect(approval).toContain(
+        "plutil -insert /usr/libexec/sshd-keygen-wrapper -dictionary",
+      );
+      expect(approval).toContain(
+        "plutil -insert /usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate -date 4000-01-01T00:00:00Z",
+      );
+      expect(lines).toContain(
+        "plutil -extract '/usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate' raw '/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist'",
+      );
+    }).pipe(withRuntime(runtimeDir())),
   );
 
   it.effect(
