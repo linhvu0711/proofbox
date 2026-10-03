@@ -1084,9 +1084,10 @@ describe("Namespace macOS Recording", () => {
   });
 
   // stepClock SECONDS: set the Mac's wall clock SECONDS forward (or back
-  // when negative), as timed does when it syncs mid-Recording.
-  const stepClock = (seconds: number) =>
-    runCli(env, [
+  // when negative), as timed does when it syncs mid-Recording. A step that
+  // fails fails the test, so no case passes without one.
+  const stepClock = async (seconds: number) => {
+    const stepped = await runCli(env, [
       "exec",
       id,
       "--",
@@ -1094,6 +1095,8 @@ describe("Namespace macOS Recording", () => {
       "-c",
       `sudo -n date -u "$(date -u -v${seconds >= 0 ? "+" : ""}${seconds}S +%m%d%H%M%Y.%S)"`,
     ]);
+    expect(stepped.exitCode, stepped.stderr).toBe(0);
+  };
 
   it("a clock step during a Mac Recording is not a stall", async () => {
     // Given: a Recording on the Mac of the describe, with the clock
@@ -1102,6 +1105,7 @@ describe("Namespace macOS Recording", () => {
     const out = join(dir, "proof.mp4");
     const started = await runCli(env, ["record", "start", id]);
     expect(started.exitCode).toBe(0);
+    let stepped = false;
     try {
       await runCli(env, ["mark", id, "step 1: open the menu"]);
       await runCli(env, [
@@ -1116,6 +1120,7 @@ describe("Namespace macOS Recording", () => {
       ]);
       await setTimeout(2000);
       await stepClock(30);
+      stepped = true;
       await runCli(env, ["mark", id, "step 2: close the menu"]);
       await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
       await setTimeout(2000);
@@ -1125,7 +1130,9 @@ describe("Namespace macOS Recording", () => {
       expect(stopped.exitCode, stopped.stderr).toBe(0);
       expect(stopped.stdout.split("\n")[0]).toBe(out);
     } finally {
-      await stepClock(-30);
+      if (stepped) {
+        await stepClock(-30);
+      }
     }
   });
 
@@ -1134,6 +1141,7 @@ describe("Namespace macOS Recording", () => {
     // stepped 30 s forward before the second mark and its click
     const started = await runCli(env, ["record", "start", id]);
     expect(started.exitCode).toBe(0);
+    let stepped = false;
     try {
       await runCli(env, ["mark", id, "step 1: open the menu"]);
       await runCli(env, [
@@ -1148,11 +1156,14 @@ describe("Namespace macOS Recording", () => {
       ]);
       await setTimeout(2000);
       await stepClock(30);
+      stepped = true;
       await runCli(env, ["mark", id, "step 2: close the menu"]);
       await runCli(env, ["click", id, "640", "400", "--pace", "fast"]);
       await runCli(env, ["record", "stop", id, "--discard"]);
     } finally {
-      await stepClock(-30);
+      if (stepped) {
+        await stepClock(-30);
+      }
     }
     // When
     const read = await runCli(env, [
