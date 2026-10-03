@@ -22,6 +22,7 @@ export interface KeeperPaths {
   readonly key: string;
   // The host keys the Namespace SSH gateway pinned for the host.
   readonly knownHosts: string;
+  readonly sshdKnownHosts: string;
   readonly control: string;
   readonly maxLife: string;
   // The Sandbox's own Deadline as the detached host-expiry reads it: the
@@ -68,6 +69,7 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
     log: join(dir, `${stem}.log`),
     key: join(dir, `${stem}.key`),
     knownHosts: join(dir, `${stem}.known-hosts`),
+    sshdKnownHosts: join(dir, `${stem}.sshd-known-hosts`),
     control: join(dir, `${stem}.ctl`),
     maxLife: join(dir, `${stem}.max-life`),
     deadline: join(dir, `${stem}.deadline`),

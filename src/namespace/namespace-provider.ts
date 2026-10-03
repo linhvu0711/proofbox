@@ -174,7 +174,7 @@ export const makeNamespaceProvider = (deps: {
         "120",
       ]);
     }
-    return yield* deps.openLink(ref, yield* refPaths(ref), owner);
+    return yield* deps.openLink(ref, yield* refPaths(ref), owner, "gateway");
   });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
@@ -849,7 +849,7 @@ export const makeNamespaceProvider = (deps: {
           Schedule.spaced(Duration.seconds(15)),
         ),
       );
-      const link = yield* deps.openLink(ref, hostPaths, "cli");
+      const link = yield* deps.openLink(ref, hostPaths, "cli", "gateway");
       if (macos) {
         return yield* prepareMac(link, {
           ref,
