@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import {
   openEventsPage,
@@ -1079,6 +1081,98 @@ describe("Namespace macOS Recording", () => {
         `Recording on ${id} failed: the capture stalled, so no Proof video was made.`,
       ),
     ).toBe(true);
+  });
+
+  // stepClock SECONDS: set the Mac's wall clock SECONDS forward (or back
+  // when negative), as timed does when it syncs mid-Recording.
+  const stepClock = (seconds: number) =>
+    runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      `sudo -n date -u "$(date -u -v${seconds >= 0 ? "+" : ""}${seconds}S +%m%d%H%M%Y.%S)"`,
+    ]);
+
+  it("a clock step during a Mac Recording is not a stall", async () => {
+    // Given: a Recording on the Mac of the describe, with the clock
+    // stepped 30 s forward in the middle of it
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const out = join(dir, "proof.mp4");
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    try {
+      await runCli(env, ["mark", id, "step 1: open the menu"]);
+      await runCli(env, [
+        "click",
+        id,
+        "640",
+        "400",
+        "--button",
+        "right",
+        "--pace",
+        "fast",
+      ]);
+      await setTimeout(2000);
+      await stepClock(30);
+      await runCli(env, ["mark", id, "step 2: close the menu"]);
+      await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+      await setTimeout(2000);
+      // When
+      const stopped = await runCli(env, ["record", "stop", id, "--out", out]);
+      // Then
+      expect(stopped.exitCode, stopped.stderr).toBe(0);
+      expect(stopped.stdout.split("\n")[0]).toBe(out);
+    } finally {
+      await stepClock(-30);
+    }
+  });
+
+  it("a mark and a click after a clock step on a Mac keep their place", async () => {
+    // Given: a Recording on the Mac of the describe, with the clock
+    // stepped 30 s forward before the second mark and its click
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode).toBe(0);
+    try {
+      await runCli(env, ["mark", id, "step 1: open the menu"]);
+      await runCli(env, [
+        "click",
+        id,
+        "640",
+        "400",
+        "--button",
+        "right",
+        "--pace",
+        "fast",
+      ]);
+      await setTimeout(2000);
+      await stepClock(30);
+      await runCli(env, ["mark", id, "step 2: close the menu"]);
+      await runCli(env, ["click", id, "640", "400", "--pace", "fast"]);
+      await runCli(env, ["record", "stop", id, "--discard"]);
+    } finally {
+      await stepClock(-30);
+    }
+    // When
+    const read = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'd=/var/lib/proofbox/recordings/$(ls /var/lib/proofbox/recordings | grep -E "^[0-9]+$" | sort -n | tail -1); cat "$d/start"; tail -2 /var/lib/proofbox/action-log.jsonl',
+    ]);
+    // Then: a wall clock would put both over 30 s after the start
+    const [start, ...lines] = read.stdout.trim().split("\n");
+    const after = lines.map((line) =>
+      Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(line),
+    );
+    expect(after.map(({ kind }) => kind)).toEqual(["mark", "click"]);
+    for (const { t } of after) {
+      expect(t - Number(start)).toBeGreaterThanOrEqual(3);
+      expect(t - Number(start)).toBeLessThanOrEqual(12);
+    }
   });
 
   it("record stop names an alert on screen", async () => {

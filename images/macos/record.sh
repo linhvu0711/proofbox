@@ -13,9 +13,10 @@ ROOT=/var/lib/proofbox/recordings
 CUR=$ROOT/recording
 LOG=/var/lib/proofbox/action-log.jsonl
 
-# BSD date has no %N; perl ships with macOS.
+# A clock that never steps: timed can set the wall clock mid-Recording,
+# and a step must not look like lost video. perl ships with macOS.
 now() {
-  /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'
+  /usr/bin/perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.3f\n", clock_gettime(CLOCK_MONOTONIC)'
 }
 
 # shot FILE: write a PNG of the screen to FILE at the screen's size in points
