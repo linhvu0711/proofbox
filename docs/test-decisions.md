@@ -36,6 +36,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
     - Sizes go up in this order: Linux 4x8, 8x16, 16x32; macOS 4x7, 6x14.
     - A command killed for lack of memory fails with its own exit code and a plain message that names the size and the next one up, for example `Sandbox ran out of memory (4x8). Try --size 8x16.` At the largest size, the message says so.
     - A bigger Mac uses more of the macOS quota, so fewer Macs run at once.
+    - No live test asks Namespace to refuse a Sandbox. The limit belongs to the workspace plan and changes: a 16x32 Linux host was refused on 2026-09-28 and made on 2026-10-03. `test/namespace-errors.test.ts` covers the refusal message with the fake Compute API.
 
 ## The SSH link
 
