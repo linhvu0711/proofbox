@@ -156,14 +156,25 @@ export const makeNamespaceProvider = (deps: {
   const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
   // The container takes the first six characters of the instance id.
   const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
-  // The host's OS, written at create; a host made before macOS existed has
-  // no file and is Linux.
+  // Local files avoid an API call; other machines use the host's label.
+  // Hosts made before the OS label existed are Linux.
   const osOf = Effect.fn("NamespaceProvider.osOf")(function* (ref: SandboxRef) {
     const file = (yield* refPaths(ref)).os;
     const text = yield* Effect.promise(() =>
-      readFile(file, "utf8").catch(() => "linux"),
+      readFile(file, "utf8").catch((cause: unknown) =>
+        cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+          ? undefined
+          : "linux",
+      ),
     );
-    return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+    if (text !== undefined) {
+      return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+    }
+    const hosts = yield* api.list(ref.region ?? DEFAULT_REGION, []);
+    const label = hosts.find((host) => host.id === ref.name)?.labels[
+      "proofbox.os"
+    ];
+    return (label === "macos" ? "macos" : "linux") satisfies Os;
   });
 
   // Link bring-up can outlast a short host Deadline, so every open first
@@ -172,8 +183,9 @@ export const makeNamespaceProvider = (deps: {
   const openLink = Effect.fn("NamespaceProvider.openLink")(function* (
     ref: SandboxRef,
     owner: "cli" | "keeper",
+    knownOs?: Os,
   ) {
-    const os = yield* osOf(ref);
+    const os = knownOs ?? (yield* osOf(ref));
     const hostPaths = yield* refPaths(ref);
     if (
       os === "macos" &&
@@ -207,10 +219,11 @@ export const makeNamespaceProvider = (deps: {
   const withCliLink = <A, E>(
     ref: SandboxRef,
     use: (link: Link) => Effect.Effect<A, E>,
+    os?: Os,
   ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const link = yield* openLink(ref, "cli");
+        const link = yield* openLink(ref, "cli", os);
         return yield* use(link);
       }),
     );
@@ -352,8 +365,10 @@ export const makeNamespaceProvider = (deps: {
   });
 
   const getAs = (os: Os, ref: SandboxRef) =>
-    withCliLink(ref, (link) =>
-      os === "macos" ? readMac(link, ref) : getWith(link, ref),
+    withCliLink(
+      ref,
+      (link) => (os === "macos" ? readMac(link, ref) : getWith(link, ref)),
+      os,
     );
 
   const get = Effect.fn("NamespaceProvider.get")(function* (ref: SandboxRef) {
