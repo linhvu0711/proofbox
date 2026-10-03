@@ -38,6 +38,7 @@ import {
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
 import {
+  MacPrepareError,
   ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
@@ -67,6 +68,7 @@ import {
   macChecks,
   prepareMac,
   readMac,
+  turnOnSshd,
   writeMacDeadline,
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
@@ -692,6 +694,7 @@ export const makeNamespaceProvider = (deps: {
             rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
             rm(hostPaths.maxLife, { force: true }).catch(() => {}),
             rm(hostPaths.os, { force: true }).catch(() => {}),
+            rm(hostPaths.sshdKnownHosts, { force: true }).catch(() => {}),
           ]).then(() => {}),
         );
         yield* api
@@ -893,7 +896,21 @@ export const makeNamespaceProvider = (deps: {
       );
       const link = yield* deps.openLink(ref, hostPaths, "cli", "gateway");
       if (macos) {
-        return yield* prepareMac(link, {
+        yield* progress.step(
+          "turning on sshd",
+          turnOnSshd(link, ref, hostPaths),
+        );
+        const sshd = yield* deps.openLink(ref, hostPaths, "cli", "sshd").pipe(
+          Effect.catchTag("ProviderUnavailableError", () =>
+            Effect.fail(
+              new MacPrepareError({
+                id: sandboxId(ref),
+                what: "sshd cannot be reached",
+              }),
+            ),
+          ),
+        );
+        return yield* prepareMac(sshd, {
           ref,
           idle: req.idle,
           maxLifeAt: new Date(maxLifeSeconds * 1000),

@@ -11,7 +11,7 @@ import {
   TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
@@ -284,6 +284,36 @@ const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
 
 const watchMemory = (link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher);
+
+export const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
+  link: Link,
+  ref: SandboxRef,
+  paths: KeeperPaths,
+) {
+  const pub = yield* Effect.tryPromise({
+    try: () => readFile(`${paths.key}.pub`, "utf8").then((text) => text.trim()),
+    catch: (cause) =>
+      fail(cause instanceof Error ? cause.message : String(cause)),
+  });
+  const result = yield* link.run(
+    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub`,
+  );
+  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "sshd cannot be turned on",
+    });
+  }
+  const [type, key] = result.stdout.trim().split(/\s+/);
+  yield* Effect.tryPromise({
+    try: () =>
+      writeFile(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
+        mode: 0o600,
+      }),
+    catch: (cause) =>
+      fail(cause instanceof Error ? cause.message : String(cause)),
+  });
+});
 
 // One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
 // non-zero exit is a MacPrepareError so create deletes the Mac before any
