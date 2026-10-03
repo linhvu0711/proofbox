@@ -395,7 +395,22 @@ describe("Pixel actions", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     const dir = mkdtempSync(join(tmpdir(), "proofbox-shot-"));
-    const startSec = Date.now() / 1000;
+    const uptime = async () =>
+      Number(
+        (
+          await runCli(env, [
+            "exec",
+            id,
+            "--",
+            "cut",
+            "-d",
+            " ",
+            "-f1",
+            "/proc/uptime",
+          ])
+        ).stdout,
+      );
+    const startSec = await uptime();
     // When
     for (const argv of [
       ["screenshot", id, "--out", join(dir, "a.png")],
@@ -410,7 +425,7 @@ describe("Pixel actions", () => {
       const result = await runCli(env, args);
       expect(result.exitCode).toBe(0);
     }
-    const endSec = Date.now() / 1000;
+    const endSec = await uptime();
     const cat = await runCli(env, [
       "exec",
       id,
@@ -435,8 +450,8 @@ describe("Pixel actions", () => {
     ]);
     let previous = startSec;
     for (const line of lines) {
-      expect(line.t).toBeGreaterThanOrEqual(startSec);
-      expect(line.t).toBeLessThanOrEqual(endSec);
+      expect(line.t).toBeGreaterThanOrEqual(startSec - 0.01);
+      expect(line.t).toBeLessThanOrEqual(endSec + 0.01);
       expect(line.t).toBeGreaterThanOrEqual(previous);
       previous = line.t;
     }

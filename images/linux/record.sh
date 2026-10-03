@@ -10,6 +10,12 @@ ROOT=/run/proofbox/recordings
 CUR=$ROOT/recording
 LOG=/run/proofbox/action-log.jsonl
 
+# A clock that never steps, so a wall-clock step does not move Recording
+# times. Debian slim's perl has no Time::HiRes.
+now() {
+  awk '{ printf "%.3f\n", $1 }' /proc/uptime
+}
+
 # shot FILE: write a full-size PNG of the desktop to FILE.
 shot() {
   "$FFMPEG" -loglevel error -f x11grab -video_size "${W}x${H}" -i "$DISPLAY" -frames:v 1 -f image2 -vcodec png -y "$1"
@@ -18,7 +24,7 @@ shot() {
 # log KIND [STEP|REASON]: append one line to the Action log; a Wait mark's
 # second word is the reason as a JSON string.
 log() {
-  t=$(date +%s.%3N)
+  t=$(now)
   eval "$(xdotool getmouselocation --shell)"
   if [ "$1" = wait ]; then
     printf '{"t":%s,"kind":"wait","x":%s,"y":%s,"reason":%s}\n' "$t" "$X" "$Y" "$2" >> "$LOG"
@@ -42,7 +48,7 @@ case "$cmd" in
     done
     DIR=$ROOT/$((n + 1))
     mkdir "$DIR" 2>/dev/null || exit 4
-    date +%s.%3N > "$DIR/start"
+    now > "$DIR/start"
     setsid "$FFMPEG" -f x11grab -framerate 30 -video_size "${W}x${H}" -draw_mouse 1 -i "$DISPLAY" -c:v libx264 -preset ultrafast -crf 18 -g 30 -pix_fmt yuv420p "$DIR/raw.mkv" < /dev/null > "$DIR/ffmpeg.log" 2>&1 &
     echo $! > "$DIR/pid"
     if ! ln -s "$DIR" "$CUR" 2>/dev/null; then
@@ -54,7 +60,7 @@ case "$cmd" in
       elapsed=$(sed -n 's/.*time=\([0-9:.]*\).*/\1/p' "$DIR/ffmpeg.log" 2>/dev/null | head -1)
       if [ -n "$elapsed" ]; then
         secs=$(printf '%s' "$elapsed" | awk -F: '{printf "%.3f", $1*3600+$2*60+$3}')
-        date +%s.%3N | awk -v s="$secs" '{printf "%.3f", $1 - s}' > "$DIR/start"
+        now | awk -v s="$secs" '{printf "%.3f", $1 - s}' > "$DIR/start"
         exit 0
       fi
       sleep 0.1
@@ -84,7 +90,7 @@ case "$cmd" in
       sleep 0.1
       i=$((i + 1))
     done
-    date +%s.%3N > "$DIR/stop"
+    now > "$DIR/stop"
     rm "$CUR"
     printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
     ;;

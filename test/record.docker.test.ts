@@ -632,6 +632,48 @@ describe("Recording and the Proof video", () => {
     expect(rest).toEqual({ kind: "wait", x: 720, y: 450, reason });
   });
 
+  it("a Step mark's time is on the Sandbox's uptime clock", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await runCli(env, ["record", "start", id]);
+    const uptime = async () =>
+      Number(
+        (
+          await runCli(env, [
+            "exec",
+            id,
+            "--",
+            "cut",
+            "-d",
+            " ",
+            "-f1",
+            "/proc/uptime",
+          ])
+        ).stdout,
+      );
+    const before = await uptime();
+    // When
+    const marked = await runCli(env, ["mark", id, "step 1: look"]);
+    const after = await uptime();
+    // Then
+    expect(marked.exitCode, marked.stderr).toBe(0);
+    const cat = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/action-log.jsonl",
+    ]);
+    const last = Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(
+      cat.stdout.trim().split("\n").at(-1) ?? "",
+    );
+    expect(last.kind).toBe("mark");
+    expect(last.t).toBeGreaterThanOrEqual(before - 0.01);
+    expect(last.t).toBeLessThanOrEqual(after + 0.01);
+  });
+
   it("a Wait mark starts no step and saves no Proof screenshot", async () => {
     // Given
     const env = makeEnv({ docker: true });
