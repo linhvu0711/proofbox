@@ -25,9 +25,10 @@ settle() {
 
 LOG=/var/lib/proofbox/action-log.jsonl
 
-# BSD date has no %N; perl ships with macOS.
+# A clock that never steps: timed can set the wall clock mid-Recording,
+# and a step must not look like lost video. perl ships with macOS.
 now() {
-  /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'
+  /usr/bin/perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.3f\n", clock_gettime(CLOCK_MONOTONIC)'
 }
 
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right

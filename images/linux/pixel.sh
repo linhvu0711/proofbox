@@ -44,10 +44,16 @@ settle() {
 
 LOG=/run/proofbox/action-log.jsonl
 
+# A clock that never steps, so a wall-clock step does not move Recording
+# times. Debian slim's perl has no Time::HiRes.
+now() {
+  awk '{ printf "%.3f\n", $1 }' /proc/uptime
+}
+
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
 # before the press, the first letter or key, or the capture.
 log() {
-  t=$(date +%s.%3N)
+  t=$(now)
   eval "$(xdotool getmouselocation --shell)"
   if [ $# -ge 3 ]; then
     printf '{"t":%s,"kind":"%s","x":%s,"y":%s,"toX":%s,"toY":%s}\n' "$t" "$1" "$X" "$Y" "$2" "$3" >> "$LOG"
