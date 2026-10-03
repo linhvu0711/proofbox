@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -372,6 +372,41 @@ describe("Namespace Provider", () => {
       expect(ns.calls.some((call) => call.method === "GetSSHConfig")).toBe(
         false,
       );
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
+  it("exec with no local OS file fails before opening a link when lookup fails", async () => {
+    // Given: this machine has no local files and Namespace cannot list hosts.
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? { error: { code: "unavailable", message: "lookup unavailable" } }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(
+        env,
+        ["exec", "ns:us:abc123def4567", "--", "true"],
+        {
+          set: {
+            PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+            PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          },
+        },
+      );
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Could not reach Namespace. Check your network and try again.\n",
+        exitCode: 125,
+      });
+      expect(ns.calls.map((call) => call.method)).toEqual(["ListInstances"]);
+      expect(readdirSync(env.runtime)).toEqual([]);
     } finally {
       cleanupEnvs();
       await ns.close();

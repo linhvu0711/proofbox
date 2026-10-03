@@ -107,6 +107,8 @@ A screenshot shows what the app draws, not what a field holds. Chromium can draw
 
 A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A screen command, `mark`, `record`, or a download that gets no answer gives up after 2 minutes plus its own pace or Recording time, and exits `125`; a screenshot or a download tries once more first. The Keeper writes one line per command to `<runtime folder>/<provider>-<name>.log` (`$TMPDIR/proofbox-<uid>/` unless `PROOFBOX_RUNTIME_DIR` is set): the program, bytes, exit code, time, and how it ended, never the arguments or the input. It keeps one older file, `.log.1`, and stays after `delete`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
+On Namespace, a missing local OS record makes proofbox read the host's OS label before choosing its SSH route. If that lookup fails, the command exits `125` without opening a link, rather than guessing Linux. An existing local OS record needs no lookup.
+
 ## Safety
 
 - A Sandbox is deleted by the Provider at its Deadline: 5 minutes idle on macOS, 15 on Linux, and never later than the Max life of 3 hours.
