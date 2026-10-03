@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  access,
   readdir,
   readFile,
   rename,
@@ -37,6 +38,7 @@ import {
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
 import {
+  MacPrepareError,
   ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
@@ -66,6 +68,7 @@ import {
   macChecks,
   prepareMac,
   readMac,
+  turnOnSshd,
   writeMacDeadline,
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
@@ -140,6 +143,11 @@ export const makeNamespaceProvider = (deps: {
   // `unfinished`: the host is there, but create never made its Sandbox.
   const gone = (ref: SandboxRef, unfinished?: true) =>
     new SandboxGoneError({ id: sandboxId(ref), unfinished });
+  const madeElsewhere = (ref: SandboxRef) =>
+    new ProviderUnavailableError({
+      provider: "namespace",
+      reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
+    });
   const brandFor = (ref: SandboxRef) => ({
     provider: "namespace",
     id: () => sandboxId(ref),
@@ -148,14 +156,25 @@ export const makeNamespaceProvider = (deps: {
   const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
   // The container takes the first six characters of the instance id.
   const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
-  // The host's OS, written at create; a host made before macOS existed has
-  // no file and is Linux.
+  // Local files avoid an API call; other machines use the host's label.
+  // Hosts made before the OS label existed are Linux.
   const osOf = Effect.fn("NamespaceProvider.osOf")(function* (ref: SandboxRef) {
     const file = (yield* refPaths(ref)).os;
     const text = yield* Effect.promise(() =>
-      readFile(file, "utf8").catch(() => "linux"),
+      readFile(file, "utf8").catch((cause: unknown) =>
+        cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+          ? undefined
+          : "linux",
+      ),
     );
-    return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+    if (text !== undefined) {
+      return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+    }
+    const hosts = yield* api.list(ref.region ?? DEFAULT_REGION, []);
+    const label = hosts.find((host) => host.id === ref.name)?.labels[
+      "proofbox.os"
+    ];
+    return (label === "macos" ? "macos" : "linux") satisfies Os;
   });
 
   // Link bring-up can outlast a short host Deadline, so every open first
@@ -164,7 +183,20 @@ export const makeNamespaceProvider = (deps: {
   const openLink = Effect.fn("NamespaceProvider.openLink")(function* (
     ref: SandboxRef,
     owner: "cli" | "keeper",
+    knownOs?: Os,
   ) {
+    const os = knownOs ?? (yield* osOf(ref));
+    const hostPaths = yield* refPaths(ref);
+    if (
+      os === "macos" &&
+      !(yield* Effect.promise(() =>
+        access(hostPaths.sshdKnownHosts)
+          .then(() => true)
+          .catch(() => false),
+      ))
+    ) {
+      return yield* madeElsewhere(ref);
+    }
     if (owner === "keeper") {
       yield* Effect.forkScoped(pushHostLife(api, ref, 120));
     } else {
@@ -174,7 +206,12 @@ export const makeNamespaceProvider = (deps: {
         "120",
       ]);
     }
-    return yield* deps.openLink(ref, yield* refPaths(ref), owner);
+    return yield* deps.openLink(
+      ref,
+      hostPaths,
+      owner,
+      os === "macos" ? "sshd" : "gateway",
+    );
   });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
@@ -182,10 +219,11 @@ export const makeNamespaceProvider = (deps: {
   const withCliLink = <A, E>(
     ref: SandboxRef,
     use: (link: Link) => Effect.Effect<A, E>,
+    os?: Os,
   ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const link = yield* openLink(ref, "cli");
+        const link = yield* openLink(ref, "cli", os);
         return yield* use(link);
       }),
     );
@@ -327,8 +365,10 @@ export const makeNamespaceProvider = (deps: {
   });
 
   const getAs = (os: Os, ref: SandboxRef) =>
-    withCliLink(ref, (link) =>
-      os === "macos" ? readMac(link, ref) : getWith(link, ref),
+    withCliLink(
+      ref,
+      (link) => (os === "macos" ? readMac(link, ref) : getWith(link, ref)),
+      os,
     );
 
   const get = Effect.fn("NamespaceProvider.get")(function* (ref: SandboxRef) {
@@ -506,6 +546,7 @@ export const makeNamespaceProvider = (deps: {
                 ".sshkey",
                 ".sshtarget",
                 ".known-hosts",
+                ".sshd-known-hosts",
               ].map((suffix) =>
                 rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
                   () => {},
@@ -521,28 +562,45 @@ export const makeNamespaceProvider = (deps: {
     const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       live,
-      ({ os, region, instance }) => {
-        const entry = {
-          name: instance.id,
-          region,
-          os,
-          createdAt: instance.createdAt,
-        };
-        if (instance.starting === true) {
-          unfinished.push(entry);
-          return Effect.succeed(undefined);
-        }
-        return getAs(os, { name: instance.id, region }).pipe(
-          Effect.catchTag("SandboxGoneError", (error) =>
-            Effect.sync(() => {
-              if (error.unfinished === true) {
-                unfinished.push(entry);
-              }
+      ({ os, region, instance }) =>
+        Effect.gen(function* () {
+          const entry = {
+            name: instance.id,
+            region,
+            os,
+            createdAt: instance.createdAt,
+          };
+          if (instance.starting === true) {
+            unfinished.push(entry);
+            return undefined;
+          }
+          const ref = { name: instance.id, region };
+          if (os === "macos") {
+            const hostPaths = yield* refPaths(ref);
+            const pinned = yield* Effect.promise(() =>
+              access(hostPaths.sshdKnownHosts)
+                .then(() => true)
+                .catch(() => false),
+            );
+            if (!pinned) {
+              unreached.push({
+                where: `Namespace region ${region}`,
+                reason: madeElsewhere(ref).message,
+              });
               return undefined;
-            }),
-          ),
-        );
-      },
+            }
+          }
+          return yield* getAs(os, ref).pipe(
+            Effect.catchTag("SandboxGoneError", (error) =>
+              Effect.sync(() => {
+                if (error.unfinished === true) {
+                  unfinished.push(entry);
+                }
+                return undefined;
+              }),
+            ),
+          );
+        }),
       { discard: false },
     );
     return {
@@ -585,6 +643,7 @@ export const makeNamespaceProvider = (deps: {
         rm(dir.deadline, { force: true }).catch(() => {}),
         rm(dir.os, { force: true }).catch(() => {}),
         rm(dir.knownHosts, { force: true }).catch(() => {}),
+        rm(dir.sshdKnownHosts, { force: true }).catch(() => {}),
         rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
           force: true,
         }).catch(() => {}),
@@ -650,6 +709,7 @@ export const makeNamespaceProvider = (deps: {
             rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
             rm(hostPaths.maxLife, { force: true }).catch(() => {}),
             rm(hostPaths.os, { force: true }).catch(() => {}),
+            rm(hostPaths.sshdKnownHosts, { force: true }).catch(() => {}),
           ]).then(() => {}),
         );
         yield* api
@@ -849,9 +909,23 @@ export const makeNamespaceProvider = (deps: {
           Schedule.spaced(Duration.seconds(15)),
         ),
       );
-      const link = yield* deps.openLink(ref, hostPaths, "cli");
+      const link = yield* deps.openLink(ref, hostPaths, "cli", "gateway");
       if (macos) {
-        return yield* prepareMac(link, {
+        yield* progress.step(
+          "turning on sshd",
+          turnOnSshd(link, ref, hostPaths),
+        );
+        const sshd = yield* deps.openLink(ref, hostPaths, "cli", "sshd").pipe(
+          Effect.catchTag("ProviderUnavailableError", () =>
+            Effect.fail(
+              new MacPrepareError({
+                id: sandboxId(ref),
+                what: "sshd cannot be reached",
+              }),
+            ),
+          ),
+        );
+        return yield* prepareMac(sshd, {
           ref,
           idle: req.idle,
           maxLifeAt: new Date(maxLifeSeconds * 1000),

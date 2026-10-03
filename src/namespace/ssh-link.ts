@@ -24,6 +24,7 @@ import {
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
+import { shellJoin } from "../shell.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 
 export interface HostResult {
@@ -48,11 +49,13 @@ export interface Link {
 }
 
 export type LinkOwner = "keeper" | "cli";
+export type LinkVia = "gateway" | "sshd";
 
 export type OpenLink = (
   ref: SandboxRef,
   paths: KeeperPaths,
   owner: LinkOwner,
+  via: LinkVia,
 ) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
 
 const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
@@ -136,6 +139,7 @@ export const makeOpenLink = (
     key: string,
     hosts: string,
     target: string,
+    proxy?: string,
   ): ReadonlyArray<string> => [
     "-S",
     ctl,
@@ -149,6 +153,7 @@ export const makeOpenLink = (
     `UserKnownHostsFile=${hosts}`,
     "-o",
     "LogLevel=ERROR",
+    ...(proxy === undefined ? [] : ["-o", `ProxyCommand=${proxy}`]),
     target,
   ];
 
@@ -170,8 +175,35 @@ export const makeOpenLink = (
       Effect.asVoid,
     );
 
-  return (ref, paths, owner) =>
+  return (ref, paths, owner, via) =>
     Effect.gen(function* () {
+      const targetOf = (gateway: string) =>
+        via === "sshd" ? "runner@127.0.0.1" : gateway;
+      const sshFor = (ctl: string, key: string, gateway: string) =>
+        via === "sshd"
+          ? sshBase(
+              ctl,
+              paths.key,
+              paths.sshdKnownHosts,
+              targetOf(gateway),
+              shellJoin([
+                sshBin,
+                "-i",
+                key,
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                `UserKnownHostsFile=${paths.knownHosts}`,
+                "-o",
+                "LogLevel=ERROR",
+                "-W",
+                "127.0.0.1:22",
+                gateway,
+              ]),
+            )
+          : sshBase(ctl, key, paths.knownHosts, gateway);
       const runWith = (ssh: ReadonlyArray<string>) => (commandLine: string) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -249,13 +281,11 @@ export const makeOpenLink = (
             .then((text) => text.trim())
             .catch(() => ""),
         );
-        if (stored !== "" && (yield* checkCtl(paths.control, stored))) {
-          const ssh = sshBase(
-            paths.control,
-            keeperKey,
-            paths.knownHosts,
-            stored,
-          );
+        if (
+          stored !== "" &&
+          (yield* checkCtl(paths.control, targetOf(stored)))
+        ) {
+          const ssh = sshFor(paths.control, keeperKey, stored);
           return {
             ssh,
             run: runWith(ssh),
@@ -273,9 +303,10 @@ export const makeOpenLink = (
           ),
         ),
       );
-      const target = `${cfg.username}@${cfg.endpoint}`;
+      const gateway = `${cfg.username}@${cfg.endpoint}`;
+      const target = targetOf(gateway);
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
-        const ssh = sshBase(paths.control, keeperKey, paths.knownHosts, target);
+        const ssh = sshFor(paths.control, keeperKey, gateway);
         return {
           ssh,
           run: runWith(ssh),
@@ -305,7 +336,7 @@ export const makeOpenLink = (
           }),
       });
       yield* Effect.tryPromise({
-        try: () => writeFile(targetFile, `${target}\n`, { mode: 0o600 }),
+        try: () => writeFile(targetFile, `${gateway}\n`, { mode: 0o600 }),
         catch: (cause) =>
           new ProviderError({
             provider: "namespace",
@@ -328,7 +359,7 @@ export const makeOpenLink = (
       yield* Effect.addFinalizer(() =>
         Effect.promise(() => rm(key, { force: true }).catch(() => undefined)),
       );
-      const ssh = sshBase(ctl, key, paths.knownHosts, target);
+      const ssh = sshFor(ctl, key, gateway);
       const run = runWith(ssh);
       const stream = streamWith(ssh);
       if (yield* checkCtl(ctl, target)) {

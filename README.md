@@ -35,7 +35,7 @@ No file means `namespace` for both. `create --provider <name>` overrides it for 
 
 ## Inside a Sandbox
 
-On macOS, the user is `runner`, and sudo needs no password. When a macOS dialog asks for a password (a permission, the Keychain, an installer), type the Login password `runner` with `proofbox type`, the way a person does (ADR 0020). `create` checks that the password still works and fails when it does not. System Events, Terminal, and Finder are already allowed for Apple Events. A command that controls another app (for example `osascript -e 'tell application "Safari" …'`) shows a "vmguest wants access to control" dialog once per app and waits about 2 minutes. Run it in the background (`proofbox exec "$id" -- sh -c '… &'`), take a `proofbox screenshot`, and click Allow.
+On macOS, the user is `runner`, and sudo needs no password. When a macOS dialog asks for a password (a permission, the Keychain, an installer), type the Login password `runner` with `proofbox type`, the way a person does (ADR 0020). `create` checks that the password still works and fails when it does not. System Events, Terminal, and Finder are already allowed for Apple Events. A command that controls another app (for example `osascript -e 'tell application "Safari" …'`) shows a "sshd-keygen-wrapper wants access to control" dialog once per app and waits about 2 minutes. Run it in the background (`proofbox exec "$id" -- sh -c '… &'`), take a `proofbox screenshot`, and click Allow. A Mac made by a proofbox from before this change cannot be used after you update: delete it and create a new one. A Keeper the old proofbox started keeps its Mac until the Mac is deleted.
 
 On Linux, the user is `app`. It has no password and no sudo.
 
@@ -106,6 +106,8 @@ Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <fi
 A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
 
 A proofbox failure exits `125` with one plain line on stderr, for example `Sandbox docker:abc123 is gone`. A screen command, `mark`, `record`, or a download that gets no answer gives up after 2 minutes plus its own pace or Recording time, and exits `125`; a screenshot or a download tries once more first. The Keeper writes one line per command to `<runtime folder>/<provider>-<name>.log` (`$TMPDIR/proofbox-<uid>/` unless `PROOFBOX_RUNTIME_DIR` is set): the program, bytes, exit code, time, and how it ended, never the arguments or the input. It keeps one older file, `.log.1`, and stays after `delete`. A command that ran out of memory exits `122` with `Sandbox ran out of memory (4x8). Try --size 8x16.`
+
+On Namespace, a missing local OS record makes proofbox read the host's OS label before choosing its SSH route. If that lookup fails, the command exits `125` without opening a link, rather than guessing Linux. An existing local OS record needs no lookup.
 
 ## Safety
 

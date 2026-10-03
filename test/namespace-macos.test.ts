@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -19,6 +19,7 @@ import {
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import { ProviderUnavailableError } from "../src/errors.ts";
 import { macKillCount } from "../src/namespace/mac-host.ts";
 import type {
   CreateReq,
@@ -28,6 +29,7 @@ import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type {
   HostResult,
   Link,
+  LinkVia,
   SshForward,
 } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
@@ -53,11 +55,16 @@ const makeMac = (
   during: (line: string) => Effect.Effect<void> = () => Effect.void,
   // The ssh forward a Mac Live view asks for; `calls` still notes it.
   portForward: SshForward = () => Effect.die("unused"),
+  sshdDown?: true,
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
     const requests = yield* Ref.make<ReadonlyArray<CreateRequest>>([]);
     const commands = yield* Ref.make<ReadonlyArray<string>>([]);
+    const links = yield* Ref.make<ReadonlyArray<string>>([]);
+    const routed = yield* Ref.make<ReadonlyArray<readonly [LinkVia, string]>>(
+      [],
+    );
     const detached = yield* Ref.make<
       ReadonlyArray<readonly [string, ReadonlyArray<string>]>
     >([]);
@@ -89,10 +96,13 @@ const makeMac = (
         stderr: found.stderr ?? "",
       };
     };
-    const link: Link = {
+    const link = (via: LinkVia): Link => ({
       ssh: [],
       run: (line) =>
         note(commands, line).pipe(
+          Effect.zipRight(
+            Ref.update(routed, (all) => [...all, [via, line] as const]),
+          ),
           Effect.zipRight(during(line)),
           Effect.map((): HostResult => {
             const { exitCode, stdout, stderr } = reply(line);
@@ -107,7 +117,13 @@ const makeMac = (
           }),
         ),
       stream: (line) =>
-        Stream.fromEffect(note(commands, line)).pipe(
+        Stream.fromEffect(
+          note(commands, line).pipe(
+            Effect.zipRight(
+              Ref.update(routed, (all) => [...all, [via, line] as const]),
+            ),
+          ),
+        ).pipe(
           Stream.flatMap(() => {
             const given = (answer(line) ?? defaultAnswer(line))?.events;
             if (given !== undefined) {
@@ -127,14 +143,27 @@ const makeMac = (
             return Stream.fromIterable(events);
           }),
         ),
-    };
+    });
     const provider = makeNamespaceProvider({
       api,
       login: Effect.succeed({
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: () => Effect.succeed(link),
+      openLink: (_ref, _paths, owner, via) =>
+        note(links, `${owner} ${via}`).pipe(
+          Effect.zipRight(
+            via === "sshd" && sshdDown === true
+              ? Effect.fail(
+                  new ProviderUnavailableError({
+                    provider: "namespace",
+                    reason:
+                      "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
+                  }),
+                )
+              : Effect.succeed(link(via)),
+          ),
+        ),
       forward: (ref, port) =>
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
           Effect.zipRight(portForward(ref, port)),
@@ -145,7 +174,7 @@ const makeMac = (
       spawnDetached: (_provider, rel, args) =>
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
     });
-    return { provider, calls, requests, commands, detached };
+    return { provider, calls, requests, commands, detached, links, routed };
   });
 
 // The Mac's own answer to `shasum -a 256 <paths>`: the pinned hashes.
@@ -164,11 +193,16 @@ const pinnedShasum = (line: string) =>
 const replaydKept = { stdout: "4000-01-01T00:00:00Z\n" };
 
 const defaultAnswer = (line: string): Answer | undefined =>
-  line.startsWith("shasum -a 256 ")
-    ? { stdout: pinnedShasum(line) }
-    : line.startsWith("plutil -extract")
-      ? replaydKept
-      : undefined;
+  line.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")
+    ? {
+        stdout:
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey root@mac\n",
+      }
+    : line.startsWith("shasum -a 256 ")
+      ? { stdout: pinnedShasum(line) }
+      : line.startsWith("plutil -extract")
+        ? replaydKept
+        : undefined;
 
 // Three jetsam lines as the kernel logs them: one idle-daemon kill, then
 // two kills of real work.
@@ -209,6 +243,142 @@ const createMac = (size?: { cpu: number; ramGb: number }) => ({
 });
 
 describe("Namespace macOS Provider", () => {
+  it.effect(
+    "macOS create turns on sshd over the gateway, then prepares over sshd",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        expect(yield* Ref.get(mac.links)).toEqual(["cli gateway", "cli sshd"]);
+        const routed = yield* Ref.get(mac.routed);
+        expect(routed[0]?.[0]).toBe("gateway");
+        expect(routed[0]?.[1]).toContain(
+          "sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub",
+        );
+        const pub = readFileSync(
+          join(runtime, "ns-us:abc123def4567.key.pub"),
+          "utf8",
+        ).trim();
+        expect(routed[0]?.[1]).toContain(
+          `printf '%s\\n' '${pub}' >> ~/.ssh/authorized_keys`,
+        );
+        expect(routed.slice(1).every(([via]) => via === "sshd")).toBe(true);
+        expect(
+          readFileSync(
+            join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+            "utf8",
+          ),
+        ).toBe(
+          "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+        );
+      }).pipe(withRuntime(runtime));
+    },
+  );
+
+  it.effect(
+    "a Mac whose sshd cannot be turned on fails create and deletes the Mac",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac((line) =>
+          line.includes("launchctl bootstrap system")
+            ? {
+                exitCode: 5,
+                stderr: "Bootstrap failed: 5: Input/output error\n",
+              }
+            : undefined,
+        );
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (sshd cannot be turned on); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+        expect(yield* Ref.get(mac.links)).toEqual(["cli gateway"]);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "a Mac whose sshd cannot be reached fails create and deletes the Mac",
+    () => {
+      const runtime = runtimeDir();
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac(undefined, undefined, undefined, true);
+        // When
+        const error = yield* Effect.flip(mac.provider.create(createMac()));
+        // Then
+        expect(error.message).toBe(
+          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (sshd cannot be reached); deleted the Mac",
+        );
+        expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
+        expect(
+          existsSync(join(runtime, "ns-us:abc123def4567.sshd-known-hosts")),
+        ).toBe(false);
+      }).pipe(withRuntime(runtime));
+    },
+  );
+  it.scoped("every call on a made Mac opens its link through sshd", () => {
+    const runtime = runtimeDir();
+    writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+    writeFileSync(
+      join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
+    return Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac((line) =>
+        line.startsWith("cat /var/lib/proofbox/labels.json")
+          ? {
+              stdout: `${JSON.stringify({
+                "proofbox.name": "abc123def4567",
+                "proofbox.os": "macos",
+                "proofbox.created-at": "1970-01-01T00:00:00Z",
+                "proofbox.idle-seconds": "300",
+                "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+              })}\n300\n`,
+            }
+          : undefined,
+      );
+      // When
+      yield* mac.provider.get({ name: "abc123def4567", region: "us" });
+      yield* mac.provider.connect({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(yield* Ref.get(mac.links)).toEqual(["cli sshd", "keeper sshd"]);
+    }).pipe(Effect.provide(NodeContext.layer), withRuntime(runtime));
+  });
+
+  it.effect(
+    "a call on a Mac with no pinned sshd host key says an older proofbox made it",
+    () => {
+      const runtime = runtimeDir();
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+      return Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        const error = yield* Effect.flip(
+          mac.provider.get({ name: "abc123def4567", region: "us" }),
+        );
+        // Then
+        expect({
+          tag: error._tag,
+          message: error.message,
+          links: yield* Ref.get(mac.links),
+        }).toEqual({
+          tag: "ProviderUnavailableError",
+          message:
+            "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567",
+          links: [],
+        });
+      }).pipe(withRuntime(runtime));
+    },
+  );
   it.effect("macOS create asks Namespace for a 4 CPU 7168 MB arm64 Mac", () =>
     Effect.gen(function* () {
       // Given
@@ -279,6 +449,10 @@ describe("Namespace macOS Provider", () => {
     () => {
       const runtime = runtimeDir();
       writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+      writeFileSync(
+        join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+      );
       return Effect.gen(function* () {
         // Given
         const mac = yield* makeMac();
@@ -696,7 +870,7 @@ describe("Namespace macOS Provider", () => {
       }).pipe(withRuntime(runtimeDir())),
   );
 
-  it.effect("macOS create prints only the seven prepare steps", () =>
+  it.effect("macOS create prints only the eight prepare steps", () =>
     Effect.gen(function* () {
       // Given
       const mac = yield* makeMac();
@@ -710,7 +884,7 @@ describe("Namespace macOS Provider", () => {
         yield* Ref.get(output.captured.err),
       ).join("");
       expect(err).toBe(
-        "proofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
+        "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
       );
     }).pipe(withRuntime(runtimeDir())),
   );
@@ -782,7 +956,7 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
-    "macOS create grants vmguest Apple Events to System Events, Terminal, and Finder",
+    "macOS create grants sshd Apple Events to System Events, Terminal, and Finder",
     () =>
       Effect.gen(function* () {
         // Given
@@ -805,6 +979,9 @@ describe("Namespace macOS Provider", () => {
         expect(grant).toContain("com.apple.Terminal");
         expect(grant).toContain("com.apple.finder");
         expect(grant).toContain("indirect_object_identifier_type");
+        expect(grant.replaceAll("'\\''", "'")).toContain(
+          "('kTCCServiceAppleEvents', '/usr/libexec/sshd-keygen-wrapper', 1, 2, 4, 1, 0, 'com.apple.systemevents', 0,",
+        );
         const screen = lines.find((line) =>
           line.includes("kTCCServiceScreenCapture"),
         );
@@ -814,6 +991,81 @@ describe("Namespace macOS Provider", () => {
           ),
         ).toBe(true);
       }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "macOS create grants screen and input access to the three sshd programs",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const mac = yield* makeMac();
+        // When
+        yield* mac.provider.create(createMac());
+        // Then
+        const lines = yield* Ref.get(mac.commands);
+        const grants = lines.filter((line) =>
+          line.includes("kTCCServiceScreenCapture"),
+        );
+        expect(grants).toHaveLength(1);
+        const grant = grants[0] ?? "";
+        expect(
+          grant.startsWith(
+            "sudo -n sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' ",
+          ),
+        ).toBe(true);
+        for (const program of [
+          "/usr/libexec/sshd-session",
+          "/usr/libexec/sshd-keygen-wrapper",
+          "/usr/sbin/sshd",
+        ]) {
+          for (const service of [
+            "kTCCServiceScreenCapture",
+            "kTCCServiceAccessibility",
+            "kTCCServicePostEvent",
+          ]) {
+            expect(grant.replaceAll("'\\''", "'")).toContain(
+              `('${service}', '${program}', 1, 2, 4, 1, 'UNUSED', 0,`,
+            );
+          }
+          const events =
+            lines.find((line) => line.includes("kTCCServiceAppleEvents")) ?? "";
+          for (const target of [
+            "com.apple.systemevents",
+            "com.apple.Terminal",
+            "com.apple.finder",
+          ]) {
+            expect(events.replaceAll("'\\''", "'")).toContain(
+              `('kTCCServiceAppleEvents', '${program}', 1, 2, 4, 1, 0, '${target}', 0,`,
+            );
+          }
+        }
+        expect(
+          lines.some((line) => line.includes("/opt/namespace/vmguest")),
+        ).toBe(false);
+      }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("macOS create pre-answers replayd for sshd-keygen-wrapper", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      const lines = yield* Ref.get(mac.commands);
+      const approval = lines.find((line) =>
+        line.includes("kScreenCaptureApprovalLastAlerted"),
+      );
+      expect(approval).toContain(
+        "plutil -insert /usr/libexec/sshd-keygen-wrapper -dictionary",
+      );
+      expect(approval).toContain(
+        "plutil -insert /usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate -date 4000-01-01T00:00:00Z",
+      );
+      expect(lines).toContain(
+        "plutil -extract '/usr/libexec/sshd-keygen-wrapper.kScreenCapturePrivacyHintDate' raw '/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist'",
+      );
+    }).pipe(withRuntime(runtimeDir())),
   );
 
   it.effect(
@@ -841,7 +1093,7 @@ describe("Namespace macOS Provider", () => {
           yield* Ref.get(output.captured.err),
         ).join("");
         expect(err).toBe(
-          "proofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
+          "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
       }).pipe(withRuntime(runtimeDir())),
@@ -887,6 +1139,10 @@ describe("Namespace macOS Provider", () => {
   it.scoped("a warm exec on a Mac makes one call over the link", () => {
     const runtime = runtimeDir();
     writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos");
+    writeFileSync(
+      join(runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     const text = (bytes: string): ExecEvent => ({
       _tag: "Stderr",
       bytes: new TextEncoder().encode(bytes),

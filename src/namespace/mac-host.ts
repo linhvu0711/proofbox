@@ -11,7 +11,7 @@ import {
   TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
@@ -215,7 +215,14 @@ const dropToken = Effect.fn("macHost.dropToken")(function* (
 
 // Screen and input commands only work in the desktop session of `runner`.
 const GUI = "sudo -n launchctl asuser 501 sudo -n -u runner";
-const VMGUEST = "/opt/namespace/vmguest";
+// macOS charges sshd's screen and Apple Events use to launchd's
+// sshd-keygen-wrapper, but rows for it alone are not enough (#118).
+const SSHD_PROGRAMS = [
+  "/usr/libexec/sshd-session",
+  "/usr/libexec/sshd-keygen-wrapper",
+  "/usr/sbin/sshd",
+];
+const SSHD_RESPONSIBLE = "/usr/libexec/sshd-keygen-wrapper";
 const TCC_DB = "/Library/Application Support/com.apple.TCC/TCC.db";
 // Apple Events consent is per user and per target app, so these rows go in
 // runner's own DB; rows in the system DB still show the dialog.
@@ -230,7 +237,7 @@ const REPLAYD =
   "/Users/runner/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist";
 const REPLAYD_HINT = "4000-01-01T00:00:00Z";
 
-// ADR 0012: grant screen and input to vmguest in the system TCC.db, Apple
+// ADR 0012: grant screen and input to sshd in the system TCC.db, Apple
 // Events to System Events, Terminal, and Finder in runner's, and pre-answer
 // replayd's "bypass the private window picker" alert.
 const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
@@ -239,9 +246,11 @@ const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
     "kTCCServiceAccessibility",
     "kTCCServicePostEvent",
   ]
-    .map(
-      (service) =>
-        `('${service}', '${VMGUEST}', 1, 2, 4, 1, 'UNUSED', 0, CAST(strftime('%s','now') AS INTEGER))`,
+    .flatMap((service) =>
+      SSHD_PROGRAMS.map(
+        (program) =>
+          `('${service}', '${program}', 1, 2, 4, 1, 'UNUSED', 0, CAST(strftime('%s','now') AS INTEGER))`,
+      ),
     )
     .join(", ");
   yield* step(
@@ -251,9 +260,11 @@ const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
       `INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ${rows}`,
     ])}`,
   );
-  const targets = APPLE_EVENTS_TARGETS.map(
-    (target) =>
-      `('kTCCServiceAppleEvents', '${VMGUEST}', 1, 2, 4, 1, 0, '${target}', 0, CAST(strftime('%s','now') AS INTEGER))`,
+  const targets = SSHD_PROGRAMS.flatMap((program) =>
+    APPLE_EVENTS_TARGETS.map(
+      (target) =>
+        `('kTCCServiceAppleEvents', '${program}', 1, 2, 4, 1, 0, '${target}', 0, CAST(strftime('%s','now') AS INTEGER))`,
+    ),
   ).join(", ");
   yield* step(
     link,
@@ -266,11 +277,11 @@ const grantPrivacy = Effect.fn("macHost.grantPrivacy")(function* (link: Link) {
   // normal stop, and alerts on an entry without its dates; so the full
   // entry goes in, then `kill -9` makes it read the file again.
   const plist = shellJoin([REPLAYD]);
-  const entry = `${VMGUEST}.kScreenCapture`;
+  const entry = `${SSHD_RESPONSIBLE}.kScreenCapture`;
   yield* step(
     link,
     "pre-answering the screen capture alert",
-    `now=$(date -u +%Y-%m-%dT%H:%M:%SZ) && mkdir -p "$(dirname ${plist})" && { [ -e ${plist} ] || plutil -create xml1 ${plist}; } && { plutil -remove ${VMGUEST} ${plist} 2>/dev/null; plutil -insert ${VMGUEST} -dictionary ${plist} && plutil -insert ${entry}PrivacyHintDate -date ${REPLAYD_HINT} ${plist} && plutil -insert ${entry}PrivacyHintPolicy -integer 999999999 ${plist} && plutil -insert ${entry}ApprovalLastAlerted -date "$now" ${plist} && plutil -insert ${entry}ApprovalLastUsed -date "$now" ${plist} && plutil -insert ${entry}AlertableUsageCount -integer 1 ${plist}; } && { killall -9 replayd 2>/dev/null; true; }`,
+    `now=$(date -u +%Y-%m-%dT%H:%M:%SZ) && mkdir -p "$(dirname ${plist})" && { [ -e ${plist} ] || plutil -create xml1 ${plist}; } && { plutil -remove ${SSHD_RESPONSIBLE} ${plist} 2>/dev/null; plutil -insert ${SSHD_RESPONSIBLE} -dictionary ${plist} && plutil -insert ${entry}PrivacyHintDate -date ${REPLAYD_HINT} ${plist} && plutil -insert ${entry}PrivacyHintPolicy -integer 999999999 ${plist} && plutil -insert ${entry}ApprovalLastAlerted -date "$now" ${plist} && plutil -insert ${entry}ApprovalLastUsed -date "$now" ${plist} && plutil -insert ${entry}AlertableUsageCount -integer 1 ${plist}; } && { killall -9 replayd 2>/dev/null; true; }`,
   );
 });
 
@@ -284,6 +295,36 @@ const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
 
 const watchMemory = (link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher);
+
+export const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
+  link: Link,
+  ref: SandboxRef,
+  paths: KeeperPaths,
+) {
+  const pub = yield* Effect.tryPromise({
+    try: () => readFile(`${paths.key}.pub`, "utf8").then((text) => text.trim()),
+    catch: (cause) =>
+      fail(cause instanceof Error ? cause.message : String(cause)),
+  });
+  const result = yield* link.run(
+    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub`,
+  );
+  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
+    return yield* new MacPrepareError({
+      id: sandboxId(ref),
+      what: "sshd cannot be turned on",
+    });
+  }
+  const [type, key] = result.stdout.trim().split(/\s+/);
+  yield* Effect.tryPromise({
+    try: () =>
+      writeFile(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
+        mode: 0o600,
+      }),
+    catch: (cause) =>
+      fail(cause instanceof Error ? cause.message : String(cause)),
+  });
+});
 
 // One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
 // non-zero exit is a MacPrepareError so create deletes the Mac before any
@@ -425,7 +466,7 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   // The capture does not wait on replayd's alert; replayd moving the hint
   // date away from the one proofbox wrote is the sign it showed one.
   const hint = yield* link.run(
-    `plutil -extract ${shellJoin([`${VMGUEST}.kScreenCapturePrivacyHintDate`])} raw ${shellJoin([REPLAYD])}`,
+    `plutil -extract ${shellJoin([`${SSHD_RESPONSIBLE}.kScreenCapturePrivacyHintDate`])} raw ${shellJoin([REPLAYD])}`,
   );
   const alerted = hint.stdout.trim() !== REPLAYD_HINT;
   if (capture.exitCode !== 0 || alerted) {

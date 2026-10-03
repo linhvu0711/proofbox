@@ -260,6 +260,8 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
 export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   readonly id: string;
   readonly what:
+    | "sshd cannot be turned on"
+    | "sshd cannot be reached"
     | "the test screenshot is blocked"
     | "the test capture is blocked"
     | "an alert is on screen"

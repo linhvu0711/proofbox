@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
@@ -40,6 +40,8 @@ import type { Link } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
 
 // The Compute API, faked: each call lands in `calls` as
@@ -328,6 +330,152 @@ const makeProvider = (
   });
 
 describe("Namespace Provider", () => {
+  it("exec on a Mac from another machine exits 125 without opening the gateway", async () => {
+    // Given: the API labels the Mac, but this machine has no local files.
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? {
+            json: {
+              instances: [
+                {
+                  instanceId: "abc123def4567",
+                  labels: [{ name: "proofbox.os", value: "macos" }],
+                },
+              ],
+            },
+          }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(
+        env,
+        ["exec", "ns:us:abc123def4567", "--", "true"],
+        {
+          set: {
+            PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+            PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          },
+        },
+      );
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567\n",
+        exitCode: 125,
+      });
+      expect(ns.calls.some((call) => call.method === "ListInstances")).toBe(
+        true,
+      );
+      expect(ns.calls.some((call) => call.method === "GetSSHConfig")).toBe(
+        false,
+      );
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
+  it("exec with no local OS file fails before opening a link when lookup fails", async () => {
+    // Given: this machine has no local files and Namespace cannot list hosts.
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? { error: { code: "unavailable", message: "lookup unavailable" } }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(
+        env,
+        ["exec", "ns:us:abc123def4567", "--", "true"],
+        {
+          set: {
+            PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+            PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          },
+        },
+      );
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Could not reach Namespace. Check your network and try again.\n",
+        exitCode: 125,
+      });
+      expect(ns.calls.map((call) => call.method)).toEqual(["ListInstances"]);
+      expect(readdirSync(env.runtime)).toEqual([]);
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
+  it.effect("a host with no local OS file and no OS label stays Linux", () =>
+    Effect.gen(function* () {
+      // Given: another host is a Mac; the requested host has no OS label.
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        instances: [
+          { id: "other00000001", labels: { "proofbox.os": "macos" } },
+          { id: "abc123def4567", labels: {} },
+        ],
+      });
+      // When
+      const info = yield* provider.get({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(info.os).toBe("linux");
+      expect(yield* Ref.get(calls)).toContain("list us");
+    }).pipe(runtimeConfig()),
+  );
+
+  it.effect("a local Linux OS file needs no API lookup", () =>
+    Effect.gen(function* () {
+      // Given: the local OS file takes precedence over the API label.
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        instances: [
+          { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
+        ],
+      });
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:abc123def4567",
+      });
+      writeFileSync(paths.os, "linux\n");
+      // When
+      const info = yield* provider.get({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(info.os).toBe("linux");
+      expect(yield* Ref.get(calls)).toEqual([]);
+    }).pipe(runtimeConfig()),
+  );
+
+  it.effect("a local Mac OS file needs no API lookup", () =>
+    Effect.gen(function* () {
+      // Given: this machine knows it is a Mac but has no sshd pin.
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}));
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:abc123def4567",
+      });
+      writeFileSync(paths.os, "macos\n");
+      // When
+      const error = yield* provider
+        .get({ name: "abc123def4567", region: "us" })
+        .pipe(Effect.flip);
+      // Then
+      expect(error).toBeInstanceOf(ProviderUnavailableError);
+      expect(error.message).toContain(
+        "was made by an older proofbox, or on another machine",
+      );
+      expect(yield* Ref.get(calls)).toEqual([]);
+    }).pipe(runtimeConfig()),
+  );
+
   it.effect(
     "extend writes the Deadline and starts nsc extend for the seconds left",
     () =>
@@ -1063,6 +1211,14 @@ describe("Namespace Provider", () => {
   it.effect("list names a Mac host with no Sandbox state as unfinished", () =>
     Effect.gen(function* () {
       // Given: a Mac host whose state file was never written
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:mac000000000a",
+      });
+      writeFileSync(
+        paths.sshdKnownHosts,
+        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+      );
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
@@ -1088,6 +1244,41 @@ describe("Namespace Provider", () => {
             createdAt: new Date("2026-10-01T07:49:00Z"),
           },
         ],
+      });
+    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("list names a Mac with no pinned sshd host key as unreached", () =>
+    Effect.gen(function* () {
+      // Given
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const runs = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        fakeDocker({}),
+        (line) =>
+          Ref.update(runs, (all) => [...all, line]).pipe(
+            Effect.as({ exitCode: 0, stdout: "", stderr: "" }),
+          ),
+        { instances: [UNFINISHED_MAC] },
+      );
+      // When
+      const listed = yield* provider.list;
+      // Then
+      expect({
+        infos: listed.infos,
+        unreached: listed.unreached,
+        runs: yield* Ref.get(runs),
+      }).toEqual({
+        infos: [],
+        unreached: [
+          {
+            where: "Namespace region us",
+            reason:
+              "Sandbox ns:us:mac000000000a was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:mac000000000a",
+          },
+        ],
+        runs: [],
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );

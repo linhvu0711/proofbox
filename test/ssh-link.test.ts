@@ -116,6 +116,7 @@ describe("ssh link", () => {
           { name: "abc123def4567", region: "us" },
           paths,
           "keeper",
+          "gateway",
         );
         // Then: GetSSHConfig was asked in the id's region for its instance
         expect(yield* Ref.get(asked)).toEqual([["us", "abc123def4567"]]);
@@ -237,6 +238,7 @@ describe("ssh link", () => {
         { name: "abc123def4567", region: "us" },
         paths,
         "keeper",
+        "gateway",
       );
       // When
       const result = yield* link.run("x").pipe(
@@ -255,4 +257,90 @@ describe("ssh link", () => {
       Effect.provide(NodeContext.layer),
     );
   });
+
+  for (const [name, ride] of [
+    [
+      "a Mac link reaches runner@127.0.0.1 through the gateway with the Sandbox key and the pinned sshd host key",
+      false,
+    ],
+    ["a CLI Mac link rides the Keeper's master over sshd", true],
+  ] as const) {
+    it.effect(name, () => {
+      const fake = fakeSsh();
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      trackTempDir(runtime);
+      return Effect.gen(function* () {
+        // Given
+        const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
+          [],
+        );
+        const api: NamespaceApi = {
+          create: () => Effect.die("unused"),
+          wait: () => Effect.die("unused"),
+          destroy: () => Effect.die("unused"),
+          extend: () => Effect.die("unused"),
+          list: () => Effect.die("unused"),
+          checkToken: () => Effect.die("unused"),
+          ensureImageExpiry: () => Effect.die("unused"),
+          makeToken: () => Effect.die("unused"),
+          sshConfig: (region, instanceId) =>
+            Ref.update(asked, (all) => [
+              ...all,
+              [region, instanceId] as const,
+            ]).pipe(
+              Effect.as({
+                username: "abc123def4567",
+                endpoint: "ssh.iad4.namespace.so",
+                privateKey: new Uint8Array(PEM),
+                hostKeys: [HOST_KEY],
+              }),
+            ),
+        };
+        const executor = yield* CommandExecutor.CommandExecutor;
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "abc123def4567",
+        });
+        const sshKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
+        if (ride) {
+          writeFileSync(
+            `${paths.control.replace(/\.ctl$/, "")}.sshtarget`,
+            "abc123def4567@ssh.iad4.namespace.so\n",
+          );
+        }
+        // When
+        const link = yield* makeOpenLink(api, executor, fake.path)(
+          { name: "abc123def4567", region: "us" },
+          paths,
+          ride ? "cli" : "keeper",
+          "sshd",
+        );
+        // Then
+        expect(yield* Ref.get(asked)).toEqual(
+          ride ? [] : [["us", "abc123def4567"]],
+        );
+        expect(link.ssh.slice(0, 4)).toEqual([
+          "-S",
+          paths.control,
+          "-i",
+          paths.key,
+        ]);
+        expect(link.ssh).toContain(
+          `UserKnownHostsFile=${paths.sshdKnownHosts}`,
+        );
+        expect(link.ssh).toContain("StrictHostKeyChecking=yes");
+        expect(link.ssh.at(-1)).toBe("runner@127.0.0.1");
+        expect(link.ssh).toContain(
+          `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
+        );
+        expect(link.ssh).not.toContain("abc123def4567@ssh.iad4.namespace.so");
+      }).pipe(
+        Effect.scoped,
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+        ),
+        Effect.provide(NodeContext.layer),
+      );
+    });
+  }
 });
