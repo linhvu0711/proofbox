@@ -72,7 +72,14 @@ export const makeEnv = (
 
 export const cleanupEnvs = () => {
   for (const dir of made.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+    // A Keeper still logging a command whose Caller left can land a file
+    // in the runtime dir; the retries let that write finish first.
+    rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
   }
 };
 
