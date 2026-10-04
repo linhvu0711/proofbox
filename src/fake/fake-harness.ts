@@ -9,6 +9,11 @@ const End = Schema.Struct({
   resets: Schema.optional(Schema.String),
 });
 
+const Activity = Schema.Struct({
+  type: Schema.Literal("activity"),
+  text: Schema.String,
+});
+
 const FAKE_HARNESS_SCRIPT = String.raw`#!/bin/sh
 set -eu
 shift
@@ -82,5 +87,14 @@ export const makeFakeHarness = (): Harness => ({
     } catch {
       return { _tag: "NoEnd" };
     }
+  },
+  readActivity: (output) => {
+    for (const line of output.trimEnd().split("\n").reverse()) {
+      const activity = Schema.decodeUnknownEither(Schema.parseJson(Activity))(
+        line,
+      );
+      if (Either.isRight(activity)) return Option.some(activity.right.text);
+    }
+    return Option.none();
   },
 });

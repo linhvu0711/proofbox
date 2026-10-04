@@ -190,6 +190,62 @@ it("a Harness crash prints its last lines and exits 23", async () => {
   });
 });
 
+it("harness wait --timeout on a running Turn prints still running and exits 124", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 20"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id, "--timeout", "2s"]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 124,
+    lines: [
+      "still running",
+      expect.stringMatching(
+        /^last activity: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
+      ),
+      "last: sleeping 20s",
+      "",
+    ],
+  });
+});
+
+it("a Turn keeps running after the Keeper is killed", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  const prompt = await runCli(env, ["harness", "prompt", id, "sleep 8"]);
+  if (prompt.exitCode !== 0) throw new Error(prompt.stderr);
+  const pid = Number(
+    readFileSync(join(env.runtime, `fake-${id.slice(5)}.pid`), "utf8").trim(),
+  );
+  process.kill(pid, "SIGKILL");
+  for (let i = 0; i < 50; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    await sleep(100);
+  }
+  // When
+  const first = await runCli(env, ["harness", "wait", id, "--timeout", "1s"]);
+  const second = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({
+    first: first.exitCode,
+    firstLine: first.stdout.split("\n")[0],
+    second: second.exitCode,
+    stdout: second.stdout,
+  }).toEqual({
+    first: 124,
+    firstLine: "still running",
+    second: 0,
+    stdout: "done\nslept 8s\n",
+  });
+});
+
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {
   // Given
   const env = makeEnv();

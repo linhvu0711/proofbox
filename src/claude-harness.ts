@@ -13,4 +13,5 @@ export const makeClaudeHarness = (): Harness => ({
   turn: () => ["claude", "--version"],
   // Stand-in replaced by #193.
   readEnd: () => ({ _tag: "NoEnd" }),
+  readActivity: () => Option.none(),
 });
