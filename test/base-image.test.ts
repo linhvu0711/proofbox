@@ -55,7 +55,7 @@ describe("Base image", () => {
 
   it.effect("macOS tools leave the Linux Base image version unchanged", () =>
     Effect.gen(function* () {
-      // Given: an image dir, and the ffmpeg entry as it was before macOS
+      // Given: an image dir, and each Linux entry with no macOS fields
       const dir = mkdtempSync(join(tmpdir(), "proofbox-image-"));
       dirs.push(dir);
       writeFileSync(join(dir, "Dockerfile"), "FROM scratch\n");
@@ -73,6 +73,22 @@ describe("Base image", () => {
               url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-25-15-37/ffmpeg-n9.0.2-8-gb135b25c19-linuxarm64-gpl-9.0.tar.xz",
               sha256:
                 "583e6f13cdc325e4633d1d61f2d27bb8baeb234a4f75fca4e0b8f2b9aab09e60",
+            },
+          },
+        },
+        {
+          name: "gh",
+          path: "/opt/proofbox/tools/gh",
+          linux: {
+            amd64: {
+              url: "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz",
+              sha256:
+                "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b",
+            },
+            arm64: {
+              url: "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz",
+              sha256:
+                "93308395c2d296a63a662742c6366e4db413d2a4870d07bd9b84e491c065d65d",
             },
           },
         },
