@@ -32,7 +32,10 @@ const Labels = Schema.Struct({
   "proofbox.name": Schema.String,
   "proofbox.os": Os,
   "proofbox.created-at": Schema.Date,
-  "proofbox.idle-seconds": Schema.NumberFromString,
+  "proofbox.idle-seconds": Schema.NumberFromString.pipe(
+    Schema.int(),
+    Schema.positive(),
+  ),
   "proofbox.max-life-at": Schema.Date,
   "proofbox.base-version": Schema.optional(Schema.String),
   "proofbox.snapshot": Schema.optional(Schema.String),

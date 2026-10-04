@@ -1,5 +1,11 @@
 import { readdirSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
+import { afterEach, describe, expect } from "vitest";
+import {
+  type ProviderBrand,
+  sandboxInfoFromLabels,
+} from "../src/docker/docker-provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const NOT_RUNNING = "Docker is not running; start Docker and try again\n";
@@ -60,4 +66,50 @@ describe("Docker not running", () => {
     expect(result.stderr).toBe(NOT_RUNNING);
     expect(result.exitCode).toBe(125);
   });
+});
+
+describe("Docker labels", () => {
+  const brand: ProviderBrand = {
+    provider: "docker",
+    id: (name) => `docker:${name}`,
+  };
+  const labels = (idleSeconds: string) => ({
+    "proofbox.name": "box",
+    "proofbox.os": "linux",
+    "proofbox.created-at": "2026-01-01T00:00:00Z",
+    "proofbox.idle-seconds": idleSeconds,
+    "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+  });
+
+  it.effect.each([{ label: "0" }, { label: "-5" }, { label: "1.5" }])(
+    "an idle-seconds label of $label fails to decode",
+    ({ label }) =>
+      Effect.gen(function* () {
+        // Given: a container whose idle label is not a whole positive number
+        // When
+        const error = yield* Effect.flip(
+          sandboxInfoFromLabels(brand, "box", labels(label), 4_000_000_000),
+        );
+        // Then
+        expect(error).toMatchObject({
+          _tag: "ProviderError",
+          provider: "docker",
+        });
+      }),
+  );
+
+  it.effect("an idle-seconds label of 300 decodes to 300 seconds", () =>
+    Effect.gen(function* () {
+      // Given: a container with a good idle label
+      // When
+      const info = yield* sandboxInfoFromLabels(
+        brand,
+        "box",
+        labels("300"),
+        4_000_000_000,
+      );
+      // Then
+      expect(info.idleSeconds).toBe(300);
+    }),
+  );
 });
