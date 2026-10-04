@@ -1,5 +1,5 @@
 import type { Socket } from "node:net";
-import type { CommandExecutor } from "@effect/platform";
+import type { CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Clock,
   Data,
@@ -102,7 +102,9 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   const serve = Effect.scoped(
     Effect.gen(function* () {
       const connection = yield* provider.connect(id);
-      const runtime = yield* Effect.runtime<CommandExecutor.CommandExecutor>();
+      const runtime = yield* Effect.runtime<
+        CommandExecutor.CommandExecutor | FileSystem.FileSystem
+      >();
       const handleClient = (socket: Socket) => {
         let pending = "";
         // The lines in hand: a Caller that gives up writes its give-up

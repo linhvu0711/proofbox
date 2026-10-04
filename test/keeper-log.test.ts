@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
@@ -54,7 +55,7 @@ describe("Keeper log", () => {
       expect(readFileSync(path, "utf8")).toBe(
         "2026-10-01T08:28:54Z exec pixel screenshot out=5603328 err=22 exit=- first=118.4s took=120.0s gave up\n",
       );
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it("a command that wrote no output shows no first-byte time", () => {
@@ -101,7 +102,7 @@ describe("Keeper log", () => {
       yield* writeKeeperLog(path, entry);
       // Then
       expect(statSync(path).mode & 0o777).toBe(0o600);
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.effect("a log past 1 MB moves to .log.1 and a new one starts", () =>
@@ -116,7 +117,7 @@ describe("Keeper log", () => {
         old: statSync(`${path}.1`).size,
         lines: readFileSync(path, "utf8").split("\n").length - 1,
       }).toEqual({ old: 1_048_576, lines: 1 });
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.effect("two writes at a full log keep both lines and the old file", () =>
@@ -136,6 +137,6 @@ describe("Keeper log", () => {
         old: statSync(`${path}.1`).size,
         lines: readFileSync(path, "utf8").split("\n").length - 1,
       }).toEqual({ old: 1_048_576, lines: 2 });
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 });

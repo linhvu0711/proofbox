@@ -1,5 +1,5 @@
-import { appendFile, rename, stat } from "node:fs/promises";
 import { basename } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { formatTime } from "../format-time.ts";
 
@@ -64,22 +64,20 @@ export const writeKeeperLog = Effect.fn("keeperLog.write")(function* (
   path: string,
   entry: KeeperLogEntry,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   yield* writerOf(path).withPermits(1)(
     Effect.gen(function* () {
-      const size = yield* Effect.promise(() =>
-        stat(path).then(
-          (info) => info.size,
-          () => 0,
-        ),
+      const size = yield* fs.stat(path).pipe(
+        Effect.map((info) => Number(info.size)),
+        Effect.orElseSucceed(() => 0),
       );
       if (size >= ROTATE_AT) {
-        yield* Effect.ignore(
-          Effect.tryPromise(() => rename(path, `${path}.1`)),
-        );
+        yield* Effect.ignore(fs.rename(path, `${path}.1`));
       }
-      yield* Effect.tryPromise(() =>
-        appendFile(path, keeperLogLine(entry), { mode: 0o600 }),
-      );
+      yield* fs.writeFileString(path, keeperLogLine(entry), {
+        flag: "a",
+        mode: 0o600,
+      });
     }),
   );
 }, Effect.ignore);
