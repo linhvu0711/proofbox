@@ -79,14 +79,30 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
       .makeDirectory(dirname(path), { recursive: true })
       .pipe(Effect.mapError(failed));
     yield* fs.makeDirectory(path).pipe(Effect.mapError(failed));
+    const copied: string[] = [];
+    const missing: string[] = [];
     for (const part of entry.profile.parts) {
-      yield* copyResolved(entry.name, join(from, part), join(path, part));
+      if (yield* fs.exists(join(from, part)).pipe(Effect.mapError(failed))) {
+        yield* copyResolved(entry.name, join(from, part), join(path, part));
+        copied.push(part);
+      } else {
+        missing.push(part);
+      }
     }
     const output = yield* CliOutput;
     yield* output.out(`${path}\n`);
-    yield* output.err(
-      `Copied from ${from}: ${entry.profile.parts.join(", ")}.\n`,
-    );
+    if (copied.length === 0) {
+      yield* output.err(
+        `Copied nothing: ${from} has none of ${entry.profile.parts.join(", ")}. The profile is empty.\n`,
+      );
+    } else {
+      yield* output.err(`Copied from ${from}: ${copied.join(", ")}.\n`);
+      if (missing.length > 0) {
+        yield* output.err(
+          `Not on this laptop, skipped: ${missing.join(", ")}.\n`,
+        );
+      }
+    }
     yield* output.err(
       `Not copied: ${entry.profile.leftOut}. They can point to programs on this laptop or hold tokens.\n`,
     );

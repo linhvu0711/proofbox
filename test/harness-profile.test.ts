@@ -139,6 +139,47 @@ describe("harness profile init", () => {
     expect(readdirSync(from).sort()).toEqual(["CLAUDE.md", "agents", "skills"]);
   });
 
+  it("harness profile init claude skips and names the parts the laptop lacks", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(from);
+    writeFileSync(join(from, "CLAUDE.md"), "# mine");
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: `${profile}\n`,
+      stderr: `Copied from ${from}: CLAUDE.md.\nNot on this laptop, skipped: skills/, agents/.\nNot copied: settings.json, hooks, plugins, and MCP config. They can point to programs on this laptop or hold tokens.\n`,
+      exitCode: 0,
+    });
+    expect(readdirSync(profile)).toEqual(["CLAUDE.md"]);
+  });
+
+  it("harness profile init claude with no ~/.claude makes an empty profile", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: `${profile}\n`,
+      stderr: `Copied nothing: ${from} has none of CLAUDE.md, skills/, agents/. The profile is empty.\nNot copied: settings.json, hooks, plugins, and MCP config. They can point to programs on this laptop or hold tokens.\n`,
+      exitCode: 0,
+    });
+    expect(readdirSync(profile)).toEqual([]);
+    expect(existsSync(from)).toBe(false);
+  });
+
   it("harness profile init foo names the known Harnesses", async () => {
     // Given
     const env = makeEnv();
