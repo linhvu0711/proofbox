@@ -13,7 +13,8 @@ One rule per line. A rule from a source names the source in parentheses, from th
 
 ## Layout
 
-- A command goes in `src/commands/<command>.ts`.
+- A command's handler goes in `src/commands/<command>.ts`. Its args and options are in `src/cli.ts`.
+  `src/main.ts` calls the `exec` handler without the parser, so a handler never imports `@effect/cli`.
 - A subsystem with more than one file gets its own folder, like `src/keeper/` and `src/fake/`.
 - The entry file of a process that proofbox spawns is `<name>-main.ts`. `pnpm build` bundles each one as its own entry, `dist/<path>-main.js`.
 - A Provider's code loads only when a command asks for it: `src/provider-registry.ts` imports it inside the entry's `load`, never at the top.
@@ -45,6 +46,8 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - Tests use Vitest and live in `test/<module>.test.ts`. [vitest include]
 - Each user-visible behavior of a command has a test that runs the real CLI on the fake Provider through `test/support/cli.ts`.
   This tests from the outside, as the Caller uses proofbox (ADR 0002).
+- A command that needs a desktop is tested on Docker, in `test/<module>.docker.test.ts`. On the fake Provider, which has no desktop, a test checks that proofbox refuses the command.
+  A fake desktop would test a copy that can differ from the real one.
 - Effect code with no CLI is tested with `it.effect` from `@effect/vitest`, never with `Effect.runPromise` inside a plain `it`. (effect-vitest)
 - A test name says the behavior in plain words: `"exec passes stdout, stderr, and exit code unchanged"`.
 - A test sets its config with `ConfigProvider`, with env vars on the child process, or with a dependency it passes in. It never changes `process.env`, not even `PATH`. (effect-config, vitest-vi)
@@ -82,8 +85,10 @@ One rule per line. A rule from a source names the source in parentheses, from th
 ## API shape
 
 - `exec` passes the exit code of the Sandbox command through unchanged.
-- A proofbox failure exits `125` with one plain line on stderr. (node-process)
+- A proofbox failure exits `125`, with one plain line on stderr for each thing that failed. (node-process)
   Node keeps 1, 3 to 14, and codes above 128 for its own failures, so 125 does not clash.
+- A command that runs out of memory exits `122`, with a message that names the Sandbox size and the next size up.
+  At the largest size, the message says that it is the largest. With no size limit, it says the host has no free memory left.
 - An error message says what went wrong and what to do next, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Formatting
@@ -110,8 +115,10 @@ One rule per line. A rule from a source names the source in parentheses, from th
 
 ### Effect
 
-- A named function that returns an effect is `Effect.fn("<Service or module>.<function>")`, for example `Effect.fn("KeeperClient.start")`. (effect-fn)
+- A top-level function or a service method that returns an effect is `Effect.fn("<Service or module>.<function>")`, for example `Effect.fn("KeeperClient.start")`. This holds for a plain function body too, not only a generator. (effect-fn)
   It gives each call a trace span and a stack trace that points to where the function is defined.
+- A small helper inside one function body can stay a plain function.
+  It runs inside the span of the function around it, so its own span adds nothing.
 - An effect written once, inside other code, is `Effect.gen`. (effect-gen)
 - A combinator gets a lambda, never a bare function name: `Effect.map((value) => Option.some(value))`, not `Effect.map(Option.some)`. (effect-guidelines)
   A bare name can lose generic types and makes stack traces less clear.
@@ -120,6 +127,16 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - A service with code is `Effect.Service<Self>()("proofbox/Name", …)`. A service that is a plain value is a `Context.Tag`. (effect-services)
 - Data that crosses an edge (JSON on disk, a Keeper frame, CLI input) is a `Schema`. Its type comes from the schema, never from a second `interface`. (effect-schema)
 - A count or a duration in a schema is `Schema.Number.pipe(Schema.int(), Schema.positive())`, or `Schema.nonNegative()` when zero is valid.
+
+### Effect platform
+
+- A child process runs through `Command` from `@effect/platform`. (platform-command)
+- `node:child_process` is only for a job `Command` cannot do, such as a detached spawn, with a comment that says why.
+- A non-zero exit of a child process is a value from `Command.exitCode`, not an error. (platform-command)
+- File access goes through `FileSystem` from `@effect/platform`, never `node:fs`.
+  Its failures come as a `SystemError` with a `reason`, so no code reads raw Node error codes such as `ENOENT`.
+- A platform error is matched by `_tag` and `reason`, never by its message. (platform-error)
+- `NodeContext.layer` is provided only in the entry file of a process: `src/main.ts` and each `-main.ts` file. (platform-node-context)
 
 ### Shell scripts
 
@@ -164,6 +181,10 @@ One rule per line. A rule from a source names the source in parentheses, from th
 | effect | effect-schema | https://effect.website/docs/schema/introduction/ | 3.x | 2026-10-01 |
 | effect | effect-logging | https://effect.website/docs/v3/observability/logging | 3.x | 2026-10-01 |
 | effect | effect-vitest | https://raw.githubusercontent.com/Effect-TS/effect/v3/packages/vitest/README.md | 3.x | 2026-10-01 |
+| platform | platform-command | https://github.com/Effect-TS/effect/blob/main/packages/platform/src/Command.ts | 0.97 | 2026-10-04 |
+| platform | platform-error | https://github.com/Effect-TS/effect/blob/main/packages/platform/src/Error.ts | 0.97 | 2026-10-04 |
+| platform | platform-node-context | https://github.com/Effect-TS/effect/blob/main/packages/platform-node/src/NodeContext.ts | 0.108 | 2026-10-04 |
+| cli | effect-cli-readme | https://github.com/Effect-TS/effect/blob/main/packages/cli/README.md | 0.77 | 2026-10-04 |
 | vitest | vitest-vi | https://vitest.dev/api/vi | 3.x | 2026-10-01 |
 | vitest | vitest-migration | https://vitest.dev/guide/migration | 3.x | 2026-10-01 |
 | biome | biome-config | https://biomejs.dev/reference/configuration/ | 2.5 | 2026-10-01 |
