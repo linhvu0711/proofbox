@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
@@ -7,8 +6,9 @@ import {
   type Server,
   type Socket,
 } from "node:net";
-import { promisify } from "node:util";
+import { Command } from "@effect/platform";
 import { Effect, Option, Schedule } from "effect";
+import { captureCommand } from "../command-events.ts";
 import { ProviderError } from "../errors.ts";
 import {
   fileStem,
@@ -110,10 +110,14 @@ export const stopKeeper = Effect.fn("lifecycle.stopKeeper")(function* (
   if (Number.isFinite(pid)) {
     // A stale pid file can name a reused, unrelated pid; only signal a
     // process that still runs keeper-main.
-    const isKeeper = yield* Effect.promise(() =>
-      promisify(execFile)("ps", ["-p", String(pid), "-o", "command="])
-        .then(({ stdout }) => stdout.includes("keeper-main"))
-        .catch(() => false),
+    const isKeeper = yield* captureCommand(
+      Command.make("ps", "-p", String(pid), "-o", "command="),
+    ).pipe(
+      Effect.map(
+        ({ exitCode, stdout }) =>
+          exitCode === 0 && stdout.includes("keeper-main"),
+      ),
+      Effect.orElseSucceed(() => false),
     );
     if (isKeeper) {
       yield* Effect.sync(() => {
