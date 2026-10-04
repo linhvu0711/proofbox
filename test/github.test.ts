@@ -180,3 +180,27 @@ test.each([
     });
   },
 );
+
+test("github login saves constructor without treating it as a previous login", async () => {
+  const env = makeEnv();
+  const home = makeHome();
+  const result = await runCli(env, ["github", "login", "constructor"], {
+    input: "github_pat_11AAAA1111\n",
+    set: { HOME: home },
+  });
+  expect(result).toEqual({
+    stderr:
+      "Saved the GitHub login for constructor.\n" +
+      "Protect main, or your default branch, with a ruleset that needs a review: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository\n",
+    stdout: "",
+    exitCode: 0,
+  });
+  expect(
+    JSON.parse(
+      readFileSync(
+        join(home, ".config", "proofbox", "github-logins.json"),
+        "utf8",
+      ),
+    ),
+  ).toEqual({ constructor: { token: "github_pat_11AAAA1111" } });
+});

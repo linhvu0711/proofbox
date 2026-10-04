@@ -21,7 +21,7 @@ export const loginToGithub = Effect.fn("github.loginToGithub")(function* (
     return yield* new NotFineGrainedTokenError({ owner });
   }
   const before = yield* saveGithubLogin(owner, Redacted.make(token));
-  const previous = before[owner];
+  const previous = Object.hasOwn(before, owner) ? before[owner] : undefined;
   const replaced =
     previous === undefined
       ? ""
