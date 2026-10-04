@@ -17,6 +17,36 @@ const Result = Schema.Struct({
   ),
 });
 
+const Assistant = Schema.Struct({
+  type: Schema.Literal("assistant"),
+  message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }),
+});
+
+const ActivityBlock = Schema.Union(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("tool_use"),
+    name: Schema.String,
+    input: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  }),
+);
+
+const activityText = (block: typeof ActivityBlock.Type): string => {
+  let text: string;
+  if (block.type === "text") text = block.text;
+  else {
+    const detail = ["command", "file_path", "pattern", "url", "description"]
+      .map((key) => block.input[key])
+      .find((value): value is string => typeof value === "string");
+    text =
+      detail === undefined
+        ? block.name
+        : `${block.name}: ${detail.split(/\r?\n/)[0] ?? ""}`;
+  }
+  const line = text.split(/\r?\n/)[0] ?? "";
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+};
+
 const resetText = (message: string): Option.Option<string> => {
   const epoch = /\|(\d{10})(?!\d)/.exec(message);
   if (epoch !== null)
@@ -34,8 +64,18 @@ export const makeClaudeHarness = (): Harness => ({
   home: ".claude",
   homeEntries: [".claude.json", ".local", ".cache"],
   instructionsFile: "CLAUDE.md",
-  // Stand-in replaced by #193.
-  turn: () => ["claude", "--version"],
+  turn: ({ prompt, model, session }) => [
+    "claude",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--dangerously-skip-permissions",
+    ...(Option.isSome(model) ? ["--model", model.value] : []),
+    ...(Option.isSome(session) ? ["--resume", session.value] : []),
+    "--",
+    prompt,
+  ],
   readEnd: (output) => {
     for (const line of output.trimEnd().split("\n").reverse()) {
       const decoded = Schema.decodeUnknownEither(Schema.parseJson(Result))(
@@ -62,5 +102,18 @@ export const makeClaudeHarness = (): Harness => ({
     }
     return { _tag: "NoEnd" };
   },
-  readActivity: () => Option.none(),
+  readActivity: (output) => {
+    for (const line of output.trimEnd().split("\n").reverse()) {
+      const event = Schema.decodeUnknownEither(Schema.parseJson(Assistant))(
+        line,
+      );
+      if (Either.isLeft(event)) continue;
+      for (const value of [...event.right.message.content].reverse()) {
+        const block = Schema.decodeUnknownEither(ActivityBlock)(value);
+        if (Either.isRight(block))
+          return Option.some(activityText(block.right));
+      }
+    }
+    return Option.none();
+  },
 });

@@ -1,6 +1,6 @@
 # proofbox
 
-proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It can also run a Harness in a Sandbox, so code gets written there and the agent checks it there. Not built yet: ADR 0023 records that decision, and until it ships proofbox only checks work, as the README says.
+proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It can also run a Harness in a Sandbox, so code gets written there and the agent checks it there. ADR 0023 records that decision. Claude Code runs Turns; Codex comes with #194, and the README describes only checking work until #195.
 
 ## Language
 
@@ -103,7 +103,7 @@ _Avoid_: brain, harness, driver, client
 ### Writing code in a Sandbox
 
 **Harness**:
-A coding CLI, such as Claude Code or Codex, that proofbox installs at its newest version and runs inside a Sandbox with all permissions, so it writes, commits, and pushes code there. Each one fits the same Harness seam, the way each Provider fits the Provider seam. Not built yet (ADR 0023).
+A coding CLI, such as Claude Code or Codex, that proofbox installs at its newest version and runs inside a Sandbox with all permissions, so it writes, commits, and pushes code there. Each one fits the same Harness seam, the way each Provider fits the Provider seam. Claude Code is built; Codex is not yet (#194).
 _Avoid_: inner agent, coding agent, worker, bot
 
 **Harness session**:
