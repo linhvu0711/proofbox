@@ -511,6 +511,7 @@ export const makeFakeProvider = (options: {
             executor,
             Command.make(argv[0] ?? "sh", ...argv.slice(1)).pipe(
               Command.workingDirectory(join(dir, "home")),
+              Command.env({ HOME: join(dir, "home") }),
             ),
             options,
             {

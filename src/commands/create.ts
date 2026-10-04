@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
@@ -18,7 +19,7 @@ import {
   UnknownProviderError,
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
-import { checkHarnessCreate } from "../harness-sandbox.ts";
+import { checkHarnessCreate, cloneWorkFolder } from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
@@ -87,9 +88,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       options.harness === undefined
         ? undefined
         : yield* checkHarnessCreate(options.harness, options.work ?? ".");
-    if (check !== undefined) {
-      yield* check.entry.load;
-    }
+    const harness = check === undefined ? undefined : yield* check.entry.load;
     const idle =
       options.idle === undefined
         ? idleDefault(options.os)
@@ -130,10 +129,11 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       options.envFile === undefined
         ? undefined
         : yield* readEnvFile(options.envFile);
+    const folder = options.work ?? (harness === undefined ? undefined : ".");
     const files =
-      options.work === undefined
+      folder === undefined
         ? undefined
-        : yield* readWorkFolder(options.work, workLimit);
+        : yield* readWorkFolder(folder, workLimit);
     const size =
       options.size === undefined ? undefined : yield* parseSize(options.size);
     if (size !== undefined && offer.sizes !== "any") {
@@ -195,8 +195,21 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     // behind; runSetupScript already deletes it for a non-zero script exit,
     // and this covers every other way the steps fail.
     yield* Effect.gen(function* () {
-      if (options.work !== undefined && files !== undefined) {
-        yield* sendWorkFolder(id, options.work, files, workLimit);
+      if (
+        harness !== undefined &&
+        check !== undefined &&
+        folder !== undefined
+      ) {
+        yield* cloneWorkFolder(
+          id,
+          resolve(folder),
+          check.repo,
+          check.githubToken,
+          [harness.home, ...harness.homeEntries],
+        );
+      }
+      if (folder !== undefined && files !== undefined) {
+        yield* sendWorkFolder(id, resolve(folder), files, workLimit);
       }
       if (reused) {
         yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);

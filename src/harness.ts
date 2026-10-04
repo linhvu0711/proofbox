@@ -32,6 +32,8 @@ export interface Harness {
   readonly install: (version: Option.Option<string>) => string;
   // Relative to the Sandbox user's home; instructionsFile sits inside it.
   readonly home: string;
+  // What the install and Harness write beside home; git ignores them.
+  readonly homeEntries: ReadonlyArray<string>;
   readonly instructionsFile: string;
   // The argv of a headless Turn, resuming session when given.
   readonly turn: (request: {

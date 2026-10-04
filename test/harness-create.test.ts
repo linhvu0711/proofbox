@@ -50,6 +50,75 @@ const createArgs = (folder: string, harness = "claude") => [
 
 afterEach(cleanupEnvs);
 
+const fakeLogins = (env: CliEnv) => {
+  loginFile(env, "harness", { fake: { token: "fake-tok-1" } });
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+};
+
+it("create --harness puts the Caller's unpushed commit on top of the branch from GitHub", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  git(folder, "remote", "set-url", "origin", "git@github.com:acme/app.git");
+  writeFileSync(join(folder, "c.txt"), "c\n");
+  git(folder, "add", ".");
+  git(
+    folder,
+    "-c",
+    "user.name=proofbox",
+    "-c",
+    "user.email=test@proofbox.invalid",
+    "commit",
+    "-qm",
+    "local: add c.txt",
+  );
+  fakeLogins(env);
+  // When
+  const created = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const log = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "log",
+    "-2",
+    "--format=%s",
+  ]);
+  const status = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "status",
+    "--porcelain",
+  ]);
+  const token = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    "if grep -rqs github_pat_fake1 .git; then echo found; else echo clean; fi",
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    cloning: created.stderr.includes("proofbox: cloning acme/app\n"),
+    log: log.stdout,
+    status: status.stdout,
+    token: token.stdout,
+  }).toEqual({
+    code: 0,
+    cloning: true,
+    log: "local: add c.txt\ninit\n",
+    status: "",
+    token: "clean\n",
+  });
+});
+
 it("create --harness claude with no Harness login stops before the Provider", async () => {
   // Given
   const env = makeEnv();

@@ -11,6 +11,7 @@ export const makeFakeHarness = (): Harness => ({
   name: "fake",
   install: () => "true",
   home: ".fake-harness",
+  homeEntries: [],
   instructionsFile: "AGENTS.md",
   turn: ({ prompt, session }) => [
     "fake-harness",
