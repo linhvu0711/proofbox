@@ -163,7 +163,8 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                     tally.err += event.bytes.length;
                   }
                   const send = writeFrame(socket, frameOf(event));
-                  return tally.firstMs === undefined
+                  // An empty chunk carries no byte, so it is not the first.
+                  return tally.firstMs === undefined && event.bytes.length > 0
                     ? Effect.flatMap(Clock.currentTimeMillis, (now) => {
                         tally.firstMs = now - start;
                         return send;

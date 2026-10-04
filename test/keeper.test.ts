@@ -38,7 +38,12 @@ import {
   unmarkCreate,
 } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
-import { type Provider, Providers, providerEntry } from "../src/provider.ts";
+import {
+  type ExecEvent,
+  type Provider,
+  Providers,
+  providerEntry,
+} from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import {
@@ -1369,10 +1374,13 @@ describe("Keeper", () => {
     }).pipe(runtimeConfig(env));
   });
 
-  it.scoped("the Keeper logs when the first output byte came", () => {
-    const env = makeEnv();
-    return Effect.gen(function* () {
-      // Given: a command that writes at once, then runs 5 s more
+  // The Keeper log of one exec whose events the Provider scripts;
+  // "pause" stands for 5 s of the command running.
+  const scriptedExecLog = (
+    env: ReturnType<typeof makeEnv>,
+    events: ReadonlyArray<ExecEvent | "pause">,
+  ) =>
+    Effect.gen(function* () {
       const fake = makeFakeProvider({ root: env.root, watch: "none" });
       const info = yield* fake
         .create({
@@ -1381,39 +1389,63 @@ describe("Keeper", () => {
           maxLife: Duration.hours(3),
         })
         .pipe(Effect.provideService(Progress, noProgress));
-      const slowEnd: Provider = {
+      const scripted: Provider = {
         ...fake,
         connect: (ref) =>
           Effect.map(fake.connect(ref), (connection) => ({
             ...connection,
             exec: () =>
-              Stream.make({
-                _tag: "Stdout" as const,
-                bytes: new TextEncoder().encode("hi\n"),
-              }).pipe(
-                Stream.concat(
-                  Stream.drain(Stream.fromEffect(Effect.sleep("5 seconds"))),
+              Stream.fromIterable(events).pipe(
+                Stream.flatMap((event) =>
+                  event === "pause"
+                    ? Stream.drain(Stream.fromEffect(Effect.sleep("5 seconds")))
+                    : Stream.make(event),
                 ),
-                Stream.concat(Stream.make({ _tag: "Exit" as const, code: 0 })),
               ),
           })),
       };
       const id = `fake:${info.name}`;
-      const layers = yield* startKeeper(id, slowEnd);
+      const layers = yield* startKeeper(id, scripted);
       const caller = yield* Effect.fork(
         execInSandbox(id, ["sh"]).pipe(Effect.provide(layers)),
       );
       yield* sleepsNear(5_000);
-      // When
       yield* TestClock.adjust("5 seconds");
       yield* Fiber.join(caller);
+      return readFileSync(join(env.runtime, `fake-${info.name}.log`), "utf8");
+    });
+
+  const hi: ExecEvent = {
+    _tag: "Stdout",
+    bytes: new TextEncoder().encode("hi\n"),
+  };
+  const exit: ExecEvent = { _tag: "Exit", code: 0 };
+
+  it.scoped("the Keeper logs when the first output byte came", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a command that writes at once, then runs 5 s more
+      const events = [hi, "pause", exit] as const;
+      // When
+      const log = yield* scriptedExecLog(env, events);
       // Then
-      const log = readFileSync(
-        join(env.runtime, `fake-${info.name}.log`),
-        "utf8",
-      );
       expect(log).toContain(
         " exec sh out=3 err=0 exit=0 first=0.0s took=5.0s done\n",
+      );
+    }).pipe(runtimeConfig(env));
+  });
+
+  it.scoped("an empty output chunk is not the first byte", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: an empty chunk at once, the first byte 5 s later
+      const empty: ExecEvent = { _tag: "Stdout", bytes: new Uint8Array(0) };
+      const events = [empty, "pause", hi, exit] as const;
+      // When
+      const log = yield* scriptedExecLog(env, events);
+      // Then
+      expect(log).toContain(
+        " exec sh out=3 err=0 exit=0 first=5.0s took=5.0s done\n",
       );
     }).pipe(runtimeConfig(env));
   });
