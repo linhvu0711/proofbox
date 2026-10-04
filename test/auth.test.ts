@@ -1670,6 +1670,7 @@ describe("auth", () => {
               CliOutput.Test,
               providers,
               KeeperClient.Direct.pipe(Layer.provide(providers)),
+              NodeContext.layer,
             ),
           ),
           Effect.withConfigProvider(
