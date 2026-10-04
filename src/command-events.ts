@@ -1,5 +1,5 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Effect, Stream } from "effect";
+import { Chunk, Effect, Stream } from "effect";
 import type { ExecEvent, ExecOptions } from "./provider.ts";
 
 const describe = (cause: unknown) =>
@@ -72,3 +72,30 @@ export const commandEvents = <E>(
       return Stream.concat(events, exit);
     }),
   );
+
+const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
+  Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
+    "utf8",
+  );
+
+// Runs one short process to its end: its exit code, and stdout and stderr
+// as text. Both pipes are read at once, so a full stderr cannot block it.
+export const captureCommand = Effect.fn("commandEvents.captureCommand")(
+  function* (command: Command.Command) {
+    const process = yield* Command.start(command);
+    const [outBytes, errBytes, exitCode] = yield* Effect.all(
+      [
+        Stream.runCollect(process.stdout),
+        Stream.runCollect(process.stderr),
+        process.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+    return {
+      exitCode,
+      stdout: toText(outBytes),
+      stderr: toText(errBytes),
+    };
+  },
+  Effect.scoped,
+);

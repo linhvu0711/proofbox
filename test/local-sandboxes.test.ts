@@ -7,6 +7,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CommandExecutor } from "@effect/platform";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
   ConfigProvider,
@@ -92,9 +94,20 @@ const makeMachine = (
     runtime,
     provider,
     // The Keeper stop is a border: the direct client stops nothing.
-    configured: <A, E>(effect: Effect.Effect<A, E, KeeperClient>) =>
+    configured: <A, E>(
+      effect: Effect.Effect<
+        A,
+        E,
+        KeeperClient | CommandExecutor.CommandExecutor
+      >,
+    ) =>
       effect.pipe(
-        Effect.provide(KeeperClient.Direct.pipe(Layer.provide(providers))),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeContext.layer,
+            KeeperClient.Direct.pipe(Layer.provide(providers)),
+          ),
+        ),
         Effect.withConfigProvider(ConfigProvider.fromMap(config)),
       ),
   };
