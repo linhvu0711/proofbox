@@ -3,7 +3,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,6 +62,130 @@ const fakeLogins = (env: CliEnv) => {
   loginFile(env, "harness", { fake: { token: "fake-tok-1" } });
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
 };
+
+const profileFile = (env: CliEnv, path: string, content: string) => {
+  const root = join(
+    env.env.HOME ?? "",
+    ".config",
+    "proofbox",
+    "harness",
+    "fake",
+  );
+  mkdirSync(join(root, "skills", "s"), { recursive: true });
+  writeFileSync(join(root, path), content);
+};
+
+it("create --harness copies the Harness profile into the Harness home", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  fakeLogins(env);
+  profileFile(env, "AGENTS.md", "# rules\n");
+  profileFile(env, "skills/s/SKILL.md", "skill\n");
+  // When
+  const created = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const rules = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "cat",
+    ".fake-harness/AGENTS.md",
+  ]);
+  const skill = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "cat",
+    ".fake-harness/skills/s/SKILL.md",
+  ]);
+  const status = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "status",
+    "--porcelain",
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    copying: created.stderr.includes("proofbox: copying the Harness profile\n"),
+    rules: rules.stdout,
+    skill: skill.stdout,
+    status: status.stdout,
+  }).toEqual({
+    code: 0,
+    copying: true,
+    rules: "# rules\n",
+    skill: "skill\n",
+    status: "",
+  });
+});
+
+it("create --harness with no Harness profile still works", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  fakeLogins(env);
+  // When
+  const created = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const result = await runCli(env, [
+    "exec",
+    created.stdout.trim(),
+    "--",
+    "sh",
+    "-c",
+    "if [ -e .fake-harness ]; then echo there; else echo none; fi",
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    copying: created.stderr.includes("Harness profile"),
+    value: result.stdout,
+  }).toEqual({ code: 0, copying: false, value: "none\n" });
+});
+
+it("a Snapshot saved by create --harness holds no login and no profile file", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "harness", { fake: { token: "fake-tok-9d2b" } });
+  loginFile(env, "github", { acme: { token: "github_pat_9d2b" } });
+  profileFile(env, "AGENTS.md", "profile-mark-7c1e\n");
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshots-"));
+  trackTempDir(dir);
+  const script = join(env.env.HOME ?? "", "setup.sh");
+  writeFileSync(script, "#!/bin/sh\necho ran > ran.txt\n");
+  // When
+  const created = await runCli(
+    env,
+    [...createArgs(folder, "fake"), "--setup", script],
+    {
+      set: {
+        PROOFBOX_GITHUB_URL: `file://${github}`,
+        PROOFBOX_FAKE_SNAPSHOTS: dir,
+      },
+    },
+  );
+  const paths = readdirSync(dir, { recursive: true, encoding: "utf8" });
+  const contents = paths
+    .filter((path) => statSync(join(dir, path)).isFile())
+    .map((path) => readFileSync(join(dir, path), "utf8"))
+    .join("\n");
+  // Then
+  expect({
+    code: created.exitCode,
+    saved: created.stderr.includes("proofbox: Snapshot saved, Fingerprint "),
+    count: readdirSync(dir).length,
+    leaked: /fake-tok-9d2b|github_pat_9d2b|profile-mark-7c1e/.test(contents),
+    profile: paths.some((path) => path.includes(".fake-harness")),
+  }).toEqual({ code: 0, saved: true, count: 1, leaked: false, profile: false });
+});
 
 it("a command after create --harness sees the Harness login and GH_TOKEN", async () => {
   // Given

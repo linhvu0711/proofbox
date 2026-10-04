@@ -68,7 +68,7 @@ const withUploadLock = Effect.fn("upload.withUploadLock")(function* <A, E, R>(
   })(effect);
 });
 
-const runInSandbox = Effect.fn("upload.runInSandbox")(function* (
+export const runInSandbox = Effect.fn("upload.runInSandbox")(function* (
   keeper: KeeperClient,
   rawId: string,
   argv: ReadonlyArray<string>,

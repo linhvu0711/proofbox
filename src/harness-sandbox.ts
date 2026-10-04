@@ -1,9 +1,14 @@
 import { join, resolve } from "node:path";
-import { Command, FileSystem } from "@effect/platform";
+import {
+  Command,
+  FileSystem,
+  type Error as PlatformError,
+} from "@effect/platform";
 import { Clock, Config, Effect, Option, Redacted, Stream } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { runKeepingTail } from "./command-tail.ts";
 import { harnessEntryFor } from "./commands/harness.ts";
+import { runInSandbox } from "./commands/upload.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
   CloneRefusedError,
@@ -14,11 +19,55 @@ import {
   UploadFailedError,
 } from "./errors.ts";
 import { type GithubRepo, readGithubRepo } from "./github-repo.ts";
+import type { Harness } from "./harness.ts";
+import { harnessProfilePath } from "./harness-profile.ts";
+import { KeeperClient } from "./keeper/keeper-client.ts";
 import { readGithubLogins } from "./login/github-logins.ts";
 import { readHarnessLogins } from "./login/logins-file.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
+import { MAX_SIZE_DEFAULT } from "./upload/max-size.ts";
+import { packFiles } from "./upload/pack.ts";
+
+export const copyHarnessProfile = Effect.fn(
+  "harnessSandbox.copyHarnessProfile",
+)(function* (rawId: string, harness: Harness) {
+  const dir = yield* harnessProfilePath(harness.name);
+  const fs = yield* FileSystem.FileSystem;
+  const local = (error: PlatformError.PlatformError) =>
+    new ProviderError({ provider: "local", reason: platformReason(error) });
+  if (!(yield* fs.exists(dir).pipe(Effect.mapError(local)))) return;
+  const paths = (yield* fs
+    .readDirectory(dir, { recursive: true })
+    .pipe(Effect.mapError(local))).sort();
+  const providers = yield* Providers;
+  const id = yield* resolveSandboxId(rawId, providers);
+  const info = yield* id.provider.get(id);
+  const progress = yield* Progress;
+  const keeper = yield* KeeperClient;
+  yield* progress.step(
+    "copying the Harness profile",
+    withDeadlinePush(
+      id.provider,
+      id,
+      info,
+    )(
+      runInSandbox(
+        keeper,
+        rawId,
+        [
+          "sh",
+          "-c",
+          'umask 077; mkdir -p "$HOME/$1" && tar -x -f - -C "$HOME/$1"',
+          "sh",
+          harness.home,
+        ],
+        packFiles(dir, rawId, paths, MAX_SIZE_DEFAULT),
+      ),
+    ),
+  );
+});
 
 export const checkHarnessCreate = Effect.fn(
   "harnessSandbox.checkHarnessCreate",

@@ -19,7 +19,11 @@ import {
   UnknownProviderError,
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
-import { checkHarnessCreate, cloneWorkFolder } from "../harness-sandbox.ts";
+import {
+  checkHarnessCreate,
+  cloneWorkFolder,
+  copyHarnessProfile,
+} from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
@@ -245,6 +249,9 @@ export const createSandbox = Effect.fn("create.createSandbox")(
               ),
             ),
           );
+      }
+      if (harness !== undefined) {
+        yield* copyHarnessProfile(id, harness);
       }
       if (secrets !== undefined) {
         yield* sendSecrets(
