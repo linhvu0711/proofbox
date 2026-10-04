@@ -196,6 +196,25 @@ export const endText = (
       text: `done\n${end.lastMessage}\n`,
       session: Option.some(end.session),
     };
+  if (end._tag === "Failed") {
+    if (end.kind === "login")
+      return {
+        code: TURN_EXIT.login,
+        text: `failed: Harness login refused: ${end.message}\nfix: run proofbox harness login ${harness.name}\n`,
+        session: end.session,
+      };
+    if (end.kind === "usage-limit")
+      return {
+        code: TURN_EXIT.usageLimit,
+        text: `failed: usage limit: ${end.message}\n${Option.isSome(end.resets) ? `resets: ${end.resets.value}\n` : ""}fix: wait for the reset, then send the next prompt\n`,
+        session: end.session,
+      };
+    return {
+      code: TURN_EXIT.crash,
+      text: `failed: Harness crashed: ${end.message}\n${errLines}fix: read the lines above, then send the next prompt\n`,
+      session: end.session,
+    };
+  }
   return {
     code: TURN_EXIT.crash,
     text: `failed: Harness crashed ${Option.isSome(exit) ? `with exit code ${exit.value}` : "with no exit code"}\n${errLines}fix: read the lines above, then send the next prompt\n`,

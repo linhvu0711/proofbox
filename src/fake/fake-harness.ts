@@ -5,6 +5,8 @@ const End = Schema.Struct({
   type: Schema.Literal("end"),
   session: Schema.String,
   message: Schema.String,
+  error: Schema.optional(Schema.Literal("login", "usage-limit", "other")),
+  resets: Schema.optional(Schema.String),
 });
 
 const FAKE_HARNESS_SCRIPT = String.raw`#!/bin/sh
@@ -61,6 +63,15 @@ export const makeFakeHarness = (): Harness => ({
       const end = Schema.decodeUnknownEither(End)(
         JSON.parse(output.trimEnd().split("\n").at(-1) ?? ""),
       );
+      if (Either.isRight(end) && end.right.error !== undefined) {
+        return {
+          _tag: "Failed",
+          session: Option.some(end.right.session),
+          kind: end.right.error,
+          message: end.right.message,
+          resets: Option.fromNullable(end.right.resets),
+        };
+      }
       return Either.isRight(end)
         ? {
             _tag: "Done",

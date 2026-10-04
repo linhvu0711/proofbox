@@ -22,7 +22,7 @@ export type TurnEnd =
       readonly session: Option.Option<string>;
       readonly kind: "login" | "usage-limit" | "other";
       readonly message: string;
-      readonly resetsAt: Option.Option<Date>;
+      readonly resets: Option.Option<string>;
     }
   | { readonly _tag: "NoEnd" };
 

@@ -145,6 +145,51 @@ it("a prompt while a Turn runs is refused", async () => {
   );
 });
 
+it("a refused Harness login prints the fix and exits 21", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "fail login"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
+    code: 21,
+    stdout:
+      "failed: Harness login refused: 401 login refused\nfix: run proofbox harness login fake\n",
+  });
+});
+
+it("a usage limit prints the reset time and exits 22", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "fail usage-limit"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
+    code: 22,
+    stdout:
+      "failed: usage limit: usage limit reached\nresets: 2026-10-05T03:00:00Z\nfix: wait for the reset, then send the next prompt\n",
+  });
+});
+
+it("a Harness crash prints its last lines and exits 23", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "crash"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
+    code: 23,
+    stdout:
+      "failed: Harness crashed with exit code 3\nfake-harness: crashed on purpose\nfix: read the lines above, then send the next prompt\n",
+  });
+});
+
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {
   // Given
   const env = makeEnv();
