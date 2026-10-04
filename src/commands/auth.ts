@@ -19,6 +19,10 @@ import { formatTime } from "../format-time.ts";
 import { Harnesses } from "../harness.ts";
 import { type LogoutFailure, logOut } from "../local-sandboxes.ts";
 import {
+  type GithubLoginsFile,
+  readGithubLogins,
+} from "../login/github-logins.ts";
+import {
   changeLogins,
   type HarnessLoginsFile,
   readHarnessLogins,
@@ -27,7 +31,7 @@ import {
 } from "../login/logins-file.ts";
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
-import { readStdinText } from "../login/stdin-token.ts";
+import { readStdin } from "../login/stdin.ts";
 import { Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -84,7 +88,7 @@ export const loginToProvider = Effect.fn("auth.loginToProvider")(
     }
     const output = yield* CliOutput;
     if (options.token) {
-      const raw = yield* readStdinText();
+      const raw = yield* readStdin();
       const token = raw.trim();
       if (token === "") {
         return yield* new NoTokenError({ provider: provider.name });
@@ -291,6 +295,16 @@ export const showAuthStatus = Effect.gen(function* () {
       }
     }
     yield* output.out(`${provider.name}  ${line}\n`);
+  }
+  const githubLogins = yield* readGithubLogins.pipe(
+    Effect.catchAll(() => Effect.succeed<GithubLoginsFile>({})),
+  );
+  for (const [owner, login] of Object.entries(githubLogins).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    yield* output.out(
+      `github:${owner}  logged in with token …${Redacted.value(login.token).slice(-4)}, expiry not known, saved login\n`,
+    );
   }
   const harnesses = yield* Harnesses;
   const savedHarnesses = yield* readHarnessLogins.pipe(

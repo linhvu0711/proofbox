@@ -587,6 +587,26 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
   }
 }
 
+export class InvalidGithubOwnerError extends Data.TaggedError(
+  "InvalidGithubOwnerError",
+)<{
+  readonly owner: string;
+}> {
+  get message() {
+    return `Not a GitHub owner name: ${JSON.stringify(this.owner)}. Use letters, digits, and single hyphens, 39 characters at most, then run: echo <token> | proofbox github login <owner>`;
+  }
+}
+
+export class NotFineGrainedTokenError extends Data.TaggedError(
+  "NotFineGrainedTokenError",
+)<{
+  readonly owner: string;
+}> {
+  get message() {
+    return `Not a fine-grained GitHub token. Make one for ${this.owner} at https://github.com/settings/personal-access-tokens/new, then run: echo <token> | proofbox github login ${this.owner}`;
+  }
+}
+
 export class NoHarnessTokenError extends Data.TaggedError(
   "NoHarnessTokenError",
 )<{
