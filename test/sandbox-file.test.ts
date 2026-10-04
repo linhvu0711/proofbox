@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { Effect, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import type { DockerClient } from "../src/docker/docker-client.ts";
@@ -59,11 +60,15 @@ describe("Sandbox files", () => {
     const provider = makeDockerProvider({ client, fs: nodeFs });
     // When
     const files = sandboxFiles(provider, "abc123", "linux");
+    const state = posix.dirname(files.setupScript);
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/run/proofbox/secrets/env",
+      harness: posix.join(state, "harness"),
+      session: posix.join(state, "harness-session"),
+      turn: posix.join(state, "turn"),
     });
   });
 
@@ -72,11 +77,15 @@ describe("Sandbox files", () => {
     const provider = namespace();
     // When
     const files = sandboxFiles(provider, "abc123def4567", "linux");
+    const state = posix.dirname(files.setupScript);
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/run/proofbox/secrets/env",
+      harness: posix.join(state, "harness"),
+      session: posix.join(state, "harness-session"),
+      turn: posix.join(state, "turn"),
     });
   });
 
@@ -85,11 +94,15 @@ describe("Sandbox files", () => {
     const provider = namespace();
     // When
     const files = sandboxFiles(provider, "abc123def4567", "macos");
+    const state = posix.dirname(files.setupScript);
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/var/run/proofbox-secrets/env",
+      harness: posix.join(state, "harness"),
+      session: posix.join(state, "harness-session"),
+      turn: posix.join(state, "turn"),
     });
   });
 
@@ -102,11 +115,15 @@ describe("Sandbox files", () => {
     });
     // When
     const files = sandboxFiles(provider, "abc123", "linux");
+    const state = posix.dirname(files.setupScript);
     // Then
     expect(files).toEqual({
       setupScript: "/tmp/pb-fake/abc123/state/setup",
       hashList: "/tmp/pb-fake/abc123/state/work-hashes.json",
       secrets: "/tmp/pb-fake/abc123/secrets/env",
+      harness: posix.join(state, "harness"),
+      session: posix.join(state, "harness-session"),
+      turn: posix.join(state, "turn"),
     });
   });
 });
