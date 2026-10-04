@@ -135,6 +135,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
             out: 0,
             err: 0,
             exit: undefined as number | undefined,
+            firstMs: undefined as number | undefined,
           };
           let logged = false;
           const log = (start: number, ended: string) =>
@@ -161,7 +162,13 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                   } else {
                     tally.err += event.bytes.length;
                   }
-                  return writeFrame(socket, frameOf(event));
+                  const send = writeFrame(socket, frameOf(event));
+                  return tally.firstMs === undefined
+                    ? Effect.flatMap(Clock.currentTimeMillis, (now) => {
+                        tally.firstMs = now - start;
+                        return send;
+                      })
+                    : send;
                 }
                 // The Caller may close as soon as it reads the exit, so the
                 // command counts as ended, and is logged, before it goes.
@@ -254,6 +261,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                 out: 0,
                 err: 0,
                 exit: undefined,
+                firstMs: undefined,
                 tookMs: 0,
                 ended: "done",
               });

@@ -12,6 +12,7 @@ import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import {
   type KeeperLogEntry,
+  keeperLogLine,
   programOf,
   writeKeeperLog,
 } from "../src/keeper/keeper-log.ts";
@@ -31,6 +32,7 @@ const entry: KeeperLogEntry = {
   out: 5603328,
   err: 22,
   exit: undefined,
+  firstMs: 118400,
   tookMs: 120000,
   ended: "gave up",
 };
@@ -42,7 +44,7 @@ describe("Keeper log", () => {
     }
   });
 
-  it.effect("a log line holds the program, bytes, exit, time, and end", () =>
+  it.effect("a log line holds the program, bytes, exit, times, and end", () =>
     Effect.gen(function* () {
       // Given
       const path = tempLog();
@@ -50,10 +52,30 @@ describe("Keeper log", () => {
       yield* writeKeeperLog(path, entry);
       // Then
       expect(readFileSync(path, "utf8")).toBe(
-        "2026-10-01T08:28:54Z exec pixel screenshot out=5603328 err=22 exit=- took=120.0s gave up\n",
+        "2026-10-01T08:28:54Z exec pixel screenshot out=5603328 err=22 exit=- first=118.4s took=120.0s gave up\n",
       );
     }),
   );
+
+  it("a command that wrote no output shows no first-byte time", () => {
+    // Given
+    const silent: KeeperLogEntry = {
+      ...entry,
+      program: programOf(["/opt/proofbox/pixel", "key"]),
+      out: 0,
+      err: 0,
+      exit: 0,
+      firstMs: undefined,
+      tookMs: 1500,
+      ended: "done",
+    };
+    // When
+    const line = keeperLogLine(silent);
+    // Then
+    expect(line).toBe(
+      "2026-10-01T08:28:54Z exec pixel key out=0 err=0 exit=0 first=- took=1.5s done\n",
+    );
+  });
 
   it("a pixel line names the sub-command and not the text", () => {
     // Given

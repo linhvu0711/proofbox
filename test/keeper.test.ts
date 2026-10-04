@@ -1364,7 +1364,56 @@ describe("Keeper", () => {
       expect(
         readFileSync(join(env.runtime, `fake-${keeper.name}.log`), "utf8"),
       ).toBe(
-        "1970-01-01T00:10:00Z info - out=0 err=0 exit=- took=0.0s done\n1970-01-01T00:10:00Z exec sh out=3 err=0 exit=0 took=0.0s done\n",
+        "1970-01-01T00:10:00Z info - out=0 err=0 exit=- first=- took=0.0s done\n1970-01-01T00:10:00Z exec sh out=3 err=0 exit=0 first=0.0s took=0.0s done\n",
+      );
+    }).pipe(runtimeConfig(env));
+  });
+
+  it.scoped("the Keeper logs when the first output byte came", () => {
+    const env = makeEnv();
+    return Effect.gen(function* () {
+      // Given: a command that writes at once, then runs 5 s more
+      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const info = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const slowEnd: Provider = {
+        ...fake,
+        connect: (ref) =>
+          Effect.map(fake.connect(ref), (connection) => ({
+            ...connection,
+            exec: () =>
+              Stream.make({
+                _tag: "Stdout" as const,
+                bytes: new TextEncoder().encode("hi\n"),
+              }).pipe(
+                Stream.concat(
+                  Stream.drain(Stream.fromEffect(Effect.sleep("5 seconds"))),
+                ),
+                Stream.concat(Stream.make({ _tag: "Exit" as const, code: 0 })),
+              ),
+          })),
+      };
+      const id = `fake:${info.name}`;
+      const layers = yield* startKeeper(id, slowEnd);
+      const caller = yield* Effect.fork(
+        execInSandbox(id, ["sh"]).pipe(Effect.provide(layers)),
+      );
+      yield* sleepsNear(5_000);
+      // When
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(caller);
+      // Then
+      const log = readFileSync(
+        join(env.runtime, `fake-${info.name}.log`),
+        "utf8",
+      );
+      expect(log).toContain(
+        " exec sh out=3 err=0 exit=0 first=0.0s took=5.0s done\n",
       );
     }).pipe(runtimeConfig(env));
   });
