@@ -9,6 +9,9 @@ export interface SandboxFiles {
   readonly setupScript: string;
   readonly hashList: string;
   readonly secrets: string;
+  readonly harness: string;
+  readonly session: string;
+  readonly turn: string;
 }
 
 export const sandboxFiles = (
@@ -21,6 +24,9 @@ export const sandboxFiles = (
     setupScript: posix.join(folders.state, "setup"),
     hashList: posix.join(folders.state, "work-hashes.json"),
     secrets: posix.join(folders.secrets, "env"),
+    harness: posix.join(folders.state, "harness"),
+    session: posix.join(folders.state, "harness-session"),
+    turn: posix.join(folders.state, "turn"),
   };
 };
 

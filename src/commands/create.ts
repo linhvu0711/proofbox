@@ -9,6 +9,7 @@ import {
   withDeadlinePush,
 } from "../deadline.ts";
 import {
+  HarnessError,
   HarnessVersionNeedsHarnessError,
   MissingCapabilityError,
   ProviderError,
@@ -30,6 +31,7 @@ import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
 import { lacksFeature, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
+import { sandboxFiles, writeSandboxFile } from "../sandbox-file.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
@@ -263,6 +265,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           Option.fromNullable(options.harnessVersion),
         );
         yield* copyHarnessProfile(id, harness);
+        const code = yield* writeSandboxFile(
+          id,
+          sandboxFiles(provider, sandbox.name, options.os).harness,
+          new TextEncoder().encode(`${harness.name}\n`),
+          { executable: false },
+        );
+        if (code !== 0) {
+          return yield* new HarnessError({
+            harness: harness.name,
+            reason: `could not write the Harness name in the Sandbox (exit code ${code})`,
+          });
+        }
       }
       if (secrets !== undefined) {
         yield* sendSecrets(

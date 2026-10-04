@@ -4,7 +4,7 @@ A Harness needs a model login, and it needs a GitHub login to push and open pull
 
 - Each Harness declares its machine login. Claude Code uses the one-year token from `claude setup-token`, which uses the Caller's subscription and which the Caller can delete in Claude under Settings → Claude Code. Codex uses an API key (`CODEX_API_KEY`). proofbox keeps them in `~/.config/proofbox/`, readable only by the owner, and never touches the Caller's own laptop login of that Harness.
 - The GitHub login is a fine-grained token that the Caller makes, for the repos they pick, with code and pull request rights and an expiry. A fine-grained token has one owner, so proofbox keeps one per owner and picks it from the repo's remote. It goes in as `GH_TOKEN`. A token that can write code can usually merge too, so proofbox tells the Caller to protect the default branch with a ruleset that needs a review.
-- Both go in only when a Turn starts, the same way a Secret does, so no Snapshot ever holds them. A Harness profile goes in at the same time, because its MCP config can hold tokens.
+- Both go in when `create --harness` makes the Sandbox, after any Snapshot is saved, the same way a Secret does, so no Snapshot ever holds them. A Harness profile goes in at the same time, because its MCP config can hold tokens.
 
 Sources: Claude Code auth, https://code.claude.com/docs/en/iam; deleting the token, https://support.anthropic.com/en/articles/10310342-how-do-i-log-out-of-all-active-sessions; Codex auth, https://developers.openai.com/codex/auth; single-use Codex refresh tokens, https://github.com/openai/codex/issues/15410. Checked 2026-10-02.
 

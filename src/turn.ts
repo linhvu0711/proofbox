@@ -1,0 +1,200 @@
+import { Effect, Option, Stream } from "effect";
+import { HarnessError } from "./errors.ts";
+import type { Harness } from "./harness.ts";
+import { KeeperClient } from "./keeper/keeper-client.ts";
+import { Providers } from "./provider.ts";
+import { sandboxFiles } from "./sandbox-file.ts";
+import { resolveSandboxId } from "./sandbox-id.ts";
+import { withSecrets } from "./secrets.ts";
+
+const START = `set -eu
+umask 077
+t=$1; shift
+rm -rf "$t"; mkdir -p "$t"
+nohup perl -MPOSIX -e 'POSIX::setsid() >= 0 or die; exec @ARGV or die' \\
+  sh -c 't=$1; shift; "$@" > "$t/out" 2> "$t/err"; echo "$?" > "$t/exit.tmp"; mv "$t/exit.tmp" "$t/exit"' \\
+  sh "$t" "$@" < /dev/null > /dev/null 2>&1 &
+echo "$!" > "$t/pid"
+`;
+
+const READ = `set -eu
+h=$1; t=$2; s=$3; seconds=$4
+if [ ! -f "$h" ]; then echo no-harness; exit; fi
+head -n 1 "$h"
+if [ -f "$s" ]; then head -n 1 "$s"; else echo; fi
+if [ ! -f "$t/pid" ]; then echo none; exit; fi
+pid=$(cat "$t/pid")
+while [ "$seconds" -gt 0 ] && [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$pid" 2>/dev/null; do
+  sleep 1
+  seconds=$((seconds - 1))
+done
+if [ -f "$t/result" ]; then echo saved; cat "$t/result"; exit; fi
+if [ -f "$t/stopped" ]; then echo stopped; exit; fi
+if [ -f "$t/exit" ]; then
+  echo "ended $(cat "$t/exit")"
+elif kill -0 "$pid" 2>/dev/null; then
+  printf 'running '
+  perl -e 'print +(stat shift)[9] || time' "$t/out"
+  echo
+else
+  echo 'ended none'
+fi
+if [ -f "$t/out" ]; then tail -n 50 "$t/out" | tail -c 1048576; fi
+echo proofbox-turn-err
+if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
+`;
+
+export type TurnState =
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Saved"; readonly code: number; readonly text: string }
+  | { readonly _tag: "Stopped" }
+  | {
+      readonly _tag: "Running";
+      readonly activityAt: Date;
+      readonly output: string;
+    }
+  | {
+      readonly _tag: "Ended";
+      readonly exit: Option.Option<number>;
+      readonly output: string;
+      readonly errLines: string;
+    };
+
+export const TURN_EXIT = {
+  done: 0,
+  stopped: 20,
+  login: 21,
+  usageLimit: 22,
+  crash: 23,
+  stillRunning: 124,
+} as const;
+
+export const runTurnScript = Effect.fn("turn.runTurnScript")(function* (
+  rawId: string,
+  argv: ReadonlyArray<string>,
+) {
+  const keeper = yield* KeeperClient;
+  const events = yield* keeper.exec(rawId, argv);
+  const chunks: Uint8Array[] = [];
+  let code = 0;
+  yield* events.pipe(
+    Stream.runForEach((event) =>
+      Effect.sync(() => {
+        if (event._tag === "Stdout") chunks.push(event.bytes);
+        if (event._tag === "Exit") code = event.code;
+      }),
+    ),
+  );
+  return { code, out: Buffer.concat(chunks).toString("utf8") };
+});
+
+const turnFiles = Effect.fn("turn.turnFiles")(function* (rawId: string) {
+  const providers = yield* Providers;
+  const id = yield* resolveSandboxId(rawId, providers);
+  const keeper = yield* KeeperClient;
+  const info = yield* keeper.info(rawId);
+  return sandboxFiles(id.provider, id.name, info.os);
+});
+
+export const readTurn = Effect.fn("turn.readTurn")(function* (
+  rawId: string,
+  waitSeconds: number,
+) {
+  const files = yield* turnFiles(rawId);
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    READ,
+    "sh",
+    files.harness,
+    files.turn,
+    files.session,
+    String(waitSeconds),
+  ]);
+  if (result.code !== 0) {
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: `could not read the Turn (exit code ${result.code})`,
+    });
+  }
+  const [name = "", session = "", status = "", ...rest] =
+    result.out.split("\n");
+  const body = rest.join("\n");
+  const separator = body.lastIndexOf("proofbox-turn-err\n");
+  const output = separator < 0 ? body : body.slice(0, separator);
+  const errLines =
+    separator < 0 ? "" : body.slice(separator + "proofbox-turn-err\n".length);
+  let state: TurnState;
+  if (name === "no-harness" || status === "none") state = { _tag: "None" };
+  else if (status === "saved") {
+    const newline = body.indexOf("\n");
+    state = {
+      _tag: "Saved",
+      code: Number(body.slice(0, newline)),
+      text: body.slice(newline + 1),
+    };
+  } else if (status === "stopped") state = { _tag: "Stopped" };
+  else if (status.startsWith("running "))
+    state = {
+      _tag: "Running",
+      activityAt: new Date(Number(status.slice(8)) * 1000),
+      output,
+    };
+  else if (status.startsWith("ended "))
+    state = {
+      _tag: "Ended",
+      exit:
+        status === "ended none"
+          ? Option.none()
+          : Option.some(Number(status.slice(6))),
+      output,
+      errLines,
+    };
+  else
+    return yield* new HarnessError({
+      harness: name,
+      reason: "could not read the Turn state",
+    });
+  return {
+    files,
+    harness: name === "no-harness" ? Option.none<string>() : Option.some(name),
+    session: session === "" ? Option.none<string>() : Option.some(session),
+    state,
+  };
+});
+
+export const startTurn = Effect.fn("turn.startTurn")(function* (
+  rawId: string,
+  argv: ReadonlyArray<string>,
+) {
+  const files = yield* turnFiles(rawId);
+  const result = yield* runTurnScript(
+    rawId,
+    withSecrets(files.secrets, ["sh", "-c", START, "sh", files.turn, ...argv]),
+  );
+  if (result.code !== 0)
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: `could not start the Turn (exit code ${result.code})`,
+    });
+});
+
+export const endText = (
+  harness: Harness,
+  exit: Option.Option<number>,
+  output: string,
+  errLines: string,
+) => {
+  const end = harness.readEnd(output);
+  if (end._tag === "Done")
+    return {
+      code: TURN_EXIT.done,
+      text: `done\n${end.lastMessage}\n`,
+      session: Option.some(end.session),
+    };
+  return {
+    code: TURN_EXIT.crash,
+    text: `failed: Harness crashed ${Option.isSome(exit) ? `with exit code ${exit.value}` : "with no exit code"}\n${errLines}fix: read the lines above, then send the next prompt\n`,
+    session: Option.none<string>(),
+  };
+};

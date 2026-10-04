@@ -7,14 +7,51 @@ const End = Schema.Struct({
   message: Schema.String,
 });
 
+const FAKE_HARNESS_SCRIPT = String.raw`#!/bin/sh
+set -eu
+shift
+session=fake-$$
+if [ "$1" = --resume ]; then session=$2; shift 2; fi
+prompt=$1
+mkdir -p "$HOME/.fake-harness/sessions"
+history="$HOME/.fake-harness/sessions/$session"
+heard=$(paste -sd ';' "$history" 2>/dev/null || true)
+printf '%s\n' "$prompt" >> "$history"
+echo '{"type":"activity","text":"read the prompt"}'
+case "$prompt" in
+  'sleep '*)
+    n=$(printf '%s' "$prompt" | cut -d ' ' -f 2)
+    printf '{"type":"activity","text":"sleeping %ss"}\n' "$n"
+    sleep "$n"
+    message="slept $n"s
+    ;;
+  recall) message="remembers: $heard" ;;
+  'fail login')
+    printf '{"type":"end","session":"%s","error":"login","message":"401 login refused"}\n' "$session"
+    exit 1
+    ;;
+  'fail usage-limit')
+    printf '{"type":"end","session":"%s","error":"usage-limit","message":"usage limit reached","resets":"2026-10-05T03:00:00Z"}\n' "$session"
+    exit 1
+    ;;
+  crash) echo 'fake-harness: crashed on purpose' >&2; exit 3 ;;
+  *) message="did: $prompt" ;;
+esac
+perl -MJSON::PP -e 'print encode_json({type => "end", session => $ARGV[0], message => $ARGV[1]}), "\n"' "$session" "$message"
+`;
+
 export const makeFakeHarness = (): Harness => ({
   name: "fake",
-  install: () => "true",
+  install: () =>
+    `set -eu\nmkdir -p "$HOME/.local/bin"\ncat > "$HOME/.local/bin/fake-harness" <<'PROOFBOX_FAKE_HARNESS'\n${FAKE_HARNESS_SCRIPT}\nPROOFBOX_FAKE_HARNESS\nchmod 755 "$HOME/.local/bin/fake-harness"`,
   home: ".fake-harness",
-  homeEntries: [],
+  homeEntries: [".local"],
   instructionsFile: "AGENTS.md",
   turn: ({ prompt, session }) => [
-    "fake-harness",
+    "sh",
+    "-c",
+    'exec "$HOME/.local/bin/fake-harness" "$@"',
+    "sh",
     "turn",
     ...(Option.isSome(session) ? ["--resume", session.value] : []),
     prompt,

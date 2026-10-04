@@ -12,7 +12,12 @@ import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { loginToGithub } from "./commands/github.ts";
-import { initHarnessProfile, loginToHarness } from "./commands/harness.ts";
+import {
+  initHarnessProfile,
+  loginToHarness,
+  promptHarness,
+  waitForTurn,
+} from "./commands/harness.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { openLive } from "./commands/live.ts";
@@ -372,8 +377,32 @@ const harnessProfile = Command.make("profile").pipe(
   Command.withSubcommands([harnessProfileInit]),
 );
 
+const harnessPrompt = Command.make(
+  "prompt",
+  {
+    id: Args.text({ name: "id" }),
+    prompt: Args.text({ name: "prompt" }),
+    model: Options.text("model").pipe(Options.optional),
+  },
+  ({ id, prompt, model }) => promptHarness(id, prompt, model),
+);
+
+const harnessWait = Command.make(
+  "wait",
+  {
+    id: Args.text({ name: "id" }),
+    timeout: Options.text("timeout").pipe(Options.optional),
+  },
+  ({ id, timeout }) => waitForTurn(id, timeout),
+);
+
 const harness = Command.make("harness").pipe(
-  Command.withSubcommands([harnessLogin, harnessProfile]),
+  Command.withSubcommands([
+    harnessLogin,
+    harnessProfile,
+    harnessPrompt,
+    harnessWait,
+  ]),
 );
 
 const live = Command.make(

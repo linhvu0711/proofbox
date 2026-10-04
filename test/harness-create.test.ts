@@ -19,49 +19,17 @@ import {
   runCli,
   trackTempDir,
 } from "./support/cli.ts";
+import {
+  createArgs,
+  fakeLogins,
+  loginFile,
+  makeGithub,
+} from "./support/harness.ts";
 
 const git = (folder: string, ...args: string[]) =>
   execFileSync("git", args, { cwd: folder, encoding: "utf8" });
 
-const makeGithub = (committed: Record<string, string> = { "a.txt": "a\n" }) => {
-  const source = makeGitFolder({ committed });
-  const github = mkdtempSync(join(tmpdir(), "proofbox-github-"));
-  trackTempDir(github);
-  mkdirSync(join(github, "acme"));
-  git(source, "clone", "-q", "--bare", source, join(github, "acme", "app.git"));
-  const folder = mkdtempSync(join(tmpdir(), "proofbox-caller-"));
-  trackTempDir(folder);
-  git(folder, "clone", "-q", join(github, "acme", "app.git"), folder);
-  git(folder, "remote", "set-url", "origin", "https://github.com/acme/app.git");
-  return { folder, github };
-};
-
-const loginFile = (env: CliEnv, name: string, value: unknown) => {
-  const config = join(env.env.HOME ?? "", ".config", "proofbox");
-  mkdirSync(config, { recursive: true });
-  writeFileSync(join(config, `${name}-logins.json`), JSON.stringify(value), {
-    mode: 0o600,
-  });
-};
-
-const createArgs = (folder: string, harness = "claude") => [
-  "create",
-  "--os",
-  "linux",
-  "--provider",
-  "fake",
-  "--harness",
-  harness,
-  "--work",
-  folder,
-];
-
 afterEach(cleanupEnvs);
-
-const fakeLogins = (env: CliEnv) => {
-  loginFile(env, "harness", { fake: { token: "fake-tok-1" } });
-  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
-};
 
 it("create --harness prints a step for the clone and one for the install", async () => {
   // Given

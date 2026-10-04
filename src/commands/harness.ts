@@ -13,6 +13,7 @@ import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
+import { endText, readTurn, startTurn } from "../turn.ts";
 
 export const harnessEntryFor = Effect.fn("harness.harnessEntryFor")(function* (
   name: string,
@@ -67,6 +68,61 @@ export const loginToHarness = Effect.fn("harness.loginToHarness")(function* (
   const raw = yield* readStdinText();
   yield* saveHarnessLogin(entry, raw);
 });
+
+export const promptHarness = Effect.fn("harness.promptHarness")(function* (
+  rawId: string,
+  prompt: string,
+  model: Option.Option<string>,
+) {
+  const turn = yield* readTurn(rawId, 0);
+  if (Option.isNone(turn.harness))
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: "no Harness in this Sandbox",
+    });
+  const entry = yield* harnessEntryFor(turn.harness.value);
+  const harness = yield* entry.load;
+  yield* startTurn(
+    rawId,
+    harness.turn({ prompt, model, session: turn.session }),
+  );
+  const output = yield* CliOutput;
+  yield* output.err(
+    `proofbox: turn started; run proofbox harness wait ${rawId}\n`,
+  );
+}, Effect.scoped);
+
+export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
+  rawId: string,
+  _timeout: Option.Option<string>,
+) {
+  const output = yield* CliOutput;
+  while (true) {
+    const turn = yield* readTurn(rawId, 5);
+    if (Option.isNone(turn.harness))
+      return yield* new HarnessError({
+        harness: rawId,
+        reason: "no Harness in this Sandbox",
+      });
+    if (turn.state._tag === "Running") continue;
+    if (turn.state._tag !== "Ended")
+      return yield* new HarnessError({
+        harness: turn.harness.value,
+        reason: "no Turn has run yet",
+      });
+    const entry = yield* harnessEntryFor(turn.harness.value);
+    const harness = yield* entry.load;
+    const result = endText(
+      harness,
+      turn.state.exit,
+      turn.state.output,
+      turn.state.errLines,
+    );
+    yield* output.out(result.text);
+    yield* output.setExitCode(result.code);
+    return;
+  }
+}, Effect.scoped);
 
 export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
   function* (name: string) {
