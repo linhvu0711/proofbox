@@ -453,6 +453,29 @@ describe("Namespace errors", () => {
     expect(result.exitCode).toBe(125);
   });
 
+  it("create with no ssh-keygen on PATH says ssh-keygen failed and makes no host", async () => {
+    // Given: a PATH with no ssh-keygen
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    const binDir = mkdtempSync(join(tmpdir(), "proofbox-nokeygen-"));
+    trackTempDir(binDir);
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE, {
+      set: { PATH: binDir, ...nsEnv(ns) },
+    });
+    // Then
+    expect({
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      calls: ns.calls.map((call) => call.method),
+    }).toEqual({
+      stderr:
+        "Provider namespace failed: ssh-keygen failed: spawn ssh-keygen ENOENT\n",
+      exitCode: 125,
+      calls: [],
+    });
+  });
+
   it("exec when GetSSHConfig fails names the Sandbox", async () => {
     // Given: the Compute API refuses GetSSHConfig for the Sandbox
     const ns = await fakeNamespace((call) =>

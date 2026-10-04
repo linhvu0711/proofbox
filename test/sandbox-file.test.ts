@@ -6,6 +6,7 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import { sandboxFiles } from "../src/sandbox-file.ts";
+import { nodeExecutor } from "./support/executor.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 // Building a Provider calls none of these; only its folders are asked.
@@ -37,6 +38,7 @@ const api: NamespaceApi = {
 
 const namespace = () =>
   makeNamespaceProvider({
+    executor: nodeExecutor,
     api,
     login: Effect.die("unused"),
     openLink: () => Effect.die("unused"),
