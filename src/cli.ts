@@ -36,8 +36,22 @@ const create = Command.make(
     envFile: Options.text("env-file").pipe(Options.optional),
     maxSize: Options.text("max-size").pipe(Options.optional),
     size: Options.text("size").pipe(Options.optional),
+    harness: Options.text("harness").pipe(Options.optional),
+    harnessVersion: Options.text("harness-version").pipe(Options.optional),
   },
-  ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
+  ({
+    os,
+    provider,
+    idle,
+    maxLife,
+    work,
+    setup,
+    envFile,
+    maxSize,
+    size,
+    harness,
+    harnessVersion,
+  }) =>
     createSandbox({
       os,
       provider: Option.getOrUndefined(provider),
@@ -48,6 +62,8 @@ const create = Command.make(
       envFile: Option.getOrUndefined(envFile),
       maxSize: Option.getOrUndefined(maxSize),
       size: Option.getOrUndefined(size),
+      harness: Option.getOrUndefined(harness),
+      harnessVersion: Option.getOrUndefined(harnessVersion),
     }),
 );
 

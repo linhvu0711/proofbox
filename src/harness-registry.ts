@@ -13,6 +13,11 @@ const importFor = Effect.fn("harnessRegistry.importFor")(
 export const HarnessesLive = Layer.effect(
   Harnesses,
   Effect.gen(function* () {
+    const claude = yield* Effect.cached(
+      importFor("claude", () => import("./claude-harness.ts")).pipe(
+        Effect.map((module) => module.makeClaudeHarness()),
+      ),
+    );
     const harnesses = new Map<string, HarnessEntry>([
       [
         "claude",
@@ -30,13 +35,7 @@ export const HarnessesLive = Layer.effect(
             parts: ["CLAUDE.md", "skills/", "agents/"],
             leftOut: "settings.json, hooks, plugins, and MCP config",
           },
-          // Stand-in replaced by #191 and #193.
-          load: Effect.fail(
-            new HarnessError({
-              harness: "claude",
-              reason: "not built yet (#191, #193)",
-            }),
-          ),
+          load: claude,
         },
       ],
       [

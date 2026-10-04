@@ -9,6 +9,7 @@ import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import { idleDefault, nextDeadline, parseSpan } from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { HarnessesLive } from "../src/harness-registry.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -50,6 +51,7 @@ const layers = () => {
     ),
     NodeContext.layer,
     CliOutput.Test,
+    HarnessesLive,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     // A heartbeat-less Progress: the real one leaves a sleeping fiber that

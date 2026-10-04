@@ -57,11 +57,11 @@ What proofbox keeps on the Caller's machine so it can act for one Provider accou
 _Avoid_: credential, auth, session, API key
 
 **Harness login**:
-The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token` or a Codex API key. It goes into a Sandbox only when a Turn starts, and never into a Snapshot. Not the Caller's own laptop login of that Harness, which proofbox never touches.
+The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token` or a Codex API key. It goes into a Sandbox made with `--harness`, after any Snapshot is saved, the same way a Secret does, so no Snapshot holds it. Not the Caller's own laptop login of that Harness, which proofbox never touches.
 _Avoid_: model key, credential, auth file
 
 **GitHub login**:
-A fine-grained GitHub token for one owner (a user or an org) that the Caller makes and proofbox keeps. It goes into a Sandbox only when a Turn starts, so the Harness can clone, push, and open pull requests.
+A fine-grained GitHub token for one owner (a user or an org) that the Caller makes and proofbox keeps. It goes into a Sandbox made with `--harness` as `GH_TOKEN`, after any Snapshot is saved, so the Harness can push and open pull requests; create also uses it to fetch the branch, without writing it to disk.
 _Avoid_: gh token, PAT, GitHub credential
 
 ### Getting the app ready

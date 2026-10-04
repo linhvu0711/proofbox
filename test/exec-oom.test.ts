@@ -9,6 +9,7 @@ import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { HarnessesLive } from "../src/harness-registry.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -71,6 +72,7 @@ const layers = (os: "linux" | "macos" = "macos") => {
     ),
     NodeContext.layer,
     CliOutput.Test,
+    HarnessesLive,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     Layer.succeed(

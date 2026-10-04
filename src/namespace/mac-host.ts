@@ -154,14 +154,21 @@ const installTools = Effect.fn("macHost.installTools")(function* (
   const tools = TOOL_BUNDLE.flatMap((tool) =>
     tool.macos === undefined
       ? []
-      : [{ name: tool.name, path: tool.path, source: tool.macos.arm64 }],
+      : [
+          {
+            name: tool.name,
+            path: tool.path,
+            member: tool.member ?? tool.name,
+            source: tool.macos.arm64,
+          },
+        ],
   );
   for (const tool of tools) {
     if ("url" in tool.source) {
       yield* step(
         link,
         `fetching ${tool.name}`,
-        `cd /tmp && rm -rf proofbox-tool && mkdir proofbox-tool && /opt/nsc/bin/nsc artifact cache-url ${shellJoin([tool.source.url])} --out proofbox-tool/archive.zip && unzip -o -q proofbox-tool/archive.zip -d proofbox-tool && mv proofbox-tool/${tool.name} ${shellJoin([tool.path])} && chmod 755 ${shellJoin([tool.path])}`,
+        `cd /tmp && rm -rf proofbox-tool && mkdir proofbox-tool && /opt/nsc/bin/nsc artifact cache-url ${shellJoin([tool.source.url])} --out proofbox-tool/archive.zip && unzip -o -q proofbox-tool/archive.zip -d proofbox-tool && mv ${shellJoin([`proofbox-tool/${tool.member}`])} ${shellJoin([tool.path])} && chmod 755 ${shellJoin([tool.path])}`,
       );
     } else {
       yield* sendFile(link, join(MACOS_DIR, tool.source.file), tool.path, fs);
@@ -384,7 +391,7 @@ export const macKillCount = (log: string) =>
 const macChecks = (): ChecksShell => ({
   push: `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${DEADLINE}`,
   kills: `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; ${macKillCount(MEMORY_KILLS)}`,
-  run: `sudo -n launchctl asuser 501 sudo -n -u runner -H /bin/zsh -lc ${shellJoin([`cd ${MAC_WORK_DIR} && exec "$@"`])} zsh "$@"`,
+  run: `sudo -n launchctl asuser 501 sudo -n -u runner -H /bin/zsh -lc ${shellJoin([`export PATH="$HOME/.local/bin:/opt/proofbox/tools:$PATH"; cd ${MAC_WORK_DIR} && exec "$@"`])} zsh "$@"`,
 });
 
 // The screen as it is now, saved next to the host's other files, so a

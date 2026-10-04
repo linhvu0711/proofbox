@@ -15,7 +15,12 @@ import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 import { sandboxFiles } from "../sandbox-file.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
-import { diffHashList, HashList, toHashList } from "../upload/hash-list.ts";
+import {
+  diffHashList,
+  HashList,
+  hashListAfterCheckout,
+  toHashList,
+} from "../upload/hash-list.ts";
 import { MAX_SIZE_DEFAULT } from "../upload/max-size.ts";
 import { packFiles } from "../upload/pack.ts";
 import { listWorkFiles, type WorkFile } from "../upload/work-files.ts";
@@ -63,7 +68,7 @@ const withUploadLock = Effect.fn("upload.withUploadLock")(function* <A, E, R>(
   })(effect);
 });
 
-const runInSandbox = Effect.fn("upload.runInSandbox")(function* (
+export const runInSandbox = Effect.fn("upload.runInSandbox")(function* (
   keeper: KeeperClient,
   rawId: string,
   argv: ReadonlyArray<string>,
@@ -112,6 +117,7 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
   folder: string,
   files: ReadonlyArray<WorkFile>,
   maxSize: number,
+  options?: { readonly dirty?: ReadonlyArray<string> },
 ) {
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
@@ -141,7 +147,12 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
             ),
             Effect.catchAll(() => Effect.succeed(undefined)),
           );
-          let diff = diffHashList(old, files);
+          let diff = diffHashList(
+            options?.dirty === undefined
+              ? old
+              : hashListAfterCheckout(old, files, options.dirty),
+            files,
+          );
           if (
             [...diff.send, ...diff.remove].some((path) => pathOutsideWork(path))
           ) {
@@ -220,7 +231,8 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
           if (
             diff.send.length !== 0 ||
             diff.remove.length !== 0 ||
-            old === undefined
+            old === undefined ||
+            options?.dirty !== undefined
           ) {
             const list = new TextEncoder().encode(
               JSON.stringify(Schema.encodeSync(HashList)(toHashList(files))),

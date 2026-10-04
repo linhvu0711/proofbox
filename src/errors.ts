@@ -348,6 +348,67 @@ export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
   }
 }
 
+export class HarnessVersionNeedsHarnessError extends Data.TaggedError(
+  "HarnessVersionNeedsHarnessError",
+) {
+  get message() {
+    return "--harness-version needs --harness <name>. Nothing was created.";
+  }
+}
+
+export class NotGithubRepoError extends Data.TaggedError("NotGithubRepoError")<{
+  readonly folder: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `A Harness needs a GitHub repo: ${this.folder} ${this.reason}. Nothing was created.`;
+  }
+}
+
+export class NoHarnessLoginError extends Data.TaggedError(
+  "NoHarnessLoginError",
+)<{
+  readonly harness: string;
+  readonly expired: boolean;
+  readonly howToMake: string;
+}> {
+  get message() {
+    const reason = this.expired
+      ? `The Harness login for ${this.harness} expired`
+      : `No Harness login for ${this.harness}`;
+    return `${reason}; run proofbox harness login ${this.harness}. ${this.howToMake}. Nothing was created.`;
+  }
+}
+
+export class NoGithubLoginError extends Data.TaggedError("NoGithubLoginError")<{
+  readonly owner: string;
+  readonly repo: string;
+}> {
+  get message() {
+    return `No GitHub login for ${this.owner.toLowerCase()}; run proofbox github login ${this.owner.toLowerCase()} with a fine-grained token for ${this.owner}/${this.repo}. Nothing was created.`;
+  }
+}
+
+export class CloneRefusedError extends Data.TaggedError("CloneRefusedError")<{
+  readonly owner: string;
+  readonly repo: string;
+}> {
+  get message() {
+    return `GitHub refused the clone of ${this.owner}/${this.repo}; git's lines are above. Check that the GitHub login for ${this.owner.toLowerCase()} can read ${this.owner}/${this.repo} and has not expired, then run proofbox github login ${this.owner.toLowerCase()} and create again. This Sandbox was deleted.`;
+  }
+}
+
+export class HarnessInstallFailedError extends Data.TaggedError(
+  "HarnessInstallFailedError",
+)<{
+  readonly harness: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Installing ${this.harness} failed with exit code ${this.code}; its last 50 lines are above. Check --harness-version and the Sandbox's network, then create again. This Sandbox was deleted.`;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{

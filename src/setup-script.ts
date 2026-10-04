@@ -1,5 +1,6 @@
-import { Effect, Stream } from "effect";
+import { Effect } from "effect";
 import { CliOutput } from "./cli-output.ts";
+import { runKeepingTail } from "./command-tail.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import { SetupScriptFailedError, UploadFailedError } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
@@ -7,8 +8,6 @@ import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { sandboxFiles, writeSandboxFile } from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
-
-const KEEP_LINES = 50;
 
 export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
   function* (rawId: string, script: Uint8Array) {
@@ -37,50 +36,7 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
               code: writeCode,
             });
           }
-          const lines: Array<string> = [];
-          let pending = "";
-          const decoder = new TextDecoder();
-          const keep = (chunk: Uint8Array) => {
-            pending += decoder.decode(chunk, { stream: true });
-            let newline = pending.indexOf("\n");
-            while (newline !== -1) {
-              lines.push(pending.slice(0, newline + 1));
-              if (lines.length > KEEP_LINES) {
-                lines.shift();
-              }
-              pending = pending.slice(newline + 1);
-              newline = pending.indexOf("\n");
-            }
-            // A runaway line would grow the Caller without end; the tail
-            // is all "last 50 lines" needs anyway. Clip only the unflushed
-            // remainder so complete lines are never dropped mid-chunk.
-            if (pending.length > 65_536) {
-              pending = pending.slice(-65_536);
-            }
-          };
-          const ran = yield* keeper.exec(rawId, [setupPath]);
-          let code = 0;
-          yield* ran.pipe(
-            Stream.runForEach((event) => {
-              switch (event._tag) {
-                case "Stdout":
-                case "Stderr":
-                  return Effect.sync(() => keep(event.bytes));
-                case "Exit":
-                  return Effect.sync(() => {
-                    code = event.code;
-                  });
-              }
-            }),
-          );
-          pending += decoder.decode();
-          if (pending !== "") {
-            lines.push(`${pending}\n`);
-            if (lines.length > KEEP_LINES) {
-              lines.shift();
-            }
-          }
-          return { code, lines } as const;
+          return yield* runKeepingTail(rawId, [setupPath]);
         }),
       ),
     );

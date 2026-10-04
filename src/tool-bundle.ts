@@ -1,12 +1,17 @@
 import { Schema } from "effect";
 
-const Download = Schema.Struct({ url: Schema.String, sha256: Schema.String });
+const Download = Schema.Struct({
+  url: Schema.String,
+  sha256: Schema.String,
+});
 // A file proofbox carries itself, relative to images/macos/.
 const RepoFile = Schema.Struct({ file: Schema.String, sha256: Schema.String });
 
 export const ToolFile = Schema.Struct({
   name: Schema.String,
   path: Schema.String,
+  // The file's path inside a macOS zip, when it is not at the top.
+  member: Schema.optional(Schema.String),
   linux: Schema.optional(Schema.Struct({ amd64: Download, arm64: Download })),
   macos: Schema.optional(
     Schema.Struct({ arm64: Schema.Union(Download, RepoFile) }),
@@ -39,6 +44,31 @@ export const TOOL_BUNDLE: ReadonlyArray<ToolFile> = [
         url: "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
         sha256:
           "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384",
+      },
+    },
+  }),
+  ToolFile.make({
+    // GitHub CLI 2.102.0; keep above 2.99 for PR media. Hashes are of binaries.
+    name: "gh",
+    path: "/opt/proofbox/tools/gh",
+    member: "gh_2.102.0_macOS_arm64/bin/gh",
+    linux: {
+      amd64: {
+        url: "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz",
+        sha256:
+          "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b",
+      },
+      arm64: {
+        url: "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz",
+        sha256:
+          "93308395c2d296a63a662742c6366e4db413d2a4870d07bd9b84e491c065d65d",
+      },
+    },
+    macos: {
+      arm64: {
+        url: "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_macOS_arm64.zip",
+        sha256:
+          "8a4258433c81106343144857750316241759d06dcf16265cf3c4864a8f2f2ad6",
       },
     },
   }),
