@@ -34,16 +34,19 @@ const KEEPER_AWAY = new Set([...RETRY_CODES, "EPIPE", "ECONNRESET"]);
 export const keeperAway = (error: ProviderError) =>
   KEEPER_AWAY.has(error.reason);
 
-const pathsOf = (id: ResolvedSandboxId) =>
-  keeperPaths({ provider: id.prefix, name: fileStem(id) });
+const pathsOf = Effect.fn("lifecycle.pathsOf")((id: ResolvedSandboxId) =>
+  keeperPaths({ provider: id.prefix, name: fileStem(id) }),
+);
 
-const removeKeeperFiles = (paths: KeeperPaths) =>
-  Effect.promise(() =>
-    Promise.all([
-      rm(paths.socket, { force: true }).catch(() => {}),
-      rm(paths.pid, { force: true }).catch(() => {}),
-    ]).then(() => {}),
-  );
+const removeKeeperFiles = Effect.fn("lifecycle.removeKeeperFiles")(
+  (paths: KeeperPaths) =>
+    Effect.promise(() =>
+      Promise.all([
+        rm(paths.socket, { force: true }).catch(() => {}),
+        rm(paths.pid, { force: true }).catch(() => {}),
+      ]).then(() => {}),
+    ),
+);
 
 // Starts the Keeper of Sandbox `id` and waits until its socket answers.
 export const startKeeper = Effect.fn("lifecycle.startKeeper")(function* (
@@ -126,17 +129,19 @@ export const stopKeeper = Effect.fn("lifecycle.stopKeeper")(function* (
 });
 
 // Whether a Keeper answers on `socket`.
-export const keeperAnswers = (socket: string) =>
-  Effect.async<boolean>((resume) => {
-    const probe = createConnection({ path: socket }, () => {
-      probe.destroy();
-      resume(Effect.succeed(true));
-    });
-    probe.once("error", () => {
-      probe.destroy();
-      resume(Effect.succeed(false));
-    });
-  });
+export const keeperAnswers = Effect.fn("lifecycle.keeperAnswers")(
+  (socket: string) =>
+    Effect.async<boolean>((resume) => {
+      const probe = createConnection({ path: socket }, () => {
+        probe.destroy();
+        resume(Effect.succeed(true));
+      });
+      probe.once("error", () => {
+        probe.destroy();
+        resume(Effect.succeed(false));
+      });
+    }),
+);
 
 // Makes this process the Keeper of Sandbox `id`: its pid file and its
 // socket, served by `onClient`, until the scope ends. False when another

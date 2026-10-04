@@ -142,5 +142,7 @@ export const rewriteLogins = Effect.fn("loginsFile.rewriteLogins")(function* (
 // Each auth command reads, changes one slot, and writes; the lock keeps
 // an overlapping command's slot from being dropped by the last write.
 // Returns the logins as read under the lock.
-export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
-  withLoginsLock(rewriteLogins(change));
+export const changeLogins = Effect.fn("loginsFile.changeLogins")(
+  (change: (logins: LoginsFile) => LoginsFile) =>
+    withLoginsLock(rewriteLogins(change)),
+);

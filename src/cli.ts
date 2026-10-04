@@ -261,7 +261,7 @@ const recordStop = Command.make(
   ({ id, out, discard, maxSize }) =>
     Effect.gen(function* () {
       const limit = yield* maxSize.pipe(
-        Option.map(parseMaxSize),
+        Option.map((value) => parseMaxSize(value)),
         Option.getOrElse(() => Effect.succeed(undefined)),
       );
       yield* stopRecording({
@@ -321,7 +321,7 @@ const upload = Command.make(
   ({ id, folder, maxSize }) =>
     Effect.gen(function* () {
       const limit = yield* maxSize.pipe(
-        Option.map(parseMaxSize),
+        Option.map((value) => parseMaxSize(value)),
         Option.getOrElse(() => Effect.succeed(undefined)),
       );
       yield* uploadWorkFolder({ id, folder, maxSize: limit });

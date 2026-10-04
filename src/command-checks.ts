@@ -222,7 +222,10 @@ const splitChecks = <E>(
         }
       }
     };
-    return events.pipe(Stream.mapEffect(step), Stream.flattenIterables);
+    return events.pipe(
+      Stream.mapEffect((event) => step(event)),
+      Stream.flattenIterables,
+    );
   });
 
 // Keeps the Deadline pushed while a command runs, every third of the idle
@@ -237,9 +240,8 @@ const withRunningPush =
     const every = Duration.millis(
       Duration.toMillis(Duration.seconds(connection.info.idleSeconds)) / 3,
     );
-    const push = Effect.flatMap(
-      pushedDeadline(connection.info),
-      connection.extend,
+    const push = Effect.flatMap(pushedDeadline(connection.info), (deadline) =>
+      connection.extend(deadline),
     );
     // The command's stream stays on the fiber that reads it: a stdin feed
     // that drains after the command exits depends on that.

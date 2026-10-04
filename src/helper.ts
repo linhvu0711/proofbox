@@ -177,26 +177,24 @@ export const runHelper = Effect.fn("helper.runHelper")(function* (
             ? { limit }
             : { stdin: options.stdin, limit },
         );
+        const start: {
+          readonly stdout: Array<Uint8Array>;
+          readonly stderr: Array<Uint8Array>;
+          readonly code: number | undefined;
+        } = { stdout: [], stderr: [], code: undefined };
         return yield* events.pipe(
-          Stream.runFold(
-            {
-              stdout: [] as Uint8Array[],
-              stderr: [] as Uint8Array[],
-              code: undefined as number | undefined,
-            },
-            (acc, event) => {
-              switch (event._tag) {
-                case "Stdout":
-                  acc.stdout.push(event.bytes);
-                  return acc;
-                case "Stderr":
-                  acc.stderr.push(event.bytes);
-                  return acc;
-                case "Exit":
-                  return { ...acc, code: event.code };
-              }
-            },
-          ),
+          Stream.runFold(start, (acc, event) => {
+            switch (event._tag) {
+              case "Stdout":
+                acc.stdout.push(event.bytes);
+                return acc;
+              case "Stderr":
+                acc.stderr.push(event.bytes);
+                return acc;
+              case "Exit":
+                return { ...acc, code: event.code };
+            }
+          }),
         );
       }),
   );

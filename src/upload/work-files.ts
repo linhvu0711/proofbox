@@ -100,7 +100,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       "--others",
       "--exclude-standard",
     ).pipe(Command.workingDirectory(folder)),
-  ).pipe(Effect.mapError(local));
+  ).pipe(Effect.mapError((error) => local(error)));
   const [bytes, code] = yield* Effect.all(
     [
       Stream.runCollect(process.stdout),
@@ -108,7 +108,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       Stream.runDrain(process.stderr),
     ],
     { concurrency: 3 },
-  ).pipe(Effect.mapError(local));
+  ).pipe(Effect.mapError((error) => local(error)));
   if (code !== 0) {
     return yield* new NotGitFolderError({ folder });
   }

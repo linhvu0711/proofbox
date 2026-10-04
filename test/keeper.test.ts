@@ -401,6 +401,45 @@ describe("Keeper", () => {
     expect(again.exitCode).toBe(0);
   });
 
+  it("a request the Keeper cannot read gets a bad request answer", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const name = created.stdout.trim().slice("fake:".length);
+    const socket = createConnection({
+      path: join(env.runtime, `fake-${name}.sock`),
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    // When: the first line is not a request
+    socket.write("not json\n");
+    const replies: Array<unknown> = [];
+    await new Promise<void>((resolve) => {
+      let pending = "";
+      socket.on("data", (chunk) => {
+        pending += chunk.toString("utf8");
+        let newline = pending.indexOf("\n");
+        while (newline !== -1) {
+          replies.push(JSON.parse(pending.slice(0, newline)));
+          pending = pending.slice(newline + 1);
+          newline = pending.indexOf("\n");
+        }
+      });
+      socket.on("close", () => resolve());
+      socket.on("error", () => resolve());
+    });
+    // Then
+    expect(replies).toEqual([{ fail: "bad request" }]);
+  });
+
   it("an exec that exits with a full input Mailbox still drains the client's writes", async () => {
     // Given
     const env = makeEnv();

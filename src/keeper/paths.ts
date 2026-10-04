@@ -83,42 +83,44 @@ const hasErrorCode = (cause: unknown, code: string) =>
   "code" in cause &&
   cause.code === code;
 
-const startOf = (pid: number): Effect.Effect<ProcessStart> =>
-  Effect.promise(() =>
-    process.platform === "linux"
-      ? readFile(`/proc/${pid}/stat`, "utf8").then(
-          (stat): ProcessStart => {
-            // Field 22, counted past the parenthesized name, which may
-            // hold spaces.
-            const at = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-            return at === undefined
-              ? { _tag: "Unknown" }
-              : { _tag: "Started", at };
-          },
-          (cause): ProcessStart =>
-            hasErrorCode(cause, "ENOENT")
-              ? { _tag: "Gone" }
-              : { _tag: "Unknown" },
-        )
-      : new Promise<ProcessStart>((resolve) => {
-          // The C locale keeps the text the same in every process.
-          execFile(
-            "/bin/ps",
-            ["-o", "lstart=", "-p", String(pid)],
-            { env: { LC_ALL: "C" } },
-            (error, stdout) => {
-              const at = stdout.trim();
-              resolve(
-                at !== ""
-                  ? { _tag: "Started", at }
-                  : error !== null && typeof error.code === "number"
-                    ? { _tag: "Gone" }
-                    : { _tag: "Unknown" },
-              );
+const startOf = Effect.fn("paths.startOf")(
+  (pid: number): Effect.Effect<ProcessStart> =>
+    Effect.promise(() =>
+      process.platform === "linux"
+        ? readFile(`/proc/${pid}/stat`, "utf8").then(
+            (stat): ProcessStart => {
+              // Field 22, counted past the parenthesized name, which may
+              // hold spaces.
+              const at = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+              return at === undefined
+                ? { _tag: "Unknown" }
+                : { _tag: "Started", at };
             },
-          );
-        }),
-  );
+            (cause): ProcessStart =>
+              hasErrorCode(cause, "ENOENT")
+                ? { _tag: "Gone" }
+                : { _tag: "Unknown" },
+          )
+        : new Promise<ProcessStart>((resolve) => {
+            // The C locale keeps the text the same in every process.
+            execFile(
+              "/bin/ps",
+              ["-o", "lstart=", "-p", String(pid)],
+              { env: { LC_ALL: "C" } },
+              (error, stdout) => {
+                const at = stdout.trim();
+                resolve(
+                  at !== ""
+                    ? { _tag: "Started", at }
+                    : error !== null && typeof error.code === "number"
+                      ? { _tag: "Gone" }
+                      : { _tag: "Unknown" },
+                );
+              },
+            );
+          }),
+    ),
+);
 
 // Whether this user runs a process with this id. A create mark sits in
 // this user's runtime dir, so its create ran as this user: EPERM is some

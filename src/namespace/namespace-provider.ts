@@ -513,7 +513,7 @@ export const makeNamespaceProvider = (deps: {
     );
     const dir = (yield* paths("__probe__")).dir;
     yield* Effect.promise(async () => {
-      const entries = await readdir(dir).catch(() => [] as string[]);
+      const entries = await readdir(dir).catch((): Array<string> => []);
       // Only files at least ten minutes old are pruned: an ns-new-* staging
       // key belongs to a create in flight, and a host registered moments ago
       // can still be ahead of the ListInstances answer.

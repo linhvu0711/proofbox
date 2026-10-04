@@ -11,18 +11,20 @@ export const formatSize = (size: Size): string => `${size.cpu}x${size.ramGb}`;
 
 const SIZE_PATTERN = /^([1-9][0-9]*)x([1-9][0-9]*)$/;
 
-export const parseSize = (value: string): Effect.Effect<Size, BadSizeError> => {
-  const match = SIZE_PATTERN.exec(value);
-  if (match === null) {
-    return Effect.fail(new BadSizeError({ value }));
-  }
-  const cpu = Number(match[1]);
-  const ramGb = Number(match[2]);
-  if (!Number.isSafeInteger(cpu) || !Number.isSafeInteger(ramGb)) {
-    return Effect.fail(new BadSizeError({ value }));
-  }
-  return Effect.succeed({ cpu, ramGb });
-};
+export const parseSize = Effect.fn("size.parseSize")(
+  (value: string): Effect.Effect<Size, BadSizeError> => {
+    const match = SIZE_PATTERN.exec(value);
+    if (match === null) {
+      return Effect.fail(new BadSizeError({ value }));
+    }
+    const cpu = Number(match[1]);
+    const ramGb = Number(match[2]);
+    if (!Number.isSafeInteger(cpu) || !Number.isSafeInteger(ramGb)) {
+      return Effect.fail(new BadSizeError({ value }));
+    }
+    return Effect.succeed({ cpu, ramGb });
+  },
+);
 
 export const OUT_OF_MEMORY_EXIT = 122;
 

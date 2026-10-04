@@ -2,6 +2,7 @@ import type { Socket } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
 import {
   Clock,
+  Data,
   Effect,
   Exit,
   Fiber,
@@ -20,12 +21,34 @@ import { holdKeeper, keeperAnswers } from "./lifecycle.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
 
-const writeFrame = (socket: Socket, frame: unknown) =>
-  Effect.async<void, Error>((resume) => {
-    socket.write(`${JSON.stringify(frame)}\n`, (error) =>
-      resume(error ? Effect.fail(error) : Effect.void),
-    );
-  });
+// The socket did not take a frame: the Caller is gone.
+class SocketWriteError extends Data.TaggedError("SocketWriteError")<{
+  readonly detail: string;
+}> {
+  get message() {
+    return this.detail;
+  }
+}
+
+// The first line from a Caller is not a request the Keeper knows.
+class BadRequestError extends Data.TaggedError("BadRequestError") {
+  get message() {
+    return "bad request";
+  }
+}
+
+const writeFrame = Effect.fn("keeper.writeFrame")(
+  (socket: Socket, frame: unknown) =>
+    Effect.async<void, SocketWriteError>((resume) => {
+      socket.write(`${JSON.stringify(frame)}\n`, (error) =>
+        resume(
+          error
+            ? Effect.fail(new SocketWriteError({ detail: error.message }))
+            : Effect.void,
+        ),
+      );
+    }),
+);
 
 const frameOf = (event: ExecEvent) => {
   switch (event._tag) {
@@ -112,12 +135,12 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           argv: ReadonlyArray<string>,
           options?: ExecOptions,
         ) => {
-          const tally = {
-            out: 0,
-            err: 0,
-            exit: undefined as number | undefined,
-            firstMs: undefined as number | undefined,
-          };
+          const tally: {
+            out: number;
+            err: number;
+            exit: number | undefined;
+            firstMs: number | undefined;
+          } = { out: 0, err: 0, exit: undefined, firstMs: undefined };
           let logged = false;
           const log = (start: number, ended: string) =>
             Effect.flatMap(Clock.currentTimeMillis, (now) => {
@@ -229,7 +252,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           if (mode === "request") {
             const request = yield* Effect.try({
               try: () => decodeRequest(JSON.parse(line)),
-              catch: () => new Error("bad request"),
+              catch: () => new BadRequestError(),
             });
             if ("info" in request) {
               mode = "plain";
