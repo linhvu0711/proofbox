@@ -8,9 +8,11 @@ export default defineConfig({
       "test/**/*.docker.test.ts",
       "test/**/*.namespace.test.ts",
     ],
-    // Many tests start CLI processes, and when the full suite runs on all
-    // cores these run 2 to 3 times slower; the limit catches a hang, not a
-    // busy machine.
+    // Many tests start CLI processes. On all cores, or with two suites at
+    // once, the machine overloads and these run several times slower. Half
+    // the cores keeps a busy machine usable, and the limit catches a hang,
+    // not a busy machine.
     testTimeout: 60_000,
+    maxWorkers: "50%",
   },
 });
