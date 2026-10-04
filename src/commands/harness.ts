@@ -1,7 +1,15 @@
-import { Clock, Duration, Effect, Option, Redacted } from "effect";
+import { dirname, join } from "node:path";
+import { FileSystem } from "@effect/platform";
+import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { NoHarnessTokenError, NoSuchHarnessError } from "../errors.ts";
+import {
+  HarnessError,
+  NoHarnessTokenError,
+  NoSuchHarnessError,
+  platformReason,
+} from "../errors.ts";
 import { type HarnessEntry, Harnesses } from "../harness.ts";
+import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
 
@@ -58,3 +66,29 @@ export const loginToHarness = Effect.fn("harness.loginToHarness")(function* (
   const raw = yield* readStdinText();
   yield* saveHarnessLogin(entry, raw);
 });
+
+export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
+  function* (name: string) {
+    const entry = yield* harnessEntryFor(name);
+    const path = yield* harnessProfilePath(entry.name);
+    const from = join(yield* Config.string("HOME"), entry.profile.home);
+    const fs = yield* FileSystem.FileSystem;
+    const failed = (error: Parameters<typeof platformReason>[0]) =>
+      new HarnessError({ harness: entry.name, reason: platformReason(error) });
+    yield* fs
+      .makeDirectory(dirname(path), { recursive: true })
+      .pipe(Effect.mapError(failed));
+    yield* fs.makeDirectory(path).pipe(Effect.mapError(failed));
+    for (const part of entry.profile.parts) {
+      yield* copyResolved(entry.name, join(from, part), join(path, part));
+    }
+    const output = yield* CliOutput;
+    yield* output.out(`${path}\n`);
+    yield* output.err(
+      `Copied from ${from}: ${entry.profile.parts.join(", ")}.\n`,
+    );
+    yield* output.err(
+      `Not copied: ${entry.profile.leftOut}. They can point to programs on this laptop or hold tokens.\n`,
+    );
+  },
+);

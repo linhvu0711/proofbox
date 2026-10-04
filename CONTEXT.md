@@ -115,7 +115,7 @@ One run of the Harness, from a prompt the Caller sends until the Harness ends it
 _Avoid_: run, task, job, step
 
 **Harness profile**:
-A folder per Harness that the Caller owns on their machine, shaped like that Harness's home folder (for Claude Code, `~/.claude/`): global instructions, skills, subagents, and MCP servers meant for a Sandbox. proofbox copies it into a Sandbox after any Snapshot is saved. It is not the Caller's laptop config, which proofbox reads only once, to fill a new profile.
+A folder per Harness that the Caller owns on their machine, shaped like that Harness's home folder (for Claude Code, `~/.claude/`): global instructions, skills, subagents, and MCP servers meant for a Sandbox. proofbox copies it into a Sandbox after any Snapshot is saved. It is not the Caller's laptop config, which proofbox reads only once, to fill a new profile. It lives in `~/.config/proofbox/harness/<name>/`, and `proofbox harness profile init <name>` makes it.
 _Avoid_: config, dotfiles, settings
 
 **Pixel action**:

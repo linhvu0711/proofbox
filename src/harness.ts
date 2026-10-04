@@ -43,9 +43,19 @@ export interface Harness {
   readonly readEnd: (output: string) => TurnEnd;
 }
 
+// What profile init copies from the Caller's laptop. home is relative to
+// the Caller's HOME; a part that is a folder ends in `/`; leftOut names
+// what stays on the laptop.
+export interface HarnessProfile {
+  readonly home: string;
+  readonly parts: ReadonlyArray<string>;
+  readonly leftOut: string;
+}
+
 export interface HarnessEntry {
   readonly name: string;
   readonly login: HarnessLogin;
+  readonly profile: HarnessProfile;
   readonly load: Effect.Effect<Harness, HarnessError>;
 }
 

@@ -25,6 +25,11 @@ export const HarnessesLive = Layer.effect(
             howToMake: "Make one with `claude setup-token`",
             lifetime: Option.some(Duration.days(365)),
           },
+          profile: {
+            home: ".claude",
+            parts: ["CLAUDE.md", "skills/", "agents/"],
+            leftOut: "settings.json, hooks, plugins, and MCP config",
+          },
           // Stand-in replaced by #191 and #193.
           load: Effect.fail(
             new HarnessError({
@@ -44,6 +49,11 @@ export const HarnessesLive = Layer.effect(
             placeholder: "<key>",
             howToMake: "Make one at https://platform.openai.com/api-keys",
             lifetime: Option.none(),
+          },
+          profile: {
+            home: ".codex",
+            parts: ["AGENTS.md", "skills/"],
+            leftOut: "config.toml, hooks, plugins, and MCP config",
           },
           // Stand-in replaced by #194.
           load: Effect.fail(
@@ -70,6 +80,11 @@ export const HarnessesLive = Layer.effect(
           placeholder: "<token>",
           howToMake: "Make one with `fake-harness token`",
           lifetime: Option.none(),
+        },
+        profile: {
+          home: ".fake-harness",
+          parts: ["AGENTS.md", "skills/"],
+          leftOut: "settings",
         },
         load: fake,
       });
