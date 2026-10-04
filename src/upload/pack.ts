@@ -42,13 +42,13 @@ export const packFiles = (
           Command.env({ COPYFILE_DISABLE: "1" }),
           Command.stdin(Stream.make(list)),
         ),
-      ).pipe(Effect.mapError(local));
+      ).pipe(Effect.mapError((error) => local(error)));
       // The size check ran on the list; a file that grew since then reaches
       // tar at its new size, so the limit is held again on the file bytes
       // the tar headers state as they go out.
       const fileBytes = tarFileBytes();
       const outputs = process.stdout.pipe(
-        Stream.mapError(local),
+        Stream.mapError((error) => local(error)),
         Stream.mapEffect((chunk) =>
           fileBytes(chunk) > limit
             ? Effect.fail(new WorkFileGrewError({ limit }))
@@ -56,11 +56,13 @@ export const packFiles = (
         ),
       );
       const drained = Stream.fromEffect(
-        Stream.runDrain(process.stderr).pipe(Effect.mapError(local)),
+        Stream.runDrain(process.stderr).pipe(
+          Effect.mapError((error) => local(error)),
+        ),
       ).pipe(Stream.drain);
       const checked = Stream.fromEffect(
         process.exitCode.pipe(
-          Effect.mapError(local),
+          Effect.mapError((error) => local(error)),
           Effect.flatMap((code) =>
             code === 0
               ? Effect.void

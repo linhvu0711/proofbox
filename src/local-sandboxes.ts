@@ -165,7 +165,7 @@ export const withCreateMark = Effect.fn("localSandboxes.withCreateMark")(
       (marked) =>
         Option.match(marked, {
           onNone: () => Effect.void,
-          onSome: unmarkCreate,
+          onSome: (path) => unmarkCreate(path),
         }),
     );
   },
