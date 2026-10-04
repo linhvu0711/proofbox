@@ -19,7 +19,13 @@ import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
-import { readTurn, settleTurn, startTurn, TURN_EXIT } from "../turn.ts";
+import {
+  readTurn,
+  settleTurn,
+  startTurn,
+  stopTurn,
+  TURN_EXIT,
+} from "../turn.ts";
 
 export const harnessEntryFor = Effect.fn("harness.harnessEntryFor")(function* (
   name: string,
@@ -139,6 +145,11 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       yield* output.setExitCode(turn.state.code);
       return;
     }
+    if (turn.state._tag === "Stopped") {
+      yield* output.out("stopped\n");
+      yield* output.setExitCode(TURN_EXIT.stopped);
+      return;
+    }
     if (turn.state._tag !== "Ended")
       return yield* new NoTurnYetError({ id: rawId });
     const entry = yield* harnessEntryFor(turn.harness.value);
@@ -148,6 +159,18 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
     yield* output.setExitCode(result.code);
     return;
   }
+}, Effect.scoped);
+
+export const stopHarnessTurn = Effect.fn("harness.stopHarnessTurn")(function* (
+  rawId: string,
+) {
+  const state = yield* stopTurn(rawId);
+  if (state === "no-harness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  const output = yield* CliOutput;
+  yield* output.out(
+    state === "stopped" ? "stopped the turn\n" : "no turn is running\n",
+  );
 }, Effect.scoped);
 
 export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(

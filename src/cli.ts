@@ -16,6 +16,7 @@ import {
   initHarnessProfile,
   loginToHarness,
   promptHarness,
+  stopHarnessTurn,
   waitForTurn,
 } from "./commands/harness.ts";
 import { pressKey } from "./commands/key.ts";
@@ -396,12 +397,19 @@ const harnessWait = Command.make(
   ({ id, timeout }) => waitForTurn(id, timeout),
 );
 
+const harnessStop = Command.make(
+  "stop",
+  { id: Args.text({ name: "id" }) },
+  ({ id }) => stopHarnessTurn(id),
+);
+
 const harness = Command.make("harness").pipe(
   Command.withSubcommands([
     harnessLogin,
     harnessProfile,
     harnessPrompt,
     harnessWait,
+    harnessStop,
   ]),
 );
 

@@ -48,6 +48,23 @@ echo proofbox-turn-err
 if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
 `;
 
+const STOP = `set -eu
+h=$1; t=$2
+if [ ! -f "$h" ]; then echo no-harness; exit; fi
+if [ ! -f "$t/pid" ] || [ -f "$t/exit" ] || [ -f "$t/stopped" ]; then echo idle; exit; fi
+pid=$(cat "$t/pid")
+if ! kill -0 "$pid" 2>/dev/null; then echo idle; exit; fi
+: > "$t/stopped"
+kill -TERM "-$pid" 2>/dev/null || true
+seconds=10
+while [ "$seconds" -gt 0 ] && kill -0 "-$pid" 2>/dev/null; do
+  sleep 1
+  seconds=$((seconds - 1))
+done
+kill -KILL "-$pid" 2>/dev/null || true
+echo stopped
+`;
+
 export type TurnState =
   | { readonly _tag: "None" }
   | { readonly _tag: "Saved"; readonly code: number; readonly text: string }
@@ -181,6 +198,29 @@ export const startTurn = Effect.fn("turn.startTurn")(function* (
       harness: rawId,
       reason: `could not start the Turn (exit code ${result.code})`,
     });
+});
+
+export const stopTurn = Effect.fn("turn.stopTurn")(function* (rawId: string) {
+  const files = yield* turnFiles(rawId);
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    STOP,
+    "sh",
+    files.harness,
+    files.turn,
+  ]);
+  const state = result.out.trim();
+  if (
+    result.code !== 0 ||
+    (state !== "no-harness" && state !== "idle" && state !== "stopped")
+  ) {
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: `could not stop the Turn (exit code ${result.code})`,
+    });
+  }
+  return state;
 });
 
 export const endText = (

@@ -246,6 +246,52 @@ it("a Turn keeps running after the Keeper is killed", async () => {
   });
 });
 
+it("harness stop ends a running Turn and wait prints stopped", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  // When
+  const stop = await runCli(env, ["harness", "stop", id]);
+  const wait = await runCli(env, ["harness", "wait", id]);
+  const processes = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    'pgrep -f "^sleep 30$" || echo none',
+  ]);
+  // Then
+  expect({
+    stop: stop.exitCode,
+    stopOut: stop.stdout,
+    wait: wait.exitCode,
+    waitOut: wait.stdout,
+    processes: processes.stdout,
+  }).toEqual({
+    stop: 0,
+    stopOut: "stopped the turn\n",
+    wait: 20,
+    waitOut: "stopped\n",
+    processes: "none\n",
+  });
+});
+
+it("harness stop with no Turn running says so and exits 0", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  // When
+  const result = await runCli(env, ["harness", "stop", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 0,
+    stdout: "no turn is running\n",
+    stderr: "",
+  });
+});
+
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {
   // Given
   const env = makeEnv();
