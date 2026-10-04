@@ -4,14 +4,13 @@ import {
   cp,
   mkdir,
   readdir,
-  readFile,
   rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor, type FileSystem } from "@effect/platform";
 import {
   Clock,
   Duration,
@@ -77,6 +76,7 @@ const fakeChecks = (dir: string): ChecksShell => ({
 });
 
 export const makeFakeProvider = (options: {
+  readonly fs: FileSystem.FileSystem;
   readonly root: string;
   readonly watch: "process" | "none";
   readonly login?: ProviderLogin | undefined;
@@ -102,6 +102,7 @@ export const makeFakeProvider = (options: {
   // as a slow Namespace host makes one.
   readonly createHold?: string | undefined;
 }): Provider => {
+  const fs = options.fs;
   const root = options.root;
   const fail = (reason: string) =>
     new ProviderError({ provider: "fake", reason });
@@ -110,6 +111,9 @@ export const makeFakeProvider = (options: {
   const gone = (name: string, unfinished?: true) =>
     new SandboxGoneError({ id: `fake:${name}`, unfinished });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
+  // Any error reads as "not there", as `existsSync` gives.
+  const exists = (path: string) =>
+    fs.exists(path).pipe(Effect.orElseSucceed(() => false));
 
   // A fixed offline table stands in for a Provider's token check. The
   // fake has no regions; the region argument goes unused.
@@ -142,15 +146,21 @@ export const makeFakeProvider = (options: {
       return yield* gone(name);
     }
     const dir = join(root, name);
-    const text = yield* Effect.tryPromise({
-      try: () => readFile(join(dir, "sandbox.json"), "utf8"),
-      catch: (cause) =>
-        !existsSync(dir)
-          ? gone(name)
-          : hasCode(cause, "ENOENT")
-            ? gone(name, true)
-            : fail(describe(cause)),
-    });
+    const text = yield* fs
+      .readFileString(join(dir, "sandbox.json"))
+      .pipe(
+        Effect.catchAll((error) =>
+          Effect.flatMap(exists(dir), (here) =>
+            Effect.fail(
+              !here
+                ? gone(name)
+                : error._tag === "SystemError" && error.reason === "NotFound"
+                  ? gone(name, true)
+                  : fail(describe(error)),
+            ),
+          ),
+        ),
+      );
     const json = yield* Effect.try({
       try: () => JSON.parse(text) as unknown,
       catch: (cause) => fail(describe(cause)),
@@ -158,10 +168,15 @@ export const makeFakeProvider = (options: {
     const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
       Effect.mapError((error) => fail(error.message)),
     );
-    const seconds = yield* Effect.tryPromise({
-      try: () => readFile(join(dir, "deadline"), "utf8"),
-      catch: (cause) => (!existsSync(dir) ? gone(name) : fail(describe(cause))),
-    });
+    const seconds = yield* fs
+      .readFileString(join(dir, "deadline"))
+      .pipe(
+        Effect.catchAll((error) =>
+          Effect.flatMap(exists(dir), (here) =>
+            Effect.fail(here ? fail(describe(error)) : gone(name)),
+          ),
+        ),
+      );
     if (!/^[0-9]+\n?$/.test(seconds)) {
       return yield* fail(`could not read the Deadline: ${seconds.trim()}`);
     }
@@ -177,10 +192,9 @@ export const makeFakeProvider = (options: {
     });
     const current = yield* now;
     if (info.deadline.getTime() <= current.getTime()) {
-      yield* Effect.tryPromise({
-        try: () => rm(dir, { recursive: true, force: true }),
-        catch: (cause) => fail(describe(cause)),
-      });
+      yield* fs
+        .remove(dir, { recursive: true, force: true })
+        .pipe(Effect.mapError((error) => fail(describe(error))));
       return yield* gone(name);
     }
     return info;
@@ -193,15 +207,11 @@ export const makeFakeProvider = (options: {
     text: string,
   ) {
     const temp = `${path}.${randomUUID()}.tmp`;
-    yield* Effect.tryPromise({
-      try: async () => {
-        await writeFile(temp, text);
-        await rename(temp, path);
-      },
-      catch: (cause) => fail(describe(cause)),
-    }).pipe(
+    yield* fs.writeFileString(temp, text).pipe(
+      Effect.andThen(fs.rename(temp, path)),
+      Effect.mapError((error) => fail(describe(error))),
       Effect.tapError(() =>
-        Effect.tryPromise(() => rm(temp, { force: true })).pipe(Effect.ignore),
+        fs.remove(temp, { force: true }).pipe(Effect.ignore),
       ),
     );
   });

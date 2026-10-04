@@ -1,4 +1,4 @@
-import { CommandExecutor } from "@effect/platform";
+import { CommandExecutor, FileSystem } from "@effect/platform";
 import { Config, Effect, Layer, Option } from "effect";
 import { ProviderError } from "./errors.ts";
 import { loginFor } from "./login/provider-login.ts";
@@ -17,6 +17,7 @@ export const ProvidersLive = Layer.effect(
   Providers,
   Effect.gen(function* () {
     const executor = yield* CommandExecutor.CommandExecutor;
+    const fs = yield* FileSystem.FileSystem;
     const docker = yield* Effect.cached(
       importFor("docker", () =>
         Promise.all([
@@ -85,6 +86,7 @@ export const ProvidersLive = Layer.effect(
         importFor("fake", () => import("./fake/fake-provider.ts")).pipe(
           Effect.map((module) =>
             module.makeFakeProvider({
+              fs,
               root: fakeRoot.value,
               watch: "process",
               login: loginFor("fake"),

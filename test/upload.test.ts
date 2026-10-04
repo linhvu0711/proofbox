@@ -30,6 +30,7 @@ import {
   makeGitFolder,
   runCli,
 } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const homeFiles = (home: string): string[] => {
   const out: string[] = [];
@@ -58,7 +59,9 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
     new Map<string, ProviderEntry>([
       [
         "fake",
-        providerEntry(makeFakeProvider({ root: env.root, watch: "none" })),
+        providerEntry(
+          makeFakeProvider({ fs: nodeFs, root: env.root, watch: "none" }),
+        ),
       ],
     ]),
   );

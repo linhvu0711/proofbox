@@ -24,6 +24,7 @@ import { logOut, withCreateMark } from "../src/local-sandboxes.ts";
 import { readLogins } from "../src/login/logins-file.ts";
 import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 afterEach(() => {
   cleanupEnvs();
@@ -67,7 +68,7 @@ const makeMachine = (
   const root = tempDir("proofbox-fake-");
   mkdirSync(join(home, ".config", "proofbox"), { recursive: true });
   saveFakeLogin(home);
-  const fake = makeFakeProvider({ root, watch: "none" });
+  const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const provider: Provider = {
     ...fake,
     ...(options.noLogin === true ? { login: { _tag: "None" } } : {}),
