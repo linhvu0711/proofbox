@@ -22,8 +22,7 @@ describe("Sandbox id", () => {
         get: () => Effect.die("unused"),
         list: Effect.die("unused"),
         delete: () => Effect.die("unused"),
-        stateDir: () => "",
-        secretsDir: () => "",
+        sandboxFolders: () => ({ state: "", secrets: "" }),
         connect: () => Effect.die("unused"),
       };
       // When

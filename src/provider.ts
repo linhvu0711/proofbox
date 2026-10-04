@@ -198,6 +198,13 @@ export interface Connection {
   >;
 }
 
+// The folders a Provider keeps proofbox's own files in; the file names
+// live in `src/sandbox-file.ts`.
+export interface SandboxFolders {
+  readonly state: string;
+  readonly secrets: string;
+}
+
 export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
@@ -339,8 +346,7 @@ export interface Provider {
     | LoginExpiredError
     | BadLoginsFileError
   >;
-  readonly stateDir: (name: string) => string;
-  readonly secretsDir: (name: string, os: Os) => string;
+  readonly sandboxFolders: (name: string, os: Os) => SandboxFolders;
   readonly connect: (
     sandbox: SandboxRef,
   ) => Effect.Effect<

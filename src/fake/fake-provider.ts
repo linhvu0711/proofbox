@@ -557,10 +557,12 @@ export const makeFakeProvider = (options: {
     list,
     delete: del,
     extend,
-    stateDir: (name) => join(root, name, "state"),
     // The fake runs on the Caller's machine, where the env file already
     // is; its Secrets folder (mode 0700) is on disk, not a tmpfs, until delete.
-    secretsDir: (name) => join(root, name, "secrets"),
+    sandboxFolders: (name) => ({
+      state: join(root, name, "state"),
+      secrets: join(root, name, "secrets"),
+    }),
     connect,
   };
 };

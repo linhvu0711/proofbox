@@ -1305,9 +1305,10 @@ export const makeNamespaceProvider = (deps: {
     list,
     delete: del,
     extend,
-    stateDir: () => "/var/lib/proofbox",
-    secretsDir: (_name, os) =>
-      os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
+    sandboxFolders: (_name, os) => ({
+      state: "/var/lib/proofbox",
+      secrets: os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
+    }),
     connect,
   };
 };
