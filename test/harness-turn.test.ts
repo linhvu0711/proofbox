@@ -47,6 +47,20 @@ it("harness prompt prints that the Turn started", async () => {
   });
 });
 
+it("a second prompt resumes the Harness session", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  await runCli(env, ["harness", "prompt", id, "recall"]);
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toBe("done\nremembers: make hello.txt\n");
+});
+
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {
   // Given
   const env = makeEnv();

@@ -3,7 +3,11 @@ import { HarnessError } from "./errors.ts";
 import type { Harness } from "./harness.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Providers } from "./provider.ts";
-import { sandboxFiles } from "./sandbox-file.ts";
+import {
+  type SandboxFiles,
+  sandboxFiles,
+  writeSandboxFile,
+} from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
 import { withSecrets } from "./secrets.ts";
 
@@ -198,3 +202,26 @@ export const endText = (
     session: Option.none<string>(),
   };
 };
+
+export const settleTurn = Effect.fn("turn.settleTurn")(function* (
+  rawId: string,
+  files: SandboxFiles,
+  harness: Harness,
+  state: Extract<TurnState, { readonly _tag: "Ended" }>,
+) {
+  const result = endText(harness, state.exit, state.output, state.errLines);
+  if (Option.isSome(result.session)) {
+    const code = yield* writeSandboxFile(
+      rawId,
+      files.session,
+      new TextEncoder().encode(`${result.session.value}\n`),
+      { executable: false },
+    );
+    if (code !== 0)
+      return yield* new HarnessError({
+        harness: harness.name,
+        reason: `could not save the Harness session (exit code ${code})`,
+      });
+  }
+  return result;
+});

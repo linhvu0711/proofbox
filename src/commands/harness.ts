@@ -13,7 +13,7 @@ import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
-import { endText, readTurn, startTurn } from "../turn.ts";
+import { readTurn, settleTurn, startTurn } from "../turn.ts";
 
 export const harnessEntryFor = Effect.fn("harness.harnessEntryFor")(function* (
   name: string,
@@ -82,10 +82,12 @@ export const promptHarness = Effect.fn("harness.promptHarness")(function* (
     });
   const entry = yield* harnessEntryFor(turn.harness.value);
   const harness = yield* entry.load;
-  yield* startTurn(
-    rawId,
-    harness.turn({ prompt, model, session: turn.session }),
-  );
+  let session = turn.session;
+  if (turn.state._tag === "Ended") {
+    yield* settleTurn(rawId, turn.files, harness, turn.state);
+    session = (yield* readTurn(rawId, 0)).session;
+  }
+  yield* startTurn(rawId, harness.turn({ prompt, model, session }));
   const output = yield* CliOutput;
   yield* output.err(
     `proofbox: turn started; run proofbox harness wait ${rawId}\n`,
@@ -112,12 +114,7 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       });
     const entry = yield* harnessEntryFor(turn.harness.value);
     const harness = yield* entry.load;
-    const result = endText(
-      harness,
-      turn.state.exit,
-      turn.state.output,
-      turn.state.errLines,
-    );
+    const result = yield* settleTurn(rawId, turn.files, harness, turn.state);
     yield* output.out(result.text);
     yield* output.setExitCode(result.code);
     return;
