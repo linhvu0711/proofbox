@@ -223,5 +223,16 @@ export const settleTurn = Effect.fn("turn.settleTurn")(function* (
         reason: `could not save the Harness session (exit code ${code})`,
       });
   }
+  const code = yield* writeSandboxFile(
+    rawId,
+    `${files.turn}/result`,
+    new TextEncoder().encode(`${result.code}\n${result.text}`),
+    { executable: false },
+  );
+  if (code !== 0)
+    return yield* new HarnessError({
+      harness: harness.name,
+      reason: `could not save the Turn result (exit code ${code})`,
+    });
   return result;
 });

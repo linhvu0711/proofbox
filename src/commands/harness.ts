@@ -107,6 +107,11 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
         reason: "no Harness in this Sandbox",
       });
     if (turn.state._tag === "Running") continue;
+    if (turn.state._tag === "Saved") {
+      yield* output.out(turn.state.text);
+      yield* output.setExitCode(turn.state.code);
+      return;
+    }
     if (turn.state._tag !== "Ended")
       return yield* new HarnessError({
         harness: turn.harness.value,

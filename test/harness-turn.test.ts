@@ -61,6 +61,28 @@ it("a second prompt resumes the Harness session", async () => {
   expect(result.stdout).toBe("done\nremembers: make hello.txt\n");
 });
 
+it("two harness waits on one ended Turn print the same result", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  // When
+  const first = await runCli(env, ["harness", "wait", id]);
+  const second = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(
+    [first, second].map((result) => ({
+      code: result.exitCode,
+      stdout: result.stdout,
+    })),
+  ).toEqual([
+    { code: 0, stdout: "done\ndid: make hello.txt\n" },
+    { code: 0, stdout: "done\ndid: make hello.txt\n" },
+  ]);
+  const saved = join(env.root, id.slice(5), "state", "turn", "result");
+  expect(readFileSync(saved, "utf8")).toBe("0\ndone\ndid: make hello.txt\n");
+});
+
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {
   // Given
   const env = makeEnv();
