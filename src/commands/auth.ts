@@ -30,7 +30,8 @@ import {
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { keeperPaths, liveCreates, localSandboxes } from "../keeper/paths.ts";
+import { keeperPaths } from "../keeper/paths.ts";
+import { liveCreates, localSandboxes } from "../local-sandboxes.ts";
 import {
   changeLogins,
   type LoginsFile,
