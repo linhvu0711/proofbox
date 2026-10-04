@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-// The one sync check: `commandEvents` maps a spawn failure with a plain
-// function, and FileSystem has no sync `exists`.
+// biome-ignore lint/style/noRestrictedImports: commandEvents maps a spawn failure with a plain function, and FileSystem has no sync exists.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+// biome-ignore lint/style/noRestrictedImports: FileSystem has no lstat, and a link is hashed as a link.
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, FileSystem } from "@effect/platform";

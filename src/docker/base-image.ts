@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+// biome-ignore lint/style/noRestrictedImports: FileSystem has no Dirent readdir, and stat would follow links.
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { FileSystem } from "@effect/platform";
@@ -35,17 +36,15 @@ export const baseImageVersion = (
     for (const path of files) {
       hash.update(`${path}\0`);
       hash.update(
-        yield* fs
-          .readFile(join(dir, path))
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new ProviderError({
-                  provider: "docker",
-                  reason: platformReason(error),
-                }),
-            ),
+        yield* fs.readFile(join(dir, path)).pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: "docker",
+                reason: platformReason(error),
+              }),
           ),
+        ),
       );
       hash.update("\0");
     }
