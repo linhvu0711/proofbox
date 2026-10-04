@@ -40,9 +40,15 @@ export class CliOutput extends Effect.Service<CliOutput>()(
           ),
         );
       return {
-        out: (data) => write(process.stdout, captured.out, data),
-        err: (data) => write(process.stderr, captured.err, data),
-        setExitCode: (code) => Ref.set(captured.exitCode, code),
+        out: Effect.fn("CliOutput.out")((data: string | Uint8Array) =>
+          write(process.stdout, captured.out, data),
+        ),
+        err: Effect.fn("CliOutput.err")((data: string | Uint8Array) =>
+          write(process.stderr, captured.err, data),
+        ),
+        setExitCode: Effect.fn("CliOutput.setExitCode")((code: number) =>
+          Ref.set(captured.exitCode, code),
+        ),
         exitCode: Ref.get(captured.exitCode),
         captured,
       } satisfies CliOutputShape;

@@ -21,7 +21,9 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
       return yield* effect.pipe(Effect.raceFirst(heartbeat));
     });
     // A warning: something went wrong, and the command goes on without it.
-    const warn = (text: string) => output.err(`proofbox: ${text}\n`);
+    const warn = Effect.fn("Progress.warn")((text: string) =>
+      output.err(`proofbox: ${text}\n`),
+    );
     return { step, warn };
   }),
 }) {}
