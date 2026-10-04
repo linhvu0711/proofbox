@@ -576,12 +576,16 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
   );
 });
 
-export const writeMacDeadline = Effect.fn("macHost.writeMacDeadline")(
-  (link: Link, seconds: number) =>
-    link.run(
-      `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
-    ),
-);
+const writeMacDeadline = Effect.fn("macHost.writeDeadline")(function* (
+  link: Link,
+  _ref: SandboxRef,
+  seconds: number,
+) {
+  return yield* link.run(
+    `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
+  );
+});
+
 // A Mac host is the Sandbox itself: no container, and every command runs
 // over the Mac's own sshd.
 export const makeMacHost = (_deps: {
@@ -605,5 +609,11 @@ export const makeMacHost = (_deps: {
     }
   });
 
-  return { os: "macos", via: "sshd", reach, read: readMac };
+  return {
+    os: "macos",
+    via: "sshd",
+    reach,
+    read: readMac,
+    writeDeadline: writeMacDeadline,
+  };
 };

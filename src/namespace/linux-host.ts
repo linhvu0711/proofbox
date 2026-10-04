@@ -100,5 +100,16 @@ export const makeLinuxHost = (_deps: {
     _paths: KeeperPaths,
   ) {});
 
-  return { os: "linux", via: "gateway", reach, read };
+  // The container's Deadline file, `seconds` from the host's own clock.
+  const writeDeadline = Effect.fn("linuxHost.writeDeadline")(function* (
+    link: Link,
+    ref: SandboxRef,
+    seconds: number,
+  ) {
+    return yield* link.run(
+      `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
+    );
+  });
+
+  return { os: "linux", via: "gateway", reach, read, writeDeadline };
 };

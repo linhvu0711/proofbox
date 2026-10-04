@@ -12,7 +12,7 @@ import type {
   SandboxRef,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
-import type { Link, LinkVia } from "./ssh-link.ts";
+import type { HostResult, Link, LinkVia } from "./ssh-link.ts";
 
 // What the Namespace Provider asks of one host's OS. The Provider keeps the
 // Namespace API calls, list, and the create flow once; a Linux host and a
@@ -31,6 +31,12 @@ export interface NamespaceHost {
     link: Link,
     ref: SandboxRef,
   ) => Effect.Effect<SandboxInfo, SandboxCallError>;
+  // Sets the Sandbox's Deadline `seconds` from the host's own clock.
+  readonly writeDeadline: (
+    link: Link,
+    ref: SandboxRef,
+    seconds: number,
+  ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
 }
 
 export const describe = (cause: unknown) =>

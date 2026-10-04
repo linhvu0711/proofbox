@@ -61,7 +61,6 @@ import {
   macChecks,
   prepareMac,
   turnOnSshd,
-  writeMacDeadline,
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
@@ -287,12 +286,6 @@ export const makeNamespaceProvider = (deps: {
       }).catch(() => {}),
     );
 
-  // The container's Deadline file, `seconds` from the host's own clock.
-  const writeLinuxDeadline = (link: Link, ref: SandboxRef, seconds: number) =>
-    link.run(
-      `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
-    );
-
   const checkWritten = (
     ref: SandboxRef,
     written: { readonly exitCode: number; readonly stderr: string },
@@ -324,10 +317,10 @@ export const makeNamespaceProvider = (deps: {
       String(seconds),
     ]);
     const host = yield* hostOf(ref);
-    const written = yield* withCliLink(ref, (link) =>
-      host.os === "macos"
-        ? writeMacDeadline(link, seconds)
-        : writeLinuxDeadline(link, ref, seconds),
+    const written = yield* withCliLink(
+      ref,
+      (link) => host.writeDeadline(link, ref, seconds),
+      host,
     );
     yield* checkWritten(ref, written);
   });
@@ -989,12 +982,7 @@ export const makeNamespaceProvider = (deps: {
         deadline: Date,
       ) {
         const seconds = yield* pushHost(deadline);
-        yield* checkWritten(
-          ref,
-          yield* mac
-            ? writeMacDeadline(link, seconds)
-            : writeLinuxDeadline(link, ref, seconds),
-        );
+        yield* checkWritten(ref, yield* host.writeDeadline(link, ref, seconds));
       }),
       // One call over the link per command: the command run's script
       // pushes the Sandbox's Deadline and counts kills around it (ADR
