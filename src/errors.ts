@@ -19,6 +19,24 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
   }
 }
 
+export class HarnessError extends Data.TaggedError("HarnessError")<{
+  readonly harness: string;
+  readonly reason: string;
+}> {
+  override get message() {
+    return `Harness ${this.harness} failed: ${this.reason}`;
+  }
+}
+
+export class NoSuchHarnessError extends Data.TaggedError("NoSuchHarnessError")<{
+  readonly harness: string;
+  readonly known: ReadonlyArray<string>;
+}> {
+  override get message() {
+    return `No Harness named "${this.harness}". Harnesses: ${this.known.join(", ")}.`;
+  }
+}
+
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
 )<{
@@ -555,6 +573,19 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
 }> {
   get message() {
     return `No token on stdin. Run: echo <token> | proofbox auth login ${this.provider} --token`;
+  }
+}
+
+export class NoHarnessTokenError extends Data.TaggedError(
+  "NoHarnessTokenError",
+)<{
+  readonly harness: string;
+  readonly what: "token" | "API key";
+  readonly placeholder: "<token>" | "<key>";
+  readonly howToMake: string;
+}> {
+  get message() {
+    return `No ${this.what} on stdin. ${this.howToMake}, then run: echo ${this.placeholder} | proofbox harness login ${this.harness}`;
   }
 }
 

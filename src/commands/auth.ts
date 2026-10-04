@@ -1,4 +1,3 @@
-import { text } from "node:stream/consumers";
 import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { parseSpan, TOKEN_SPAN } from "../deadline.ts";
@@ -17,14 +16,18 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
+import { Harnesses } from "../harness.ts";
 import { type LogoutFailure, logOut } from "../local-sandboxes.ts";
 import {
   changeLogins,
+  type HarnessLoginsFile,
+  readHarnessLogins,
   readLogins,
   type SavedLogin,
 } from "../login/logins-file.ts";
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
+import { readStdinText } from "../login/stdin-token.ts";
 import { Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -81,14 +84,7 @@ export const loginToProvider = Effect.fn("auth.loginToProvider")(
     }
     const output = yield* CliOutput;
     if (options.token) {
-      const raw = yield* Effect.tryPromise({
-        try: () => text(process.stdin),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "local",
-            reason: cause instanceof Error ? cause.message : String(cause),
-          }),
-      });
+      const raw = yield* readStdinText();
       const token = raw.trim();
       if (token === "") {
         return yield* new NoTokenError({ provider: provider.name });
@@ -295,6 +291,20 @@ export const showAuthStatus = Effect.gen(function* () {
       }
     }
     yield* output.out(`${provider.name}  ${line}\n`);
+  }
+  const harnesses = yield* Harnesses;
+  const savedHarnesses = yield* readHarnessLogins.pipe(
+    Effect.catchAll(() => Effect.succeed<HarnessLoginsFile>({})),
+  );
+  for (const [name, entry] of harnesses) {
+    const saved = savedHarnesses[name];
+    if (saved === undefined) continue;
+    const expiresAt = saved.expiresAt;
+    const line =
+      expiresAt !== undefined && expiresAt.getTime() <= now
+        ? `expired ${formatTime(expiresAt)}. Run: proofbox harness login ${name}`
+        : `${entry.login.what} …${Redacted.value(saved.token).slice(-4)}${expiresAt !== undefined ? `, expires ${formatTime(expiresAt)}` : ""}, saved login`;
+    yield* output.out(`harness ${name}  ${line}\n`);
   }
 });
 

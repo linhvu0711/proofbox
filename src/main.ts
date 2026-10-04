@@ -5,6 +5,7 @@ import { Effect, Exit, Layer } from "effect";
 import { cli } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
+import { HarnessesLive } from "./harness-registry.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { ProvidersLive } from "./provider-registry.ts";
@@ -39,6 +40,7 @@ const program = Effect.gen(function* () {
     Layer.mergeAll(
       NodeContext.layer,
       CliOutput.Default,
+      HarnessesLive,
       providersLive,
       KeeperClient.Default.pipe(
         Layer.provide(
