@@ -6,7 +6,6 @@ import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
-  ProviderError,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
@@ -14,11 +13,16 @@ import {
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
-import { formatSandboxId } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
-import type { Link } from "./ssh-link.ts";
+import {
+  brandFor,
+  fail,
+  type NamespaceHost,
+  sandboxId,
+} from "./namespace-host.ts";
+import type { Link, OpenLink } from "./ssh-link.ts";
 
 // proofbox's own Mac files: the input helper and the Pixel script.
 export const MACOS_DIR = packagePath("images/macos/");
@@ -36,17 +40,6 @@ const DEADLINE = `${MAC_STATE_DIR}/deadline`;
 // Root's folder, not MAC_STATE_DIR: runner owns that one and could swap
 // the log for one with made-up kills.
 const MEMORY_KILLS = "/var/log/proofbox-memory-kills.log";
-
-const fail = (reason: string) =>
-  new ProviderError({ provider: "namespace", reason });
-
-const sandboxId = (ref: SandboxRef) =>
-  formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
-
-const brandFor = (ref: SandboxRef) => ({
-  provider: "namespace",
-  id: () => sandboxId(ref),
-});
 
 // Runs one host step; a non-zero exit fails with the step's words.
 const step = Effect.fn("macHost.step")(function* (
@@ -588,3 +581,8 @@ export const writeMacDeadline = Effect.fn("macHost.writeMacDeadline")(
       `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
     ),
 );
+// A Mac host is the Sandbox itself: no container, and every command runs
+// over the Mac's own sshd.
+export const makeMacHost = (_deps: {
+  readonly openLink: OpenLink;
+}): NamespaceHost => ({ os: "macos", read: readMac });

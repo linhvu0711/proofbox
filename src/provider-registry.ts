@@ -42,23 +42,39 @@ export const ProvidersLive = Layer.effect(
           import("./namespace/namespace-login.ts"),
           import("./namespace/namespace-provider.ts"),
           import("./namespace/ssh-link.ts"),
+          import("./namespace/linux-host.ts"),
+          import("./namespace/mac-host.ts"),
         ]),
       ).pipe(
-        Effect.map(([client, api, login, provider, link]) => {
-          const namespaceLogin = login.makeNamespaceLogin(fs);
-          const namespaceApi = api.makeNamespaceApi({ login: namespaceLogin });
-          return provider.makeNamespaceProvider({
-            api: namespaceApi,
-            executor,
-            login: namespaceLogin,
-            openLink: link.makeOpenLink(namespaceApi, executor),
-            forward: link.makeSshForward(namespaceApi, executor, fs),
-            fs,
-            dockerFor: (sandbox) =>
-              client.makeDockerClient(executor, { ssh: sandbox.ssh }),
-            spawnDetached,
-          });
-        }),
+        Effect.map(
+          ([client, api, login, provider, link, linuxHost, macHost]) => {
+            const namespaceLogin = login.makeNamespaceLogin(fs);
+            const namespaceApi = api.makeNamespaceApi({
+              login: namespaceLogin,
+            });
+            const openLink = link.makeOpenLink(namespaceApi, executor);
+            const dockerFor = (sandbox: {
+              readonly ssh: ReadonlyArray<string>;
+            }) => client.makeDockerClient(executor, { ssh: sandbox.ssh });
+            return provider.makeNamespaceProvider({
+              api: namespaceApi,
+              executor,
+              login: namespaceLogin,
+              openLink,
+              forward: link.makeSshForward(namespaceApi, executor, fs),
+              fs,
+              dockerFor,
+              spawnDetached,
+              hosts: {
+                linux: linuxHost.makeLinuxHost({
+                  api: namespaceApi,
+                  dockerFor,
+                }),
+                macos: macHost.makeMacHost({ openLink }),
+              },
+            });
+          },
+        ),
       ),
     );
     const providers = new Map<string, ProviderEntry>([

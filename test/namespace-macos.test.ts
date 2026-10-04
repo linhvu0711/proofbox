@@ -24,7 +24,8 @@ import {
   runCommand,
 } from "../src/command-checks.ts";
 import { ProviderUnavailableError } from "../src/errors.ts";
-import { macKillCount } from "../src/namespace/mac-host.ts";
+import { makeLinuxHost } from "../src/namespace/linux-host.ts";
+import { macKillCount, makeMacHost } from "../src/namespace/mac-host.ts";
 import type {
   CreateReq,
   NamespaceApi,
@@ -34,6 +35,7 @@ import type {
   HostResult,
   Link,
   LinkVia,
+  OpenLink,
   SshForward,
 } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
@@ -150,6 +152,23 @@ const makeMac = (
           }),
         ),
     });
+    const openLink: OpenLink = (_ref, _paths, owner, via) =>
+      note(links, `${owner} ${via}`).pipe(
+        Effect.zipRight(
+          via === "sshd" && sshdDown === true
+            ? Effect.fail(
+                new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason:
+                    "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
+                }),
+              )
+            : Effect.succeed(link(via)),
+        ),
+      );
+    const dockerFor = () => {
+      throw new Error("a Mac has no Docker");
+    };
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
       fs: nodeFs,
@@ -158,29 +177,18 @@ const makeMac = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: (_ref, _paths, owner, via) =>
-        note(links, `${owner} ${via}`).pipe(
-          Effect.zipRight(
-            via === "sshd" && sshdDown === true
-              ? Effect.fail(
-                  new ProviderUnavailableError({
-                    provider: "namespace",
-                    reason:
-                      "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
-                  }),
-                )
-              : Effect.succeed(link(via)),
-          ),
-        ),
+      openLink,
       forward: (ref, port) =>
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
           Effect.zipRight(portForward(ref, port)),
         ),
-      dockerFor: () => {
-        throw new Error("a Mac has no Docker");
-      },
+      dockerFor,
       spawnDetached: (_provider, rel, args) =>
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
+      hosts: {
+        linux: makeLinuxHost({ api, dockerFor }),
+        macos: makeMacHost({ openLink }),
+      },
     });
     return { provider, calls, requests, commands, detached, links, routed };
   });

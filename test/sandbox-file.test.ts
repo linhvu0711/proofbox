@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import { makeDockerProvider } from "../src/docker/docker-provider.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { makeLinuxHost } from "../src/namespace/linux-host.ts";
+import { makeMacHost } from "../src/namespace/mac-host.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import { sandboxFiles } from "../src/sandbox-file.ts";
@@ -46,6 +48,10 @@ const namespace = () =>
     forward: () => Effect.die("unused"),
     dockerFor: () => client,
     spawnDetached: () => Effect.die("unused"),
+    hosts: {
+      linux: makeLinuxHost({ api, dockerFor: () => client }),
+      macos: makeMacHost({ openLink: () => Effect.die("unused") }),
+    },
   });
 
 describe("Sandbox files", () => {

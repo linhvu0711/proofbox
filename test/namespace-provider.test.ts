@@ -30,6 +30,8 @@ import {
   TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
+import { makeLinuxHost } from "../src/namespace/linux-host.ts";
+import { makeMacHost } from "../src/namespace/mac-host.ts";
 import type {
   ApiError,
   ApiLoginError,
@@ -314,25 +316,32 @@ const makeProvider = (
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly region?: string;
   },
-) =>
-  makeNamespaceProvider({
+) => {
+  const api = fakeApi(calls, options);
+  const openLink = () =>
+    Effect.succeed<Link>({
+      ssh: [],
+      stream: () => Stream.empty,
+      run,
+    });
+  return makeNamespaceProvider({
     executor: nodeExecutor,
     fs: nodeFs,
-    api: fakeApi(calls, options),
+    api,
     login: Effect.succeed({
       token: Redacted.make("token"),
       region: Option.fromNullable(options?.region),
     }),
-    openLink: () =>
-      Effect.succeed<Link>({
-        ssh: [],
-        stream: () => Stream.empty,
-        run,
-      }),
+    openLink,
     forward: () => Effect.die("unused"),
     dockerFor: () => docker,
     spawnDetached: () => Effect.void,
+    hosts: {
+      linux: makeLinuxHost({ api, dockerFor: () => docker }),
+      macos: makeMacHost({ openLink }),
+    },
   });
+};
 
 describe("Namespace Provider", () => {
   it("exec on a Mac from another machine exits 125 without opening the gateway", async () => {
@@ -498,21 +507,28 @@ describe("Namespace Provider", () => {
         const spawned = yield* Ref.make<
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
+        const api = fakeApi(yield* Ref.make<ReadonlyArray<string>>([]));
+        const dockerFor = () => {
+          throw new Error("unused");
+        };
+        const openLink = () => Effect.succeed(link);
         const provider = makeNamespaceProvider({
           executor: nodeExecutor,
           fs: nodeFs,
-          api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
+          api,
           login: Effect.die("unused"),
-          openLink: () => Effect.succeed(link),
+          openLink,
           forward: () => Effect.die("unused"),
-          dockerFor: () => {
-            throw new Error("unused");
-          },
+          dockerFor,
           spawnDetached: (provider, rel, args) =>
             Ref.update(spawned, (all) => [
               ...all,
               [provider, rel, args] as const,
             ]),
+          hosts: {
+            linux: makeLinuxHost({ api, dockerFor }),
+            macos: makeMacHost({ openLink }),
+          },
         });
         yield* TestClock.setTime(new Date("1970-01-01T00:10:00Z").getTime());
         // When
@@ -1465,6 +1481,31 @@ const warmNamespace = (
         return base.execText(container, user, argv);
       },
     };
+    const openLink = () =>
+      Effect.succeed<Link>({
+        ssh: [],
+        stream: () => {
+          counts.stream += 1;
+          return Stream.empty;
+        },
+        run: (commandLine) => {
+          counts.run += 1;
+          runs.push(commandLine);
+          return commandLine.includes("docker inspect")
+            ? Effect.succeed(
+                done(
+                  `${JSON.stringify({
+                    "proofbox.name": "abc123",
+                    "proofbox.os": "linux",
+                    "proofbox.created-at": "1970-01-01T00:00:00Z",
+                    "proofbox.idle-seconds": "900",
+                    "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+                  })}|true\n900\n`,
+                ),
+              )
+            : Effect.succeed(done());
+        },
+      });
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
       fs: nodeFs,
@@ -1480,37 +1521,17 @@ const warmNamespace = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: () =>
-        Effect.succeed<Link>({
-          ssh: [],
-          stream: () => {
-            counts.stream += 1;
-            return Stream.empty;
-          },
-          run: (commandLine) => {
-            counts.run += 1;
-            runs.push(commandLine);
-            return commandLine.includes("docker inspect")
-              ? Effect.succeed(
-                  done(
-                    `${JSON.stringify({
-                      "proofbox.name": "abc123",
-                      "proofbox.os": "linux",
-                      "proofbox.created-at": "1970-01-01T00:00:00Z",
-                      "proofbox.idle-seconds": "900",
-                      "proofbox.max-life-at": "2099-01-01T00:00:00Z",
-                    })}|true\n900\n`,
-                  ),
-                )
-              : Effect.succeed(done());
-          },
-        }),
+      openLink,
       forward: () => Effect.die("unused"),
       dockerFor: () => docker,
       spawnDetached: (_provider, rel, args) =>
         Effect.sync(() => {
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
+      hosts: {
+        linux: makeLinuxHost({ api, dockerFor: () => docker }),
+        macos: makeMacHost({ openLink }),
+      },
     });
     // The Max-life cap the host push reads, as create writes it.
     const paths = yield* keeperPaths({
