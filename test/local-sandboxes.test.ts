@@ -8,11 +8,21 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "@effect/vitest";
-import { ConfigProvider, Effect } from "effect";
+import {
+  ConfigProvider,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Ref,
+} from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
-import { liveCreates, withCreateMark } from "../src/local-sandboxes.ts";
-import type { Provider } from "../src/provider.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { logOut, withCreateMark } from "../src/local-sandboxes.ts";
+import { readLogins } from "../src/login/logins-file.ts";
+import { type Provider, Providers, providerEntry } from "../src/provider.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 afterEach(() => {
@@ -29,6 +39,12 @@ const tempDir = (prefix: string) => {
   return dir;
 };
 
+const saveFakeLogin = (home: string) =>
+  writeFileSync(
+    join(home, ".config", "proofbox", "logins.json"),
+    '{"fake":{"way":"token","token":"t0k"}}',
+  );
+
 // A machine with a saved fake login: its HOME, its runtime dir, and the
 // fake Provider.
 const makeMachine = (
@@ -38,10 +54,7 @@ const makeMachine = (
   const runtime = tempDir("proofbox-runtime-");
   const root = tempDir("proofbox-fake-");
   mkdirSync(join(home, ".config", "proofbox"), { recursive: true });
-  writeFileSync(
-    join(home, ".config", "proofbox", "logins.json"),
-    '{"fake":{"way":"token","token":"t0k"}}',
-  );
+  saveFakeLogin(home);
   const fake = makeFakeProvider({ root, watch: "none" });
   const provider: Provider =
     options.noLogin === true ? { ...fake, login: { _tag: "None" } } : fake;
@@ -52,13 +65,27 @@ const makeMachine = (
       ? [["PROOFBOX_FAKE_TOKEN", "t0k"] as const]
       : []),
   ]);
+  const providers = Layer.succeed(
+    Providers,
+    new Map([["fake", providerEntry(provider)]]),
+  );
   return {
     home,
     runtime,
     provider,
-    configured: Effect.withConfigProvider(ConfigProvider.fromMap(config)),
+    // The Keeper stop is a border: the direct client stops nothing.
+    configured: <A, E>(effect: Effect.Effect<A, E, KeeperClient>) =>
+      effect.pipe(
+        Effect.provide(KeeperClient.Direct.pipe(Layer.provide(providers))),
+        Effect.withConfigProvider(ConfigProvider.fromMap(config)),
+      ),
   };
 };
+
+const savedLogins = (home: string): unknown =>
+  JSON.parse(
+    readFileSync(join(home, ".config", "proofbox", "logins.json"), "utf8"),
+  );
 
 // Each create mark in the runtime dir, as its lines.
 const marks = (runtime: string) =>
@@ -123,15 +150,140 @@ describe("Create marks", () => {
       expect(during).toEqual([]);
     }).pipe(machine.configured);
   });
+});
+
+describe("Logout and creates", () => {
+  it.live(
+    "a create marked before logout's last look holds logout until it ends",
+    () => {
+      // Given
+      const machine = makeMachine();
+      return Effect.gen(function* () {
+        const marked = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const waiting = yield* Deferred.make<number>();
+        // When
+        const create = yield* Effect.fork(
+          withCreateMark(
+            machine.provider,
+            Deferred.succeed(marked, undefined).pipe(
+              Effect.zipRight(Deferred.await(release)),
+              Effect.zipRight(readLogins),
+            ),
+          ),
+        );
+        yield* Deferred.await(marked);
+        const logout = yield* Effect.fork(
+          logOut(machine.provider, (creates) =>
+            Deferred.succeed(waiting, creates),
+          ),
+        );
+        const waited = yield* Deferred.await(waiting);
+        yield* Deferred.succeed(release, undefined);
+        const seen = yield* Fiber.join(create);
+        const result = yield* Fiber.join(logout);
+        // Then
+        expect(waited).toBe(1);
+        expect(Object.keys(seen)).toEqual(["fake"]);
+        expect(result).toEqual({
+          _tag: "LoggedOut",
+          deleted: [],
+          elsewhere: [],
+          unfinishedElsewhere: [],
+          failures: [],
+        });
+        expect(savedLogins(machine.home)).toEqual({});
+      }).pipe(machine.configured);
+    },
+  );
 
   it.live(
-    "a create mark with no start time counts while its process runs",
+    "a create that starts after logout removed the login finds no login",
     () => {
+      // Given
       const machine = makeMachine();
-      const name = `fake-creating-${process.pid}-0123abcd`;
-      writeFileSync(join(machine.runtime, name), `${process.pid}\n\n`);
       return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([name]);
+        // When
+        const result = yield* logOut(machine.provider, () => Effect.void);
+        const seen = yield* withCreateMark(machine.provider, readLogins);
+        // Then
+        expect(result._tag).toBe("LoggedOut");
+        expect(seen).toEqual({});
+        expect(marks(machine.runtime)).toEqual([]);
+      }).pipe(machine.configured);
+    },
+  );
+
+  it.live(
+    "creates that start while logout runs either hold it or find no login",
+    () => {
+      // Given
+      const machine = makeMachine();
+      return Effect.gen(function* () {
+        for (let round = 0; round < 8; round++) {
+          saveFakeLogin(machine.home);
+          // When: a create's login reads, 20 ms apart, while it is marked
+          const create = (i: number) =>
+            Effect.sleep(Duration.millis((round * 7 + i * 5) % 40)).pipe(
+              Effect.zipRight(
+                withCreateMark(
+                  machine.provider,
+                  Effect.gen(function* () {
+                    const first = Object.keys(yield* readLogins);
+                    yield* Effect.sleep(Duration.millis(20));
+                    const second = Object.keys(yield* readLogins);
+                    return { first, second };
+                  }),
+                ),
+              ),
+            );
+          const [, reads] = yield* Effect.all(
+            [
+              logOut(machine.provider, () => Effect.void),
+              Effect.all([create(0), create(1), create(2)], {
+                concurrency: "unbounded",
+              }),
+            ],
+            { concurrency: "unbounded" },
+          );
+          // Then: no create saw its login go while it was marked
+          expect(
+            reads.filter(
+              (read) =>
+                read.first.includes("fake") && !read.second.includes("fake"),
+            ),
+          ).toEqual([]);
+          expect(savedLogins(machine.home)).toEqual({});
+        }
+      }).pipe(machine.configured);
+    },
+    30_000,
+  );
+
+  it.live(
+    "a create mark with no start time holds logout while its process runs",
+    () => {
+      // Given
+      const machine = makeMachine();
+      writeFileSync(
+        join(machine.runtime, `fake-creating-${process.pid}-0123abcd`),
+        `${process.pid}\n\n`,
+      );
+      return Effect.gen(function* () {
+        const waiting = yield* Deferred.make<number>();
+        // When
+        const logout = yield* Effect.fork(
+          logOut(machine.provider, (creates) =>
+            Deferred.succeed(waiting, creates),
+          ),
+        );
+        const waited = yield* Deferred.await(waiting);
+        yield* Fiber.interrupt(logout);
+        // Then
+        expect(waited).toBe(1);
+        expect(Object.keys(savedLogins(machine.home) as object)).toEqual([
+          "fake",
+        ]);
       }).pipe(machine.configured);
     },
   );
@@ -139,12 +291,20 @@ describe("Create marks", () => {
   // Where process 1 is this user's (root, or some containers), the case
   // cannot happen.
   it.live.skipIf(ownsPid1())(
-    "a create mark whose process id belongs to another user is not live",
+    "a create mark whose process id belongs to another user does not hold logout",
     () => {
+      // Given
       const machine = makeMachine();
       writeFileSync(join(machine.runtime, "fake-creating-1-0123abcd"), "1\n\n");
       return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([]);
+        const calls = yield* Ref.make(0);
+        // When
+        const result = yield* logOut(machine.provider, () =>
+          Ref.update(calls, (n) => n + 1),
+        );
+        // Then
+        expect(result._tag).toBe("LoggedOut");
+        expect(yield* Ref.get(calls)).toBe(0);
       }).pipe(machine.configured);
     },
   );
