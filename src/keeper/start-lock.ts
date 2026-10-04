@@ -53,19 +53,21 @@ const take = Effect.fn("startLock.take")(function* (
       join(temp, "owner"),
       `${process.pid}\n${token}\n${started}\n`,
     );
-    yield* fs.rename(temp, dir);
-    return true;
-  }).pipe(
-    // The rename onto a lock that is there fails with EEXIST or
-    // ENOTEMPTY, and FileSystem gives ENOTEMPTY the reason "Unknown", so
-    // a lock found at `dir` is the race this try lost.
-    Effect.catchTag("SystemError", (error) =>
-      Effect.flatMap(fs.exists(dir), (held) =>
-        held ? Effect.succeed(false) : Effect.fail(error),
+    return yield* fs.rename(temp, dir).pipe(
+      Effect.as(true),
+      // The rename onto a lock that is there fails with EEXIST or
+      // ENOTEMPTY, and FileSystem gives ENOTEMPTY the reason "Unknown",
+      // so such a failure with a lock found at `dir` is the race this try
+      // lost.
+      Effect.catchTag("SystemError", (error) =>
+        error.reason === "AlreadyExists" || error.reason === "Unknown"
+          ? Effect.flatMap(fs.exists(dir), (held) =>
+              held ? Effect.succeed(false) : Effect.fail(error),
+            )
+          : Effect.fail(error),
       ),
-    ),
-    Effect.ensuring(Effect.ignore(removeDir(temp))),
-  );
+    );
+  }).pipe(Effect.ensuring(Effect.ignore(removeDir(temp))));
 });
 
 // Move a stale lock aside, and delete it only when it is the lock that
