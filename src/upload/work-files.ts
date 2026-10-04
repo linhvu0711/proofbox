@@ -27,31 +27,29 @@ const hasCode = (cause: unknown, code: string) =>
 
 // The size comes from the same read as the hash, so both describe one
 // version of a file that changes while it is listed.
-const hashFile = (path: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const hash = createHash("sha256");
-    let size = 0;
-    yield* fs.stream(path).pipe(
-      Stream.runForEach((chunk) =>
-        Effect.sync(() => {
-          hash.update(chunk);
-          size += chunk.length;
-        }),
-      ),
-      Effect.mapError((error) => local(platformReason(error))),
-    );
-    return { sha256: hash.digest("hex"), size };
-  });
+const hashFile = Effect.fn("workFiles.hashFile")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const hash = createHash("sha256");
+  let size = 0;
+  yield* fs.stream(path).pipe(
+    Stream.runForEach((chunk) =>
+      Effect.sync(() => {
+        hash.update(chunk);
+        size += chunk.length;
+      }),
+    ),
+    Effect.mapError((error) => local(platformReason(error))),
+  );
+  return { sha256: hash.digest("hex"), size };
+});
 
-const hashLink = (path: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const target = yield* fs
-      .readLink(path)
-      .pipe(Effect.mapError((error) => local(platformReason(error))));
-    return createHash("sha256").update(`link:${target}`).digest("hex");
-  });
+const hashLink = Effect.fn("workFiles.hashLink")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const target = yield* fs
+    .readLink(path)
+    .pipe(Effect.mapError((error) => local(platformReason(error))));
+  return createHash("sha256").update(`link:${target}`).digest("hex");
+});
 
 const workFile = Effect.fn("workFiles.workFile")(function* (
   folder: string,
