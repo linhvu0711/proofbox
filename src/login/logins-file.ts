@@ -53,74 +53,76 @@ export const harnessLoginsPath = Effect.map(Config.string("HOME"), (home) =>
 );
 
 // A missing file means no logins; anything unreadable is a bad one.
-const readFileAt = Effect.fn("loginsFile.readFileAt")(function* <A, I>(
-  path: string,
-  schema: Schema.Schema<Readonly<Record<string, A>>, I>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const bad = (reason: string) => new BadLoginsFileError({ path, reason });
-  const text = yield* fs
-    .readFileString(path)
-    .pipe(
-      Effect.catchAll((error) =>
-        error._tag === "SystemError" && error.reason === "NotFound"
-          ? Effect.succeed(undefined)
-          : Effect.fail(bad("could not be read")),
-      ),
+export const readOwnerOnlyFile = Effect.fn("loginsFile.readOwnerOnlyFile")(
+  function* <A, I>(path: string, schema: Schema.Schema<A, I>, empty: A) {
+    const fs = yield* FileSystem.FileSystem;
+    const bad = (reason: string) => new BadLoginsFileError({ path, reason });
+    const text = yield* fs
+      .readFileString(path)
+      .pipe(
+        Effect.catchAll((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? Effect.succeed(undefined)
+            : Effect.fail(bad("could not be read")),
+        ),
+      );
+    if (text === undefined) {
+      return empty;
+    }
+    const json = yield* Effect.try({
+      try: () => JSON.parse(text) as unknown,
+      catch: () => bad("not JSON"),
+    });
+    return yield* Schema.decodeUnknown(schema)(json).pipe(
+      Effect.mapError(() => bad("not a logins file")),
     );
-  if (text === undefined) {
-    return yield* Effect.succeed<Readonly<Record<string, A>>>({});
-  }
-  const json = yield* Effect.try({
-    try: () => JSON.parse(text) as unknown,
-    catch: () => bad("not JSON"),
-  });
-  return yield* Schema.decodeUnknown(schema)(json).pipe(
-    Effect.mapError(() => bad("not a logins file")),
-  );
-});
+  },
+);
 
 export const readLogins = Effect.flatMap(loginsPath, (path) =>
-  readFileAt(path, LoginsFile),
+  readOwnerOnlyFile(path, LoginsFile, {}),
 );
 
 export const readHarnessLogins = Effect.flatMap(harnessLoginsPath, (path) =>
-  readFileAt(path, HarnessLoginsFile),
+  readOwnerOnlyFile(path, HarnessLoginsFile, {}),
 );
 
 // Write a unique temp file and rename it over the logins file, so a crash
 // never leaves half a file; the dir and file stay readable by the owner
 // only.
-const saveFileAt = Effect.fn("loginsFile.saveFileAt")(function* <A, I>(
-  path: string,
-  schema: Schema.Schema<A, I>,
-  value: A,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  yield* Effect.gen(function* () {
-    yield* fs.writeFileString(
-      temp,
-      `${JSON.stringify(Schema.encodeSync(schema)(value))}\n`,
-      { mode: 0o600 },
+export const writeOwnerOnlyFile = Effect.fn("loginsFile.writeOwnerOnlyFile")(
+  function* <A, I>(path: string, schema: Schema.Schema<A, I>, value: A) {
+    const fs = yield* FileSystem.FileSystem;
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    yield* Effect.gen(function* () {
+      yield* fs.writeFileString(
+        temp,
+        `${JSON.stringify(Schema.encodeSync(schema)(value))}\n`,
+        { mode: 0o600 },
+      );
+      yield* fs.chmod(temp, 0o600);
+      yield* fs.rename(temp, path);
+    }).pipe(
+      Effect.tapError(() =>
+        fs.remove(temp, { force: true }).pipe(Effect.ignore),
+      ),
+      Effect.mapError(
+        () => new BadLoginsFileError({ path, reason: "could not be written" }),
+      ),
     );
-    yield* fs.chmod(temp, 0o600);
-    yield* fs.rename(temp, path);
-  }).pipe(
-    Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)),
-    Effect.mapError(
-      () => new BadLoginsFileError({ path, reason: "could not be written" }),
-    ),
-  );
-});
-
-const saveLogins = Effect.fn("loginsFile.saveLogins")((logins: LoginsFile) =>
-  Effect.flatMap(loginsPath, (path) => saveFileAt(path, LoginsFile, logins)),
+  },
 );
 
-// The lock every change to logins.json runs under. Create and logout also
-// hold it while they check for a login and for a running create, so a
-// create either shows up for logout or finds no login (ADR 0016).
+const saveLogins = Effect.fn("loginsFile.saveLogins")((logins: LoginsFile) =>
+  Effect.flatMap(loginsPath, (path) =>
+    writeOwnerOnlyFile(path, LoginsFile, logins),
+  ),
+);
+
+// The lock every logins file in ~/.config/proofbox/ runs under, GitHub and
+// Harness too. Create and logout also hold it while they check for a login
+// and for a running create, so a create either shows up for logout or
+// finds no login (ADR 0016).
 export const withLoginsLock = Effect.fn("loginsFile.withLoginsLock")(function* <
   A,
   E,
@@ -170,7 +172,7 @@ export const changeHarnessLogins = Effect.fn("loginsFile.changeHarnessLogins")(
     return yield* withLoginsLock(
       Effect.gen(function* () {
         const logins = yield* readHarnessLogins;
-        yield* saveFileAt(path, HarnessLoginsFile, change(logins));
+        yield* writeOwnerOnlyFile(path, HarnessLoginsFile, change(logins));
         return logins;
       }),
     ).pipe(
