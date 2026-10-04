@@ -825,6 +825,47 @@ describe("Keeper", () => {
   );
 
   it.scoped(
+    "a command through a warm Keeper gives back its memory-kill counts unchanged",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a Provider whose every Exit carries memory-kill counts
+        const sandbox = yield* countedSandbox(env);
+        const provider: Provider = {
+          ...sandbox.counted,
+          connect: (ref) =>
+            Effect.map(sandbox.counted.connect(ref), (connection) => ({
+              ...connection,
+              exec: (argv, options) =>
+                connection
+                  .exec(argv, options)
+                  .pipe(
+                    Stream.map((event) =>
+                      event._tag === "Exit"
+                        ? { ...event, kills: { before: 2, after: 5 } }
+                        : event,
+                    ),
+                  ),
+            })),
+        };
+        const layers = yield* startKeeper(sandbox.id, provider);
+        // When
+        const events = yield* Effect.flatMap(KeeperClient, (client) =>
+          Effect.flatMap(client.exec(sandbox.id, ["true"]), (stream) =>
+            Stream.runCollect(stream),
+          ),
+        ).pipe(Effect.provide(layers));
+        // Then
+        expect(Chunk.toReadonlyArray(events).at(-1)).toEqual({
+          _tag: "Exit",
+          code: 0,
+          kills: { before: 2, after: 5 },
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
     "a command through the Keeper pushes the Deadline by the idle time",
     () => {
       const env = makeEnv();
@@ -1120,6 +1161,27 @@ describe("Keeper", () => {
   );
 
   it.scoped(
+    "a command through a Keeper that sends a line that does not decode fails with the decode error",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name, "not json");
+        // When
+        const error = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect({ message: error.message, get: sandbox.calls.get }).toEqual({
+          message: `Provider fake failed: Unexpected token 'o', "not json" is not valid JSON`,
+          get: 0,
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
     "Sandbox info through a Keeper that closes after it reads the request on a gone Sandbox fails with the gone message",
     () => {
       const env = makeEnv();
@@ -1182,6 +1244,26 @@ describe("Keeper", () => {
         // Then
         expect(error.message).toBe(
           "Provider fake failed: Keeper closed the connection before it answered",
+        );
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "Sandbox info through a Keeper that sends a line that does not decode fails with the decode error",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name, "not json");
+        // When
+        const error = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.flip, Effect.provide(sandbox.layers));
+        // Then
+        expect(error.message).toBe(
+          `Provider fake failed: Unexpected token 'o', "not json" is not valid JSON`,
         );
       }).pipe(runtimeConfig(env));
     },
