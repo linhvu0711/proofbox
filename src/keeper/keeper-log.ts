@@ -15,6 +15,11 @@ export type KeeperLogEntry = {
   readonly out: number;
   readonly err: number;
   readonly exit: number | undefined;
+  // From the start to the first output byte, on stdout or stderr;
+  // undefined when the command wrote none. A helper that writes only at
+  // its end (a screenshot) shows here whether the wait was the work on
+  // the Sandbox or the bytes on the way back.
+  readonly firstMs: number | undefined;
   readonly tookMs: number;
   // "done", "gave up", "Caller left", "gone", or "error: <kind>", as
   // "error: ProviderError". Never an error's text: it can hold the
@@ -25,8 +30,10 @@ export type KeeperLogEntry = {
 // A log past this size moves to `.log.1`, so the folder holds at most two.
 const ROTATE_AT = 1_048_576;
 
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+
 export const keeperLogLine = (entry: KeeperLogEntry) =>
-  `${formatTime(entry.at)} ${entry.kind} ${entry.program} out=${entry.out} err=${entry.err} exit=${entry.exit ?? "-"} took=${(entry.tookMs / 1000).toFixed(1)}s ${entry.ended}\n`;
+  `${formatTime(entry.at)} ${entry.kind} ${entry.program} out=${entry.out} err=${entry.err} exit=${entry.exit ?? "-"} first=${entry.firstMs === undefined ? "-" : seconds(entry.firstMs)} took=${seconds(entry.tookMs)} ${entry.ended}\n`;
 
 // proofbox's own helpers also name their sub-command ("pixel type"); its
 // later arguments can hold typed text, so nothing past it is kept.
