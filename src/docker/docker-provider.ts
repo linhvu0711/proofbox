@@ -434,6 +434,10 @@ export const makeDockerProvider = (options: {
     extend,
     stateDir: () => "/var/lib/proofbox",
     secretsDir: () => "/run/proofbox/secrets",
+    sandboxFolders: () => ({
+      state: "/var/lib/proofbox",
+      secrets: "/run/proofbox/secrets",
+    }),
     connect,
   };
 };
