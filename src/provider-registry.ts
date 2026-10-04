@@ -50,6 +50,7 @@ export const ProvidersLive = Layer.effect(
           });
           return provider.makeNamespaceProvider({
             api: namespaceApi,
+            executor,
             login: login.namespaceLogin,
             openLink: link.makeOpenLink(namespaceApi, executor),
             forward: link.makeSshForward(namespaceApi, executor),

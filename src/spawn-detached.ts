@@ -1,3 +1,5 @@
+// Command from @effect/platform cannot spawn a detached process, and the
+// Keeper must outlive this process, so this one spawn uses node:child_process.
 import { spawn } from "node:child_process";
 import { Effect } from "effect";
 import { entryPath } from "./entry.ts";

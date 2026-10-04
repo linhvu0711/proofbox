@@ -41,6 +41,7 @@ import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
 
@@ -313,6 +314,7 @@ const makeProvider = (
   },
 ) =>
   makeNamespaceProvider({
+    executor: nodeExecutor,
     api: fakeApi(calls, options),
     login: Effect.succeed({
       token: Redacted.make("token"),
@@ -494,6 +496,7 @@ describe("Namespace Provider", () => {
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
         const provider = makeNamespaceProvider({
+          executor: nodeExecutor,
           api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
           login: Effect.die("unused"),
           openLink: () => Effect.succeed(link),
@@ -1459,6 +1462,7 @@ const warmNamespace = (
       },
     };
     const provider = makeNamespaceProvider({
+      executor: nodeExecutor,
       api: {
         ...api,
         extend: (region, instanceId, seconds) =>

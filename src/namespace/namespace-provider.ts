@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import {
   access,
   readdir,
@@ -9,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { Command, CommandExecutor } from "@effect/platform";
 import {
   Cause,
   Chunk,
@@ -24,6 +23,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
+import { captureCommand } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
@@ -111,8 +111,6 @@ const IMAGE_KEEP_HOURS = 336;
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
-const exec = promisify(execFile);
-
 // Left on a Linux host once its Sandbox is made. Docker removes the
 // container at its Deadline (`--rm`) while the host lives on a while, so
 // with no container this tells an expired Sandbox from one create never
@@ -121,6 +119,7 @@ const MADE_MARK = '"$HOME/.proofbox-made"';
 
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
+  readonly executor: CommandExecutor.CommandExecutor;
   readonly login: ProviderLogin;
   readonly openLink: OpenLink;
   readonly forward: SshForward;
@@ -716,21 +715,32 @@ export const makeNamespaceProvider = (deps: {
     });
     return yield* Effect.gen(function* () {
       const progress = yield* Progress;
-      yield* Effect.tryPromise({
-        try: () =>
-          exec("ssh-keygen", [
-            "-q",
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-C",
-            "proofbox",
-            "-f",
-            keyBase,
-          ]).then(() => {}),
-        catch: (cause) => fail(`ssh-keygen failed: ${describe(cause)}`),
-      });
+      const keygen = yield* captureCommand(
+        Command.make(
+          "ssh-keygen",
+          "-q",
+          "-t",
+          "ed25519",
+          "-N",
+          "",
+          "-C",
+          "proofbox",
+          "-f",
+          keyBase,
+        ),
+      ).pipe(
+        Effect.provideService(CommandExecutor.CommandExecutor, deps.executor),
+        Effect.mapError((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? fail("ssh-keygen failed: spawn ssh-keygen ENOENT")
+            : fail(`ssh-keygen failed: ${error.message}`),
+        ),
+      );
+      if (keygen.exitCode !== 0) {
+        return yield* fail(
+          `ssh-keygen failed: exit ${keygen.exitCode}: ${keygen.stderr.trim()}`,
+        );
+      }
       const durationSeconds = Math.min(
         Duration.toSeconds(req.idle) + 60,
         Duration.toSeconds(req.maxLife),

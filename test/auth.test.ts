@@ -1666,6 +1666,7 @@ describe("auth", () => {
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
+              NodeContext.layer,
               CliOutput.Test,
               providers,
               KeeperClient.Direct.pipe(Layer.provide(providers)),
