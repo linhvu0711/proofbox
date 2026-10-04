@@ -12,6 +12,7 @@ import { runInSandbox } from "./commands/upload.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
   CloneRefusedError,
+  HarnessInstallFailedError,
   NoGithubLoginError,
   NoHarnessLoginError,
   ProviderError,
@@ -226,5 +227,30 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
         }),
       ),
     );
+  },
+);
+
+export const installHarness = Effect.fn("harnessSandbox.installHarness")(
+  function* (rawId: string, harness: Harness, version: Option.Option<string>) {
+    const providers = yield* Providers;
+    const id = yield* resolveSandboxId(rawId, providers);
+    const info = yield* id.provider.get(id);
+    const progress = yield* Progress;
+    const result = yield* progress.step(
+      `installing ${harness.name}`,
+      withDeadlinePush(
+        id.provider,
+        id,
+        info,
+      )(runKeepingTail(rawId, ["sh", "-c", harness.install(version)])),
+    );
+    if (result.code !== 0) {
+      const output = yield* CliOutput;
+      for (const line of result.lines) yield* output.err(line);
+      return yield* new HarnessInstallFailedError({
+        harness: harness.name,
+        code: result.code,
+      });
+    }
   },
 );

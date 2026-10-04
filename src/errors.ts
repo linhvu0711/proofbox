@@ -387,6 +387,17 @@ export class CloneRefusedError extends Data.TaggedError("CloneRefusedError")<{
   }
 }
 
+export class HarnessInstallFailedError extends Data.TaggedError(
+  "HarnessInstallFailedError",
+)<{
+  readonly harness: string;
+  readonly code: number;
+}> {
+  get message() {
+    return `Installing ${this.harness} failed with exit code ${this.code}; its last 50 lines are above. Check --harness-version and the Sandbox's network, then create again. This Sandbox was deleted.`;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{

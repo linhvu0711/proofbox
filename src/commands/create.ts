@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { FileSystem } from "@effect/platform";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   idleDefault,
@@ -23,6 +23,7 @@ import {
   checkHarnessCreate,
   cloneWorkFolder,
   copyHarnessProfile,
+  installHarness,
 } from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
@@ -251,6 +252,11 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           );
       }
       if (harness !== undefined) {
+        yield* installHarness(
+          id,
+          harness,
+          Option.fromNullable(options.harnessVersion),
+        );
         yield* copyHarnessProfile(id, harness);
       }
       if (secrets !== undefined) {

@@ -63,6 +63,23 @@ const fakeLogins = (env: CliEnv) => {
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
 };
 
+it("create --harness prints a step for the clone and one for the install", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  fakeLogins(env);
+  // When
+  const result = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  // Then
+  expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+    code: 0,
+    stderr:
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: cloning acme/app\nproofbox: uploading Work folder\nproofbox: sent 0 files, removed 0 files\nproofbox: installing fake\nproofbox: sending 2 Secrets\n",
+  });
+});
+
 const profileFile = (env: CliEnv, path: string, content: string) => {
   const root = join(
     env.env.HOME ?? "",
