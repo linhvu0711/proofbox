@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { Effect, Option } from "effect";
+import { FileSystem } from "@effect/platform";
+import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   idleDefault,
@@ -10,6 +10,7 @@ import {
 import {
   MissingCapabilityError,
   ProviderError,
+  platformReason,
   SetupNeedsWorkError,
   SetupScriptMissingError,
   SizeNotOfferedError,
@@ -17,16 +18,9 @@ import {
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { markCreate, unmarkCreate } from "../keeper/paths.ts";
-import { withLoginsLock } from "../login/logins-file.ts";
-import { envToken } from "../login/provider-login.ts";
+import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
-import {
-  lacksFeature,
-  type Os,
-  type Provider,
-  Providers,
-} from "../provider.ts";
+import { lacksFeature, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
@@ -34,29 +28,6 @@ import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
-
-// A create that may act with the saved login marks itself while the
-// Provider makes the host, and writes the mark under the logins lock: a
-// logout either waits for this create or has removed the login already,
-// and then the Provider finds none (ADR 0016). The env token wins over the
-// saved login, and logout never removes it, so a create with one needs no
-// mark; nor does a Provider with no login, or a run with no HOME.
-const markCreating = Effect.fn("create.markCreating")(function* (
-  provider: Provider,
-) {
-  if (provider.login._tag === "None") {
-    return Option.none<string>();
-  }
-  // A redacted string can never fail to load, so `option` yields None
-  // for a missing variable and anything else is a defect.
-  if (Option.isSome(yield* Effect.orDie(envToken(provider.name)))) {
-    return Option.none<string>();
-  }
-  return yield* withLoginsLock(markCreate(provider.idPrefix)).pipe(
-    Effect.map((mark) => Option.some(mark)),
-    Effect.catchTag("ConfigError", () => Effect.succeed(Option.none<string>())),
-  );
-});
 
 export const createSandbox = Effect.fn("create.createSandbox")(
   function* (options: {
@@ -70,6 +41,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly maxSize?: string | undefined;
     readonly size?: string | undefined;
   }) {
+    const fs = yield* FileSystem.FileSystem;
     const providers = yield* Providers;
     const providerName = options.provider ?? (yield* providerForOs(options.os));
     const entry = providers.get(providerName);
@@ -115,20 +87,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     const script =
       setupPath === undefined
         ? undefined
-        : yield* Effect.tryPromise({
-            try: () => readFile(setupPath),
-            catch: (cause) =>
-              typeof cause === "object" &&
-              cause !== null &&
-              "code" in cause &&
-              cause.code === "ENOENT"
-                ? new SetupScriptMissingError({ path: setupPath })
-                : new ProviderError({
-                    provider: "local",
-                    reason:
-                      cause instanceof Error ? cause.message : String(cause),
-                  }),
-          });
+        : yield* fs.readFile(setupPath).pipe(
+            Effect.catchAll((error) =>
+              Effect.fail(
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? new SetupScriptMissingError({ path: setupPath })
+                  : new ProviderError({
+                      provider: "local",
+                      reason: platformReason(error),
+                    }),
+              ),
+            ),
+          );
     const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
       options.envFile === undefined
@@ -164,18 +134,15 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             files,
           });
     // The mark goes once the Max life file is there for logout to find.
-    const info = yield* Effect.acquireUseRelease(
-      markCreating(provider),
-      () =>
-        provider.create({
-          os: options.os,
-          idle,
-          maxLife,
-          size,
-          snapshot: fp,
-        }),
-      (mark) =>
-        Option.match(mark, { onNone: () => Effect.void, onSome: unmarkCreate }),
+    const info = yield* withCreateMark(
+      provider,
+      provider.create({
+        os: options.os,
+        idle,
+        maxLife,
+        size,
+        snapshot: fp,
+      }),
     );
     const sandbox = { name: info.name, region: info.region };
     // A Sandbox that started from the Snapshot already has the Setup

@@ -39,6 +39,7 @@ import {
   runCli,
   trackTempDir,
 } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -330,6 +331,7 @@ describe("Docker Provider", () => {
               providerEntry(
                 makeDockerProvider({
                   client: makeDockerClient(executor),
+                  fs: nodeFs,
                   imageTag: tamperedTag,
                 }),
               ),

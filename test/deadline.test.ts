@@ -1,29 +1,12 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import {
-  Chunk,
-  ConfigProvider,
-  Duration,
-  Effect,
-  Fiber,
-  Layer,
-  Ref,
-  TestClock,
-  TestServices,
-} from "effect";
+import { Chunk, ConfigProvider, Duration, Effect, Layer, Ref } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
-import { execInSandbox } from "../src/commands/exec.ts";
 import { idleDefault, nextDeadline, parseSpan } from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -34,6 +17,7 @@ import {
   providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempRoots: string[] = [];
 const makeProviders = () => {
@@ -42,7 +26,10 @@ const makeProviders = () => {
   return Layer.succeed(
     Providers,
     new Map<string, ProviderEntry>([
-      ["fake", providerEntry(makeFakeProvider({ root, watch: "none" }))],
+      [
+        "fake",
+        providerEntry(makeFakeProvider({ fs: nodeFs, root, watch: "none" })),
+      ],
     ]),
   );
 };
@@ -148,91 +135,6 @@ describe("Deadline", () => {
       // Then
       expect(info.deadline.toISOString()).toBe("1970-01-01T00:15:00.000Z");
       expect(info.maxLifeAt.toISOString()).toBe("1970-01-01T03:00:00.000Z");
-    }).pipe(Effect.provide(layers())),
-  );
-
-  it.effect("exec pushes the Deadline by the idle time", () =>
-    Effect.gen(function* () {
-      // Given: a Sandbox at t=0
-      yield* createSandbox({ os: "linux", provider: "fake" });
-      const name = yield* sandboxName;
-      yield* TestClock.adjust("10 minutes");
-      // When
-      yield* execInSandbox(`fake:${name}`, ["true"]);
-      const info = yield* (yield* fake).get({ name, region: undefined });
-      // Then
-      expect(info.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
-    }).pipe(Effect.provide(layers())),
-  );
-
-  it.effect("exec never pushes past --max-life", () =>
-    Effect.gen(function* () {
-      // Given: a Sandbox with a 20 minute max life
-      yield* createSandbox({
-        os: "linux",
-        provider: "fake",
-        idle: "15m",
-        maxLife: "20m",
-      });
-      const name = yield* sandboxName;
-      yield* TestClock.adjust("10 minutes");
-      // When
-      yield* execInSandbox(`fake:${name}`, ["true"]);
-      const info = yield* (yield* fake).get({ name, region: undefined });
-      // Then
-      expect(info.deadline.toISOString()).toBe("1970-01-01T00:20:00.000Z");
-    }).pipe(Effect.provide(layers())),
-  );
-
-  it.effect("a long exec keeps pushing the Deadline", () =>
-    Effect.gen(function* () {
-      const waitForDeadline = (name: string, expected: string) =>
-        Effect.gen(function* () {
-          for (let i = 0; i < 100; i++) {
-            const info = yield* (yield* fake).get({ name, region: undefined });
-            if (info.deadline.toISOString() === expected) {
-              return;
-            }
-            // Live sleep only: wrapping get would give the provider the real
-            // clock and it would see the virtual deadline as passed.
-            yield* TestServices.provideLive(Effect.sleep("20 millis"));
-          }
-          const last = yield* (yield* fake).get({ name, region: undefined });
-          return yield* Effect.fail(
-            new Error(
-              `deadline not pushed yet; at ${last.deadline.toISOString()}`,
-            ),
-          );
-        });
-      // Given: a Sandbox and an exec that only ends when the test allows
-      yield* createSandbox({ os: "linux", provider: "fake" });
-      const name = yield* sandboxName;
-      const fiber = yield* Effect.fork(
-        execInSandbox(`fake:${name}`, [
-          "sh",
-          "-c",
-          "while [ ! -f go ]; do sleep 0.05; done",
-        ]),
-      );
-      // When: each spaced push fires at 5-minute marks of the 15-minute idle
-      yield* TestServices.provideLive(Effect.sleep("500 millis"));
-      yield* TestClock.adjust("5 minutes");
-      yield* waitForDeadline(name, "1970-01-01T00:20:00.000Z");
-      yield* TestClock.adjust("5 minutes");
-      yield* waitForDeadline(name, "1970-01-01T00:25:00.000Z");
-      const running = yield* (yield* fake).get({ name, region: undefined });
-      yield* TestClock.adjust("2 minutes");
-      yield* Effect.sync(() =>
-        writeFileSync(
-          join(tempRoots[tempRoots.length - 1] as string, name, "home", "go"),
-          "",
-        ),
-      );
-      yield* Fiber.join(fiber);
-      const done = yield* (yield* fake).get({ name, region: undefined });
-      // Then
-      expect(running.deadline.toISOString()).toBe("1970-01-01T00:25:00.000Z");
-      expect(done.deadline.toISOString()).toBe("1970-01-01T00:27:00.000Z");
     }).pipe(Effect.provide(layers())),
   );
 

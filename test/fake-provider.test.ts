@@ -1,12 +1,20 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, Duration, Effect, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
+import { runCommand } from "../src/command-checks.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { Progress } from "../src/progress.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempRoots: string[] = [];
 const makeRoot = () => {
@@ -31,7 +39,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       // When
       const error = yield* fake
         .create({
@@ -49,11 +57,23 @@ describe("fake Provider", () => {
     }),
   );
 
+  it.effect("list of a root that does not exist gives no Sandboxes", () =>
+    Effect.gen(function* () {
+      // Given: a root no create has made yet
+      const root = makeRoot();
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+      // When
+      const result = yield* fake.list;
+      // Then
+      expect(result).toEqual({ infos: [], unreached: [], unfinished: [] });
+    }),
+  );
+
   it.effect("get reads a whole Sandbox while an extend rewrites it", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -86,11 +106,36 @@ describe("fake Provider", () => {
     }),
   );
 
+  it.effect("extend writes the Deadline that get reads, in whole seconds", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox
+      const root = makeRoot();
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const ref = { name: sandbox.name, region: undefined };
+      // When
+      yield* fake.extend(ref, new Date(1_200_500));
+      const info = yield* fake.get(ref);
+      const file = readFileSync(join(root, sandbox.name, "deadline"), "utf8");
+      // Then
+      expect({ deadline: info.deadline.toISOString(), file }).toEqual({
+        deadline: "1970-01-01T00:20:00.000Z",
+        file: "1200\n",
+      });
+    }),
+  );
+
   it.effect("fake exec feeds stdin to the command", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -104,7 +149,7 @@ describe("fake Provider", () => {
         .pipe(
           Effect.flatMap((connection) =>
             Stream.runCollect(
-              connection.exec(["cat"], {
+              runCommand(connection, ["cat"], {
                 stdin: Stream.make(new TextEncoder().encode("hi\n")),
               }),
             ),
@@ -120,7 +165,45 @@ describe("fake Provider", () => {
         .join("");
       expect(stdout).toBe("hi\n");
       expect(events.some((event) => event._tag === "Stderr")).toBe(false);
-      expect(events[events.length - 1]).toEqual({ _tag: "Exit", code: 0 });
+      expect(events[events.length - 1]).toEqual({
+        _tag: "Exit",
+        code: 0,
+        kills: { before: 0, after: 0 },
+      });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("a command on the fake pushes the Deadline that get reads", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox whose Deadline is one minute away
+      const root = makeRoot();
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const ref = { name: sandbox.name, region: undefined };
+      yield* fake.extend(ref, new Date(Date.now() + 60_000));
+      // When
+      const before = Math.floor(Date.now() / 1000);
+      yield* fake.connect(ref).pipe(
+        Effect.flatMap((connection) =>
+          Stream.runDrain(runCommand(connection, ["true"])),
+        ),
+        Effect.scoped,
+      );
+      const after = Math.floor(Date.now() / 1000);
+      const info = yield* fake.get(ref);
+      // Then: the Deadline is the idle time from when the command ran
+      const seconds = info.deadline.getTime() / 1000;
+      expect(
+        seconds >= before + 900 && seconds <= after + 900
+          ? "pushed"
+          : `Deadline ${seconds} not in ${before + 900}..${after + 900}`,
+      ).toBe("pushed");
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 
@@ -128,7 +211,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -142,7 +225,7 @@ describe("fake Provider", () => {
         .pipe(
           Effect.flatMap((connection) =>
             Stream.runCollect(
-              connection.exec(["sh", "-c", 'read x; echo "rc:$?"']),
+              runCommand(connection, ["sh", "-c", 'read x; echo "rc:$?"']),
             ),
           ),
           Effect.scoped,
@@ -160,7 +243,7 @@ describe("fake Provider", () => {
         .join("");
       expect({ stdout, last: events[events.length - 1] }).toEqual({
         stdout: "rc:1\n",
-        last: { _tag: "Exit", code: 0 },
+        last: { _tag: "Exit", code: 0, kills: { before: 0, after: 0 } },
       });
     }).pipe(Effect.provide(NodeContext.layer)),
   );
@@ -171,7 +254,7 @@ describe("fake Provider", () => {
       Effect.gen(function* () {
         // Given: a fake Sandbox whose home folder is gone
         const root = makeRoot();
-        const fake = makeFakeProvider({ root, watch: "none" });
+        const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
         const sandbox = yield* fake
           .create({
             os: "linux",
@@ -188,7 +271,7 @@ describe("fake Provider", () => {
           .connect({ name: sandbox.name, region: undefined })
           .pipe(
             Effect.flatMap((connection) =>
-              Stream.runDrain(connection.exec(["true"])),
+              Stream.runDrain(runCommand(connection, ["true"])),
             ),
             Effect.scoped,
             Effect.flip,

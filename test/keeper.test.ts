@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer, type Server } from "node:net";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
@@ -31,12 +31,7 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
-import {
-  keeperPaths,
-  liveCreates,
-  markCreate,
-  unmarkCreate,
-} from "../src/keeper/paths.ts";
+import { keeperPaths } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import {
   type ExecEvent,
@@ -46,11 +41,13 @@ import {
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
+import { withCall } from "./support/connection.ts";
 import {
   eventually,
   keeperClientLayers,
   startKeeper,
 } from "./support/keeper.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -100,7 +97,11 @@ const countedSandbox = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const fake = makeFakeProvider({ root: env.root, watch: "none" });
+    const fake = makeFakeProvider({
+      fs: nodeFs,
+      root: env.root,
+      watch: "none",
+    });
     const info = yield* fake
       .create({
         os: "linux",
@@ -109,7 +110,7 @@ const countedSandbox = (
       })
       .pipe(Effect.provideService(Progress, noProgress));
     const calls = { get: 0, extend: 0 };
-    const watched = { get: 0 };
+    const watched = { get: 0, extend: 0 };
     const linux = fake.offers.linux;
     const counted: Provider = {
       ...fake,
@@ -139,6 +140,11 @@ const countedSandbox = (
             watched.get += 1;
             return connection.get;
           }),
+          extend: (deadline: Date) =>
+            Effect.suspend(() => {
+              watched.extend += 1;
+              return connection.extend(deadline);
+            }),
         })),
     };
     return {
@@ -165,17 +171,12 @@ const warmKeeper = (
     const layers = yield* startKeeper(sandbox.id, sandbox.counted);
     sandbox.calls.get = 0;
     sandbox.calls.extend = 0;
-    const deadline = Effect.map(
-      sandbox.fake.get({ name: sandbox.name, region: undefined }),
-      (read) => read.deadline.toISOString(),
-    );
     return {
       id: sandbox.id,
       name: sandbox.name,
       calls: sandbox.calls,
       watched: sandbox.watched,
       layers,
-      deadline,
     };
   });
 
@@ -206,7 +207,9 @@ const capturedErr = Effect.gen(function* () {
 // before it reads the request, as a Keeper does when its Sandbox is gone.
 const droppingKeeper = (name: string) =>
   Effect.gen(function* () {
-    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    const { socket } = yield* keeperPaths({ provider: "fake", name }).pipe(
+      Effect.provide(NodeContext.layer),
+    );
     yield* Effect.acquireRelease(
       Effect.async<Server>((resume) => {
         const server = createServer((client) => client.destroy());
@@ -224,7 +227,9 @@ const droppingKeeper = (name: string) =>
 // it shuts down after it read the request.
 const closingKeeper = (name: string, reply?: string) =>
   Effect.gen(function* () {
-    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    const { socket } = yield* keeperPaths({ provider: "fake", name }).pipe(
+      Effect.provide(NodeContext.layer),
+    );
     const requests = { count: 0 };
     yield* Effect.acquireRelease(
       Effect.async<Server>((resume) => {
@@ -394,10 +399,49 @@ describe("Keeper", () => {
     // the Keeper still serves
     await sleep(200);
     expect(writeError).toBeUndefined();
-    expect(replies).toEqual([{ exit: 0 }]);
+    expect(replies).toEqual([{ exit: 0, kills: [0, 0] }]);
     const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
     expect(again.stdout).toBe("still\n");
     expect(again.exitCode).toBe(0);
+  });
+
+  it("a request the Keeper cannot read gets a bad request answer", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const name = created.stdout.trim().slice("fake:".length);
+    const socket = createConnection({
+      path: join(env.runtime, `fake-${name}.sock`),
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("error", reject);
+    });
+    // When: the first line is not a request
+    socket.write("not json\n");
+    const replies: Array<unknown> = [];
+    await new Promise<void>((resolve) => {
+      let pending = "";
+      socket.on("data", (chunk) => {
+        pending += chunk.toString("utf8");
+        let newline = pending.indexOf("\n");
+        while (newline !== -1) {
+          replies.push(JSON.parse(pending.slice(0, newline)));
+          pending = pending.slice(newline + 1);
+          newline = pending.indexOf("\n");
+        }
+      });
+      socket.on("close", () => resolve());
+      socket.on("error", () => resolve());
+    });
+    // Then
+    expect(replies).toEqual([{ fail: "bad request" }]);
   });
 
   it("an exec that exits with a full input Mailbox still drains the client's writes", async () => {
@@ -500,12 +544,13 @@ describe("Keeper", () => {
     const name = created.stdout.trim().slice("fake:".length);
     const pid = keeperPid(env, name);
     // When: the Deadline passes. Write a temp file and rename it, like the
-    // fake does, so the Keeper never reads a half-written sandbox.json.
-    const sandboxFile = join(env.root, name, "sandbox.json");
-    const meta = JSON.parse(readFileSync(sandboxFile, "utf8"));
-    meta.deadline = new Date(Date.now() - 1000).toISOString();
-    writeFileSync(`${sandboxFile}.tmp`, `${JSON.stringify(meta)}\n`);
-    renameSync(`${sandboxFile}.tmp`, sandboxFile);
+    // fake does, so the Keeper never reads a half-written Deadline file.
+    const deadlineFile = join(env.root, name, "deadline");
+    writeFileSync(
+      `${deadlineFile}.tmp`,
+      `${Math.floor((Date.now() - 1000) / 1000)}\n`,
+    );
+    renameSync(`${deadlineFile}.tmp`, deadlineFile);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await sleep(200);
@@ -521,7 +566,11 @@ describe("Keeper", () => {
       Effect.gen(function* () {
         // Given: a Sandbox, and a folder where the Keeper's pid file goes
         const env = makeEnv();
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -559,7 +608,11 @@ describe("Keeper", () => {
       Effect.gen(function* () {
         // Given: a Sandbox, and a folder where the Keeper's pid file goes
         const env = makeEnv();
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -595,7 +648,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -629,7 +686,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox, and the start lock of a Keeper killed mid-start
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -664,7 +725,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox, and the start lock of a Keeper killed mid-start
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -700,7 +765,11 @@ describe("Keeper", () => {
       return Effect.gen(function* () {
         // Given: a Sandbox, and a start lock whose pid is this process,
         // which started at another time than the owner did
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -738,7 +807,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Sandbox, and the start lock of a Keeper that still runs
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -769,7 +842,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Sandbox and its Keeper starting in this process
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -825,38 +902,61 @@ describe("Keeper", () => {
   );
 
   it.scoped(
-    "a command through the Keeper pushes the Deadline by the idle time",
+    "a command through a warm Keeper gives back its memory-kill counts unchanged",
     () => {
       const env = makeEnv();
       return Effect.gen(function* () {
-        // Given
-        const keeper = yield* warmKeeper(env);
-        yield* TestClock.adjust("10 minutes");
-        // When
-        yield* execInSandbox(keeper.id, ["true"]).pipe(
-          Effect.provide(keeper.layers),
-        );
+        // Given: a Sandbox that has seen 2 memory kills
+        const sandbox = yield* countedSandbox(env);
+        writeFileSync(join(env.root, sandbox.name, "memory-kills"), "2\n");
+        const layers = yield* startKeeper(sandbox.id, sandbox.counted);
+        // When: 3 more happen while the command runs
+        const events = yield* Effect.flatMap(KeeperClient, (client) =>
+          Effect.flatMap(
+            client.exec(sandbox.id, ["sh", "-c", "echo 5 > ../memory-kills"]),
+            (stream) => Stream.runCollect(stream),
+          ),
+        ).pipe(Effect.provide(layers));
         // Then
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
+        expect(Chunk.toReadonlyArray(events).at(-1)).toEqual({
+          _tag: "Exit",
+          code: 0,
+          kills: { before: 2, after: 5 },
+        });
       }).pipe(runtimeConfig(env));
     },
   );
 
-  it.scoped("a command through the Keeper never pushes past Max life", () => {
+  it("a command through the Keeper never pushes the Deadline past Max life", async () => {
+    // Given: a Sandbox whose Max life comes before its idle time
     const env = makeEnv();
-    return Effect.gen(function* () {
-      // Given
-      const keeper = yield* warmKeeper(env, {
-        maxLife: Duration.minutes(20),
-      });
-      yield* TestClock.adjust("10 minutes");
-      // When
-      yield* execInSandbox(keeper.id, ["true"]).pipe(
-        Effect.provide(keeper.layers),
-      );
-      // Then
-      expect(yield* keeper.deadline).toBe("1970-01-01T00:20:00.000Z");
-    }).pipe(runtimeConfig(env));
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--idle",
+      "15m",
+      "--max-life",
+      "5m",
+    ]);
+    const name = created.stdout.trim().slice("fake:".length);
+    // When
+    const result = await runCli(env, ["exec", `fake:${name}`, "--", "true"]);
+    // Then: the pushed Deadline is Max life, within the Sandbox clock's
+    // whole second
+    const dir = join(env.root, name);
+    const maxLife = Math.floor(
+      new Date(
+        JSON.parse(readFileSync(join(dir, "sandbox.json"), "utf8")).maxLifeAt,
+      ).getTime() / 1000,
+    );
+    const deadline = Number(readFileSync(join(dir, "deadline"), "utf8"));
+    expect({
+      exitCode: result.exitCode,
+      atMaxLife: deadline <= maxLife && deadline >= maxLife - 2,
+    }).toEqual({ exitCode: 0, atMaxLife: true });
   });
 
   it.scoped(
@@ -1120,6 +1220,27 @@ describe("Keeper", () => {
   );
 
   it.scoped(
+    "a command through a Keeper that sends a line that does not decode fails with the decode error",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name, "not json");
+        // When
+        const error = yield* keeperExecError(sandbox.id, ["true"]).pipe(
+          Effect.provide(sandbox.layers),
+        );
+        // Then
+        expect({ message: error.message, get: sandbox.calls.get }).toEqual({
+          message: `Provider fake failed: Unexpected token 'o', "not json" is not valid JSON`,
+          get: 0,
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
     "Sandbox info through a Keeper that closes after it reads the request on a gone Sandbox fails with the gone message",
     () => {
       const env = makeEnv();
@@ -1188,6 +1309,54 @@ describe("Keeper", () => {
   );
 
   it.scoped(
+    "Sandbox info through a Keeper that sends a line that does not decode fails with the decode error",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given
+        const sandbox = yield* coldSandbox(env);
+        yield* closingKeeper(sandbox.name, "not json");
+        // When
+        const error = yield* Effect.flatMap(KeeperClient, (client) =>
+          client.info(sandbox.id),
+        ).pipe(Effect.flip, Effect.provide(sandbox.layers));
+        // Then
+        expect(error.message).toBe(
+          `Provider fake failed: Unexpected token 'o', "not json" is not valid JSON`,
+        );
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "stop leaves a process that is not a Keeper alone and removes the Keeper files",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a pid file that names a process other than a Keeper
+        const sandbox = yield* coldSandbox(env);
+        const child = spawn("sleep", ["30"]);
+        yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
+        const pid = yield* Effect.orDie(Effect.fromNullable(child.pid));
+        const pidFile = join(env.runtime, `fake-${sandbox.name}.pid`);
+        const socketFile = join(env.runtime, `fake-${sandbox.name}.sock`);
+        writeFileSync(pidFile, `${pid}\n`);
+        writeFileSync(socketFile, "");
+        // When
+        yield* Effect.flatMap(KeeperClient, (client) =>
+          client.stop(sandbox.id),
+        ).pipe(Effect.provide(sandbox.layers));
+        // Then
+        expect({
+          alive: alive(pid),
+          pid: existsSync(pidFile),
+          socket: existsSync(socketFile),
+        }).toEqual({ alive: true, pid: false, socket: false });
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
     "a Pixel helper through a warm Keeper asks the Provider nothing from the CLI",
     () => {
       const env = makeEnv();
@@ -1208,7 +1377,6 @@ describe("Keeper", () => {
         // Then
         expect(result.stdout.toString("utf8")).toBe("clicked\n");
         expect(keeper.calls).toEqual({ get: 0, extend: 0 });
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1237,9 +1405,9 @@ describe("Keeper", () => {
         yield* TestClock.adjust("14 minutes");
         // Then
         expect({
-          deadline: yield* keeper.deadline,
+          extends: keeper.watched.extend,
           running: yield* running(`sleep ${nap}`),
-        }).toEqual({ deadline: "1970-01-01T00:25:00.000Z", running: false });
+        }).toEqual({ extends: 0, running: false });
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1314,7 +1482,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Provider whose exec fails with the command line in its text
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -1325,16 +1497,16 @@ describe("Keeper", () => {
       const failing: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fail(
                 new ProviderError({
                   provider: "fake",
                   reason: "spawn ENOENT (docker exec sh -c echo tok-2718)",
                 }),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, failing);
@@ -1381,7 +1553,11 @@ describe("Keeper", () => {
     events: ReadonlyArray<ExecEvent | "pause">,
   ) =>
     Effect.gen(function* () {
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -1392,9 +1568,8 @@ describe("Keeper", () => {
       const scripted: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fromIterable(events).pipe(
                 Stream.flatMap((event) =>
                   event === "pause"
@@ -1402,7 +1577,8 @@ describe("Keeper", () => {
                     : Stream.make(event),
                 ),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, scripted);
@@ -1494,60 +1670,4 @@ describe("Keeper", () => {
       exitCode: 0,
     });
   });
-});
-
-const ownsPid1 = () => {
-  try {
-    process.kill(1, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-describe("Create marks", () => {
-  afterEach(() => {
-    cleanupEnvs();
-  });
-
-  it.effect(
-    "a create mark holds its process start time and counts as live",
-    () => {
-      const env = makeEnv();
-      return Effect.gen(function* () {
-        const path = yield* markCreate("fake");
-        const [pid, started] = readFileSync(path, "utf8").split("\n");
-        expect(pid).toBe(String(process.pid));
-        expect(started).not.toBe("");
-        expect(yield* liveCreates("fake")).toEqual([basename(path)]);
-        yield* unmarkCreate(path);
-        expect(yield* liveCreates("fake")).toEqual([]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  it.effect(
-    "a create mark with no start time counts while its process runs",
-    () => {
-      const env = makeEnv();
-      const name = `fake-creating-${process.pid}-0123abcd`;
-      writeFileSync(join(env.runtime, name), `${process.pid}\n\n`);
-      return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([name]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  // Where process 1 is this user's (root, or some containers), the case
-  // cannot happen.
-  it.effect.skipIf(ownsPid1())(
-    "a create mark whose process id belongs to another user is not live",
-    () => {
-      const env = makeEnv();
-      writeFileSync(join(env.runtime, "fake-creating-1-0123abcd"), "1\n\n");
-      return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
 });

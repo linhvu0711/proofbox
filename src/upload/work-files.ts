@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { lstat, readlink } from "node:fs/promises";
+// biome-ignore lint/style/noRestrictedImports: FileSystem has no lstat, and a link is hashed as a link.
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
-import { Command } from "@effect/platform";
+import { Command, FileSystem } from "@effect/platform";
 import { Effect, Stream } from "effect";
-import { NotGitFolderError, ProviderError } from "../errors.ts";
+import { NotGitFolderError, ProviderError, platformReason } from "../errors.ts";
 
 export interface WorkFile {
   readonly path: string;
@@ -27,31 +27,29 @@ const hasCode = (cause: unknown, code: string) =>
 
 // The size comes from the same read as the hash, so both describe one
 // version of a file that changes while it is listed.
-const hashFile = (path: string) =>
-  Effect.tryPromise({
-    try: () =>
-      new Promise<{ sha256: string; size: number }>((resolve, reject) => {
-        const hash = createHash("sha256");
-        let size = 0;
-        const stream = createReadStream(path);
-        stream.on("error", reject);
-        stream.on("data", (chunk) => {
-          hash.update(chunk);
-          size += chunk.length;
-        });
-        stream.on("end", () => resolve({ sha256: hash.digest("hex"), size }));
+const hashFile = Effect.fn("workFiles.hashFile")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const hash = createHash("sha256");
+  let size = 0;
+  yield* fs.stream(path).pipe(
+    Stream.runForEach((chunk) =>
+      Effect.sync(() => {
+        hash.update(chunk);
+        size += chunk.length;
       }),
-    catch: local,
-  });
+    ),
+    Effect.mapError((error) => local(platformReason(error))),
+  );
+  return { sha256: hash.digest("hex"), size };
+});
 
-const hashLink = (path: string) =>
-  Effect.tryPromise({
-    try: async () =>
-      createHash("sha256")
-        .update(`link:${await readlink(path)}`)
-        .digest("hex"),
-    catch: local,
-  });
+const hashLink = Effect.fn("workFiles.hashLink")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const target = yield* fs
+    .readLink(path)
+    .pipe(Effect.mapError((error) => local(platformReason(error))));
+  return createHash("sha256").update(`link:${target}`).digest("hex");
+});
 
 const workFile = Effect.fn("workFiles.workFile")(function* (
   folder: string,
@@ -100,7 +98,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       "--others",
       "--exclude-standard",
     ).pipe(Command.workingDirectory(folder)),
-  ).pipe(Effect.mapError(local));
+  ).pipe(Effect.mapError((error) => local(error)));
   const [bytes, code] = yield* Effect.all(
     [
       Stream.runCollect(process.stdout),
@@ -108,7 +106,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       Stream.runDrain(process.stderr),
     ],
     { concurrency: 3 },
-  ).pipe(Effect.mapError(local));
+  ).pipe(Effect.mapError((error) => local(error)));
   if (code !== 0) {
     return yield* new NotGitFolderError({ folder });
   }

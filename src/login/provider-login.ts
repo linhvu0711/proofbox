@@ -1,3 +1,4 @@
+import type { FileSystem } from "@effect/platform";
 import { Clock, Config, Effect, Option, type Redacted } from "effect";
 import {
   LoginExpiredError,
@@ -28,7 +29,8 @@ export const loginFor = Effect.fn("providerLogin.loginFor")(function* (
     session: Redacted.Redacted<string>,
   ) => Effect.Effect<
     Redacted.Redacted<string>,
-    ProviderError | ProviderUnavailableError | LoginExpiredError
+    ProviderError | ProviderUnavailableError | LoginExpiredError,
+    FileSystem.FileSystem
   >,
 ) {
   // A redacted string can never fail to load, so `option` yields None

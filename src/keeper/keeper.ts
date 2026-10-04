@@ -1,14 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { rename, rm, writeFile } from "node:fs/promises";
-import {
-  createConnection,
-  createServer,
-  type Server,
-  type Socket,
-} from "node:net";
-import type { CommandExecutor } from "@effect/platform";
+import type { Socket } from "node:net";
+import type { CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Clock,
+  Data,
   Effect,
   Exit,
   Fiber,
@@ -17,34 +11,44 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { withRunningPush } from "../deadline.ts";
+import { runCommand } from "../command-checks.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { programOf, writeKeeperLog } from "./keeper-log.ts";
+import { holdKeeper, keeperAnswers } from "./lifecycle.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
-import { withStartLock } from "./start-lock.ts";
 
-const socketAnswers = (path: string) =>
-  Effect.async<boolean>((resume) => {
-    const probe = createConnection({ path }, () => {
-      probe.destroy();
-      resume(Effect.succeed(true));
-    });
-    probe.once("error", () => {
-      probe.destroy();
-      resume(Effect.succeed(false));
-    });
-  });
+// The socket did not take a frame: the Caller is gone.
+class SocketWriteError extends Data.TaggedError("SocketWriteError")<{
+  readonly detail: string;
+}> {
+  get message() {
+    return this.detail;
+  }
+}
 
-const writeFrame = (socket: Socket, frame: unknown) =>
-  Effect.async<void, Error>((resume) => {
-    socket.write(`${JSON.stringify(frame)}\n`, (error) =>
-      resume(error ? Effect.fail(error) : Effect.void),
-    );
-  });
+// The first line from a Caller is not a request the Keeper knows.
+class BadRequestError extends Data.TaggedError("BadRequestError") {
+  get message() {
+    return "bad request";
+  }
+}
+
+const writeFrame = Effect.fn("keeper.writeFrame")(
+  (socket: Socket, frame: unknown) =>
+    Effect.async<void, SocketWriteError>((resume) => {
+      socket.write(`${JSON.stringify(frame)}\n`, (error) =>
+        resume(
+          error
+            ? Effect.fail(new SocketWriteError({ detail: error.message }))
+            : Effect.void,
+        ),
+      );
+    }),
+);
 
 const frameOf = (event: ExecEvent) => {
   switch (event._tag) {
@@ -91,14 +95,16 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
     provider: id.prefix,
     name: fileStem(id),
   });
-  if (yield* socketAnswers(paths.socket)) {
+  if (yield* keeperAnswers(paths.socket)) {
     return;
   }
 
   const serve = Effect.scoped(
     Effect.gen(function* () {
       const connection = yield* provider.connect(id);
-      const runtime = yield* Effect.runtime<CommandExecutor.CommandExecutor>();
+      const runtime = yield* Effect.runtime<
+        CommandExecutor.CommandExecutor | FileSystem.FileSystem
+      >();
       const handleClient = (socket: Socket) => {
         let pending = "";
         // The lines in hand: a Caller that gives up writes its give-up
@@ -131,12 +137,12 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           argv: ReadonlyArray<string>,
           options?: ExecOptions,
         ) => {
-          const tally = {
-            out: 0,
-            err: 0,
-            exit: undefined as number | undefined,
-            firstMs: undefined as number | undefined,
-          };
+          const tally: {
+            out: number;
+            err: number;
+            exit: number | undefined;
+            firstMs: number | undefined;
+          } = { out: 0, err: 0, exit: undefined, firstMs: undefined };
           let logged = false;
           const log = (start: number, ended: string) =>
             Effect.flatMap(Clock.currentTimeMillis, (now) => {
@@ -154,7 +160,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               });
             });
           return Effect.flatMap(Clock.currentTimeMillis, (start) =>
-            withRunningPush(connection)(connection.exec(argv, options)).pipe(
+            runCommand(connection, argv, options).pipe(
               Stream.runForEach((event) => {
                 if (event._tag !== "Exit") {
                   if (event._tag === "Stdout") {
@@ -248,7 +254,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           if (mode === "request") {
             const request = yield* Effect.try({
               try: () => decodeRequest(JSON.parse(line)),
-              catch: () => new Error("bad request"),
+              catch: () => new BadRequestError(),
             });
             if ("info" in request) {
               mode = "plain";
@@ -385,70 +391,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           });
         });
       };
-      // Under the lock, check the socket again: a Keeper that waited for
-      // the lock finds the first one's socket answers, and ends.
-      const started = yield* withStartLock(
-        paths.startLock,
-        id.provider.name,
-        Effect.gen(function* () {
-          if (yield* socketAnswers(paths.socket)) {
-            return false;
-          }
-          yield* Effect.promise(() =>
-            rm(paths.socket, { force: true }).catch(() => {}),
-          );
-          // Write a unique temp file and rename it over the pid file, so a
-          // reader never sees it empty.
-          const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-          yield* Effect.acquireRelease(
-            Effect.tryPromise({
-              try: async () => {
-                try {
-                  await writeFile(temp, `${process.pid}\n`);
-                  await rename(temp, paths.pid);
-                } catch (cause) {
-                  await rm(temp, { force: true });
-                  throw cause;
-                }
-              },
-              catch: (cause) =>
-                new ProviderError({
-                  provider: id.provider.name,
-                  reason:
-                    cause instanceof Error ? cause.message : String(cause),
-                }),
-            }),
-            () =>
-              Effect.promise(() =>
-                Promise.all([
-                  rm(paths.socket, { force: true }).catch(() => {}),
-                  rm(paths.pid, { force: true }).catch(() => {}),
-                ]).then(() => {}),
-              ),
-          );
-          yield* Effect.acquireRelease(
-            Effect.async<Server, ProviderError>((resume) => {
-              const server = createServer(handleClient);
-              server.once("error", (error) =>
-                resume(
-                  Effect.fail(
-                    new ProviderError({
-                      provider: id.provider.name,
-                      reason: error.message,
-                    }),
-                  ),
-                ),
-              );
-              server.listen(paths.socket, () => resume(Effect.succeed(server)));
-            }),
-            (server) =>
-              Effect.promise(
-                () => new Promise<void>((done) => server.close(() => done())),
-              ),
-          );
-          return true;
-        }),
-      );
+      const started = yield* holdKeeper(id, handleClient);
       if (!started) {
         return;
       }

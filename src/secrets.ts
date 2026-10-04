@@ -1,5 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
-import { posix } from "node:path";
+import { FileSystem, type Error as PlatformError } from "@effect/platform";
 import { Effect, Redacted, Schema } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
@@ -7,11 +6,12 @@ import {
   EnvFileLineError,
   EnvFileUnreadableError,
   ProviderError,
+  platformReason,
   SecretsSendFailedError,
 } from "./errors.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
-import { writeSandboxFile } from "./sandbox-file.ts";
+import { sandboxFiles, writeSandboxFile } from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
 import { shellJoin } from "./shell.ts";
 
@@ -75,22 +75,16 @@ export const parseEnvFile = Effect.fn("secrets.parseEnvFile")(function* (
   return secrets;
 });
 
-const envFileError = (path: string) => (cause: unknown) => {
-  const code =
-    typeof cause === "object" && cause !== null && "code" in cause
-      ? cause.code
-      : undefined;
-  switch (code) {
-    case "ENOENT":
+const envFileError = (path: string) => (error: PlatformError.PlatformError) => {
+  switch (error._tag === "SystemError" ? error.reason : undefined) {
+    case "NotFound":
       return new EnvFileUnreadableError({ path, reason: "not found" });
-    case "EACCES":
+    case "PermissionDenied":
       return new EnvFileUnreadableError({ path, reason: "is not readable" });
-    case "EISDIR":
-      return new EnvFileUnreadableError({ path, reason: "is a folder" });
     default:
       return new ProviderError({
         provider: "local",
-        reason: cause instanceof Error ? cause.message : String(cause),
+        reason: platformReason(error),
       });
   }
 };
@@ -98,15 +92,17 @@ const envFileError = (path: string) => (cause: unknown) => {
 export const readEnvFile = Effect.fn("secrets.readEnvFile")(function* (
   path: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const onError = envFileError(path);
-  const text = yield* Effect.tryPromise({
-    try: () => readFile(path, "utf8"),
-    catch: onError,
-  });
-  const info = yield* Effect.tryPromise({
-    try: () => stat(path),
-    catch: onError,
-  });
+  const info = yield* fs
+    .stat(path)
+    .pipe(Effect.mapError((error) => onError(error)));
+  if (info.type === "Directory") {
+    return yield* new EnvFileUnreadableError({ path, reason: "is a folder" });
+  }
+  const text = yield* fs
+    .readFileString(path)
+    .pipe(Effect.mapError((error) => onError(error)));
   if ((info.mode & 0o077) !== 0) {
     const output = yield* CliOutput;
     yield* output.err(
@@ -141,7 +137,7 @@ export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (
       Effect.gen(function* () {
         const code = yield* writeSandboxFile(
           rawId,
-          posix.join(provider.secretsDir(id.name, info.os), "env"),
+          sandboxFiles(provider, id.name, info.os).secrets,
           new TextEncoder().encode(body),
           { executable: false },
         );

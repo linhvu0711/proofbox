@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { extractClaims } from "@namespacelabs/sdk/auth";
 import { Clock, Effect, Redacted } from "effect";
-import { ProviderError } from "../errors.ts";
+import { ProviderError, platformReason } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { loginFor } from "../login/provider-login.ts";
+import type { LoginFiles } from "../provider.ts";
 import { issueTenantToken } from "./namespace-signin.ts";
 
 // A tenant token lasts about an hour: mint one per session, reuse it
@@ -33,8 +34,17 @@ const alive = (token: string, now: number, margin: number) => {
   return typeof exp === "number" && exp * 1000 - now > margin;
 };
 
+// Older versions kept a bearer-token file per token, and the session trade
+// keeps a tenant-token file per session, in the runtime dir; those die with
+// the login.
+export const NAMESPACE_LOGIN_FILES: LoginFiles = {
+  what: "the cached Namespace tokens",
+  names: /^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/,
+};
+
 export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
   function* (session: Redacted.Redacted<string>) {
+    const fs = yield* FileSystem.FileSystem;
     const fail = (reason: string) =>
       new ProviderError({ provider: "namespace", reason });
     const text = Redacted.value(session);
@@ -48,38 +58,32 @@ export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
         if (memoed !== undefined && alive(memoed, now, 0)) {
           return Redacted.make(memoed);
         }
-        const stored = yield* Effect.promise(() =>
-          readFile(path, "utf8").then(
-            (file) => file.trim(),
-            () => undefined,
-          ),
+        const stored = yield* fs.readFileString(path).pipe(
+          Effect.map((file) => file.trim()),
+          Effect.orElseSucceed(() => undefined),
         );
         if (stored !== undefined && alive(stored, now, 5 * 60 * 1000)) {
           issued.set(path, stored);
           return Redacted.make(stored);
         }
         const token = yield* issueTenantToken(text);
-        yield* Effect.tryPromise({
-          try: () => writeFile(path, token, { mode: 0o600 }),
-          catch: (cause) =>
-            fail(cause instanceof Error ? cause.message : String(cause)),
-        });
+        yield* fs
+          .writeFileString(path, token, { mode: 0o600 })
+          .pipe(Effect.mapError((error) => fail(platformReason(error))));
         issued.set(path, token);
         // Keep only this session's tenant token file in the runtime dir.
-        yield* Effect.promise(() =>
-          readdir(dir)
-            .then((entries) =>
-              Promise.all(
-                entries
-                  .filter(
-                    (entry) =>
-                      /^ns-tenant-[0-9a-f]{16}\.json$/.test(entry) &&
-                      entry !== basename(path),
-                  )
-                  .map((entry) => rm(join(dir, entry), { force: true })),
+        yield* fs.readDirectory(dir).pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries.filter(
+                (entry) =>
+                  /^ns-tenant-[0-9a-f]{16}\.json$/.test(entry) &&
+                  entry !== basename(path),
               ),
-            )
-            .catch(() => {}),
+              (entry) => fs.remove(join(dir, entry), { force: true }),
+            ),
+          ),
+          Effect.ignore,
         );
         return Redacted.make(token);
       }),
@@ -88,5 +92,12 @@ export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
 );
 
 // The saved Namespace login the Compute calls run on: a browser session
-// traded for a short tenant token.
-export const namespaceLogin = loginFor("namespace", tenantTokenFor);
+// traded for a short tenant token. It reads the logins file with `fs`,
+// handed in when the login is built.
+export const makeNamespaceLogin = Effect.fn(
+  "namespaceLogin.makeNamespaceLogin",
+)(function* (fs: FileSystem.FileSystem) {
+  return yield* loginFor("namespace", tenantTokenFor).pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+  );
+});

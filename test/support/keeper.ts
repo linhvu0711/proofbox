@@ -1,9 +1,9 @@
-import { createConnection } from "node:net";
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Layer, TestServices } from "effect";
 import { CliOutput } from "../../src/cli-output.ts";
 import { runKeeper } from "../../src/keeper/keeper.ts";
 import { KeeperClient } from "../../src/keeper/keeper-client.ts";
+import { keeperAnswers } from "../../src/keeper/lifecycle.ts";
 import { keeperPaths } from "../../src/keeper/paths.ts";
 import {
   type Provider,
@@ -12,18 +12,6 @@ import {
   providerEntry,
 } from "../../src/provider.ts";
 import { fileStem, resolveSandboxId } from "../../src/sandbox-id.ts";
-
-const socketAnswers = (path: string) =>
-  Effect.async<boolean>((resume) => {
-    const probe = createConnection({ path }, () => {
-      probe.destroy();
-      resume(Effect.succeed(true));
-    });
-    probe.once("error", () => {
-      probe.destroy();
-      resume(Effect.succeed(false));
-    });
-  });
 
 // The layers a command needs to reach the Keeper of a Sandbox of
 // `provider`: the CLI side, with that one Provider, so a test can count
@@ -67,8 +55,8 @@ export const startKeeper = (id: string, provider: Provider) =>
     const socket = (yield* keeperPaths({
       provider: resolved.prefix,
       name: fileStem(resolved),
-    })).socket;
-    for (let i = 0; i < 250 && !(yield* socketAnswers(socket)); i++) {
+    }).pipe(Effect.provide(NodeContext.layer))).socket;
+    for (let i = 0; i < 250 && !(yield* keeperAnswers(socket)); i++) {
       yield* TestServices.provideLive(Effect.sleep("20 millis"));
     }
     return keeperClientLayers(provider);

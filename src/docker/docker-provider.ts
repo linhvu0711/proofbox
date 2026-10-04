@@ -1,10 +1,6 @@
-import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
-import {
-  type ChecksShell,
-  checksArgv,
-  checksScript,
-  splitChecks,
-} from "../command-checks.ts";
+import { FileSystem } from "@effect/platform";
+import { Clock, Duration, Effect, Option, Schema } from "effect";
+import type { ChecksShell } from "../command-checks.ts";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -37,7 +33,10 @@ const Labels = Schema.Struct({
   "proofbox.name": Schema.String,
   "proofbox.os": Os,
   "proofbox.created-at": Schema.Date,
-  "proofbox.idle-seconds": Schema.NumberFromString,
+  "proofbox.idle-seconds": Schema.NumberFromString.pipe(
+    Schema.int(),
+    Schema.positive(),
+  ),
   "proofbox.max-life-at": Schema.Date,
   "proofbox.base-version": Schema.optional(Schema.String),
   "proofbox.snapshot": Schema.optional(Schema.String),
@@ -58,8 +57,6 @@ export const LINUX_CHECKS: ChecksShell = {
     "{ cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control; } | sed -n 's/^oom_kill //p'",
   run: 'unset PWD OLDPWD; HOME=/home/app setpriv --reuid=app --regid=app --init-groups "$@"',
 };
-
-export const LINUX_SCRIPT = checksScript(LINUX_CHECKS);
 
 const DOCKER_BRAND: ProviderBrand = {
   provider: "docker",
@@ -113,6 +110,7 @@ export const sandboxInfoFromLabels = Effect.fn(
 
 export const makeDockerProvider = (options: {
   readonly client: DockerClient;
+  readonly fs: FileSystem.FileSystem;
   readonly imageTag?: string;
   readonly runArgs?: ReadonlyArray<string>;
   readonly registry?: boolean;
@@ -366,7 +364,10 @@ export const makeDockerProvider = (options: {
     // Prove the daemon answers before anything is made — and before the
     // progress line prints, so a dead daemon reports only the error.
     const arch = yield* client.serverArch;
-    const version = yield* baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE);
+    const version = yield* baseImageVersion(
+      BASE_IMAGE_DIR,
+      LINUX_TOOL_BUNDLE,
+    ).pipe(Effect.provideService(FileSystem.FileSystem, options.fs));
     const bundle = yield* toolBundleForArch(arch);
     const tag = options.imageTag ?? baseImageTag(version);
     yield* ensureBaseImage(
@@ -394,26 +395,15 @@ export const makeDockerProvider = (options: {
       info,
       get: get(sandbox),
       extend: (deadline: Date) => writeDeadline(sandbox.name, deadline),
-      // One root `docker exec` per command: the script pushes, counts, and
-      // drops to `app` around it (ADR 0015).
-      exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-        Stream.unwrap(
-          Effect.map(Clock.currentTimeMillis, (nowMillis) =>
-            splitChecks(
-              client.execStream(
-                container,
-                checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
-                options,
-                "root",
-              ),
-              {
-                gone: () => gone(sandbox.name),
-                pushFailed: (detail) =>
-                  fail(`could not write the Deadline: ${detail}`),
-              },
-            ),
-          ),
-        ),
+      // One root `docker exec` per command: the command run's script
+      // pushes, counts, and drops to `app` around it (ADR 0015).
+      transport: {
+        shell: LINUX_CHECKS,
+        call: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+          client.execStream(container, argv, options, "root"),
+        gone: () => gone(sandbox.name),
+        fail: (reason: string) => fail(reason),
+      },
     };
   });
 
@@ -421,6 +411,7 @@ export const makeDockerProvider = (options: {
     name: "docker",
     idPrefix: "docker",
     login: { _tag: "None" },
+    loginFiles: [],
     offers: {
       linux: {
         sizes: "any",
@@ -432,8 +423,10 @@ export const makeDockerProvider = (options: {
     list,
     delete: del,
     extend,
-    stateDir: () => "/var/lib/proofbox",
-    secretsDir: () => "/run/proofbox/secrets",
+    sandboxFolders: () => ({
+      state: "/var/lib/proofbox",
+      secrets: "/run/proofbox/secrets",
+    }),
     connect,
   };
 };

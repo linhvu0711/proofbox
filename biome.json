@@ -57,6 +57,16 @@
             "noConsole": "error"
           },
           "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "node:fs": "File access goes through FileSystem from @effect/platform.",
+                  "node:fs/promises": "File access goes through FileSystem from @effect/platform.",
+                  "node:child_process": "A child process runs through Command from @effect/platform."
+                }
+              }
+            },
             "noProcessEnv": "error"
           }
         }

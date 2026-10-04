@@ -67,6 +67,86 @@ describe("Capability", () => {
     );
   });
 
+  it("drag on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["drag", id, "10", "10", "20", "20"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no action was taken\n",
+    );
+  });
+
+  it("key on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["key", id, "ctrl+s"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no action was taken\n",
+    );
+  });
+
+  it("scroll on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["scroll", id, "10", "10", "down"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no action was taken\n",
+    );
+  });
+
+  it("type on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["type", id, "hello"]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no action was taken\n",
+    );
+  });
+
   it("record start on a Provider with no desktop is refused", async () => {
     // Given
     const env = makeEnv();

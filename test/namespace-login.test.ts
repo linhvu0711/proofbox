@@ -5,7 +5,7 @@ import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Option, Redacted, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { makeNamespaceApi } from "../src/namespace/namespace-api.ts";
-import { namespaceLogin } from "../src/namespace/namespace-login.ts";
+import { makeNamespaceLogin } from "../src/namespace/namespace-login.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 import {
   EXPIRED_TENANT_1,
@@ -18,6 +18,7 @@ import {
   TENANT_2,
   toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-login-"));
@@ -94,7 +95,9 @@ describe("Namespace login", () => {
               : { json: {} },
           ),
         );
-        const api = makeNamespaceApi({ login: namespaceLogin });
+        const api = makeNamespaceApi({
+          login: makeNamespaceLogin(nodeFs),
+        });
         // When
         const made = yield* api
           .create("us", {
@@ -138,7 +141,9 @@ describe("Namespace login", () => {
       const runtime = tempDir();
       const ns = yield* Effect.promise(() => fakeNamespace(fakeSignin()));
       // When
-      const hand = yield* namespaceLogin.pipe(config(home, runtime, ns));
+      const hand = yield* makeNamespaceLogin(nodeFs).pipe(
+        config(home, runtime, ns),
+      );
       // Then
       expect(Redacted.value(hand.token)).toBe(TENANT_1);
       expect(Option.getOrNull(hand.region)).toBe("eu");
@@ -166,9 +171,13 @@ describe("Namespace login", () => {
         }),
       );
       // When
-      const first = yield* namespaceLogin.pipe(config(home, runtime, ns));
+      const first = yield* makeNamespaceLogin(nodeFs).pipe(
+        config(home, runtime, ns),
+      );
       yield* TestClock.adjust("2 minutes");
-      const second = yield* namespaceLogin.pipe(config(home, runtime, ns));
+      const second = yield* makeNamespaceLogin(nodeFs).pipe(
+        config(home, runtime, ns),
+      );
       // Then
       expect(Redacted.value(first.token)).toBe(EXPIRED_TENANT_1);
       expect(Redacted.value(second.token)).toBe(TENANT_2);
@@ -200,7 +209,7 @@ describe("Namespace login", () => {
         }),
       );
       // When
-      const error = yield* namespaceLogin.pipe(
+      const error = yield* makeNamespaceLogin(nodeFs).pipe(
         config(home, runtime, ns),
         Effect.flip,
       );

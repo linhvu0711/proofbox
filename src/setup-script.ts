@@ -1,4 +1,3 @@
-import { posix } from "node:path";
 import { Effect, Stream } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
@@ -6,7 +5,7 @@ import { SetupScriptFailedError, UploadFailedError } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
-import { writeSandboxFile } from "./sandbox-file.ts";
+import { sandboxFiles, writeSandboxFile } from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
 
 const KEEP_LINES = 50;
@@ -19,7 +18,7 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
     const info = yield* provider.get(id);
     const progress = yield* Progress;
     const keeper = yield* KeeperClient;
-    const setupPath = posix.join(provider.stateDir(id.name), "setup");
+    const setupPath = sandboxFiles(provider, id.name, info.os).setupScript;
     const result = yield* progress.step(
       "running Setup script",
       withDeadlinePush(

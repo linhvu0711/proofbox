@@ -13,13 +13,9 @@ import { KeeperClient } from "../keeper/keeper-client.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
+import { sandboxFiles } from "../sandbox-file.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
-import {
-  diffHashList,
-  HashList,
-  hashListPath,
-  toHashList,
-} from "../upload/hash-list.ts";
+import { diffHashList, HashList, toHashList } from "../upload/hash-list.ts";
 import { MAX_SIZE_DEFAULT } from "../upload/max-size.ts";
 import { packFiles } from "../upload/pack.ts";
 import { listWorkFiles, type WorkFile } from "../upload/work-files.ts";
@@ -124,7 +120,7 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
   const output = yield* CliOutput;
   const keeper = yield* KeeperClient;
   const info = yield* provider.get(id);
-  const listPath = hashListPath(provider.stateDir(id.name));
+  const listPath = sandboxFiles(provider, id.name, info.os).hashList;
   const diff = yield* progress.step(
     "uploading Work folder",
     withDeadlinePush(

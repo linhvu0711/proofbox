@@ -1,12 +1,24 @@
-import { Effect, Stream } from "effect";
-import type { ProviderError, SandboxGoneError } from "./errors.ts";
-import type { ExecEvent, SandboxInfo } from "./provider.ts";
+import { Clock, Duration, Effect, Fiber, Stream } from "effect";
+import { pushedDeadline } from "./deadline.ts";
+import type {
+  ProviderError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+} from "./errors.ts";
+import type {
+  Connection,
+  ExecEvent,
+  ExecOptions,
+  SandboxCallError,
+  SandboxInfo,
+} from "./provider.ts";
 
-// One remote call runs a command with its checks around it (ADR 0015): the
-// Deadline pushed by the idle time before and after it, and the
-// memory-kill count read just before and just after it. The script marks
-// the start of its own stderr and ends it with a trailer that holds the
-// two counts; `splitChecks` takes both out again.
+// The command run: each command runs with its checks around it, in one
+// remote call (ADR 0015): the Deadline pushed by the idle time before and
+// after it, and the memory-kill count read just before and just after it.
+// The script marks the start of its own stderr and ends it with a trailer
+// that holds the two counts; `splitChecks` takes both out again. A long
+// command also gets the Deadline pushed while it runs.
 
 export const CHECKS_START = "\x1fproofbox-start\n";
 
@@ -22,6 +34,25 @@ export interface ChecksShell {
   readonly run: string;
 }
 
+// What a Provider gives the command run: how one argv reaches the Sandbox,
+// the shell its checks are written in, and its own errors.
+export interface Transport {
+  readonly shell: ChecksShell;
+  readonly call: (
+    argv: ReadonlyArray<string>,
+    options?: ExecOptions,
+  ) => Stream.Stream<
+    ExecEvent,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
+  readonly gone: () => SandboxGoneError;
+  readonly fail: (reason: string) => ProviderError;
+  // The host side of each Deadline push, for a Provider whose Sandbox lives
+  // on a host with a life of its own. The command run gives it the pushed
+  // Deadline before the command and at its Exit.
+  readonly pushHost?: (deadline: Date) => Effect.Effect<void>;
+}
+
 export const pushFailedTrailer = (detail: string) =>
   `\n\x1fproofbox-fail ${detail}\n`;
 
@@ -33,7 +64,7 @@ const FAIL_DETAIL_MAX = 200;
 // push ends the script with the fail trailer in place of the counts, as a
 // failed push ended `exec` before the Keeper did it: before the command,
 // the command does not run. A failed count reads as 0.
-export const checksScript = (shell: ChecksShell) =>
+const checksScript = (shell: ChecksShell) =>
   [
     "idle=$1",
     "cap=$(( $(date +%s) + $2 ))",
@@ -51,7 +82,7 @@ export const checksScript = (shell: ChecksShell) =>
     "exit $code",
   ].join("; ");
 
-export const checksArgv = (
+const checksArgv = (
   script: string,
   info: SandboxInfo,
   nowMillis: number,
@@ -117,7 +148,7 @@ const stderr = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stderr", bytes });
 // script never started), a gone container there fails with `gone()`; any
 // other text goes out as it is. After the mark, only a stderr tail that
 // could start the trailer is held back, until the next chunk or the Exit.
-export const splitChecks = <E>(
+const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
   on: {
     readonly gone: () => SandboxGoneError;
@@ -191,5 +222,79 @@ export const splitChecks = <E>(
         }
       }
     };
-    return events.pipe(Stream.mapEffect(step), Stream.flattenIterables);
+    return events.pipe(
+      Stream.mapEffect((event) => step(event)),
+      Stream.flattenIterables,
+    );
   });
+
+// Keeps the Deadline pushed while a command runs, every third of the idle
+// time. The command's own call pushes before and after it, so this only
+// covers a long run; it stops with the command, never on a timer of its
+// own. A failed push ends the run.
+const withRunningPush =
+  (connection: Connection) =>
+  <A, E, R>(
+    events: Stream.Stream<A, E, R>,
+  ): Stream.Stream<A, E | SandboxCallError, R> => {
+    const every = Duration.millis(
+      Duration.toMillis(Duration.seconds(connection.info.idleSeconds)) / 3,
+    );
+    const push = Effect.flatMap(pushedDeadline(connection.info), (deadline) =>
+      connection.extend(deadline),
+    );
+    // The command's stream stays on the fiber that reads it: a stdin feed
+    // that drains after the command exits depends on that.
+    return Stream.unwrapScoped(
+      Effect.map(
+        Effect.forkScoped(
+          Effect.forever(Effect.zipRight(Effect.sleep(every), push)),
+        ),
+        (pushing) => Stream.interruptWhen(events, Fiber.join(pushing)),
+      ),
+    );
+  };
+
+// Runs one command with its checks around it (ADR 0015).
+export const runCommand = (
+  connection: Connection,
+  argv: ReadonlyArray<string>,
+  options?: ExecOptions,
+): Stream.Stream<ExecEvent, SandboxCallError> => {
+  const transport = connection.transport;
+  const push = transport.pushHost;
+  const pushHost =
+    push === undefined
+      ? Effect.void
+      : Effect.flatMap(pushedDeadline(connection.info), (deadline) =>
+          push(deadline),
+        );
+  return withRunningPush(connection)(
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        yield* pushHost;
+        return splitChecks(
+          transport.call(
+            checksArgv(
+              checksScript(transport.shell),
+              connection.info,
+              nowMillis,
+              argv,
+            ),
+            options,
+          ),
+          {
+            gone: () => transport.gone(),
+            pushFailed: (detail) =>
+              transport.fail(`could not write the Deadline: ${detail}`),
+          },
+        ).pipe(
+          Stream.tap((event) =>
+            event._tag === "Exit" ? pushHost : Effect.void,
+          ),
+        );
+      }),
+    ),
+  );
+};

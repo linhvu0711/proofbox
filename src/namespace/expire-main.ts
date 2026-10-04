@@ -1,11 +1,11 @@
-import { access, readFile } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { fileStem } from "../sandbox-id.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
-import { namespaceLogin } from "./namespace-login.ts";
+import { makeNamespaceLogin } from "./namespace-login.ts";
 
 const region = process.argv[2];
 const instanceId = process.argv[3];
@@ -26,24 +26,21 @@ instanceId === undefined ||
 at <= 0
   ? Effect.void
   : Effect.gen(function* () {
-      const api = makeNamespaceApi({ login: namespaceLogin });
+      const fs = yield* FileSystem.FileSystem;
+      const api = makeNamespaceApi({
+        login: makeNamespaceLogin(fs),
+      });
       const paths = yield* keeperPaths({
         provider: "ns",
         name: fileStem({ name: instanceId, region }),
       });
       const capFile = paths.maxLife;
       const epoch = (file: string) =>
-        Effect.promise(() =>
-          readFile(file, "utf8")
-            .then((text) => Number(text.trim()))
-            .catch(() => Number.NaN),
+        fs.readFileString(file).pipe(
+          Effect.map((text) => Number(text.trim())),
+          Effect.orElseSucceed(() => Number.NaN),
         );
-      const exists = Effect.promise(() =>
-        access(capFile).then(
-          () => true,
-          () => false,
-        ),
-      );
+      const exists = fs.exists(capFile).pipe(Effect.orElseSucceed(() => false));
       // Sleep until the earlier of the recorded Sandbox Deadline (with a
       // short slack for the container's own watchdog) and the Max life,
       // waking each minute to exit early when the Sandbox was deleted: its

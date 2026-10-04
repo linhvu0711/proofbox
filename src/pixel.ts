@@ -1,7 +1,12 @@
-import { writeFile } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { Duration, Effect, Schema } from "effect";
 import { PACE_SPAN, parseSpan } from "./deadline.ts";
-import { OutFileError, OutsideScreenError, ProviderError } from "./errors.ts";
+import {
+  OutFileError,
+  OutsideScreenError,
+  ProviderError,
+  platformReason,
+} from "./errors.ts";
 import { type HelperLimit, type HelperTable, runHelper } from "./helper.ts";
 import type { Os } from "./provider.ts";
 
@@ -108,14 +113,19 @@ export const resolvePace = Effect.fn("pixel.resolvePace")(function* (
   };
 });
 
-const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
-
-export const writeOut = (path: string, bytes: Uint8Array) =>
-  Effect.tryPromise({
-    try: () => writeFile(path, bytes),
-    catch: (cause) => new OutFileError({ path, reason: describe(cause) }),
-  });
+export const writeOut = Effect.fn("pixel.writeOut")(function* (
+  path: string,
+  bytes: Uint8Array,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs
+    .writeFile(path, bytes)
+    .pipe(
+      Effect.mapError(
+        (error) => new OutFileError({ path, reason: platformReason(error) }),
+      ),
+    );
+});
 
 export const runPixel = Effect.fn("pixel.runPixel")(function* (
   rawId: string,

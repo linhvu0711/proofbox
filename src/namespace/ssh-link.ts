@@ -1,7 +1,6 @@
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Chunk,
   Config,
@@ -19,6 +18,7 @@ import { parseSpan } from "../deadline.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
+  platformReason,
   SandboxGoneError,
 } from "../errors.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
@@ -114,6 +114,7 @@ const down = (detail: string) => new LinkDownError({ detail });
 export const makeOpenLink = (
   api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
+  fs: FileSystem.FileSystem,
   sshBin = "ssh",
 ): OpenLink => {
   const sshError = (error: {
@@ -276,10 +277,9 @@ export const makeOpenLink = (
       // A warm open rides the Keeper's ControlMaster; the stored target
       // saves the GetSSHConfig call a ride does not need.
       if (owner === "cli") {
-        const stored = yield* Effect.promise(() =>
-          readFile(targetFile, "utf8")
-            .then((text) => text.trim())
-            .catch(() => ""),
+        const stored = yield* fs.readFileString(targetFile).pipe(
+          Effect.map((text) => text.trim()),
+          Effect.orElseSucceed(() => ""),
         );
         if (
           stored !== "" &&
@@ -324,40 +324,44 @@ export const makeOpenLink = (
       // host keys go to the per-Sandbox known_hosts file every open
       // refreshes.
       const key = `${ctl.replace(/\.ctl$/, "")}.sshkey`;
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
-            chmod(key, 0o600),
+      yield* fs.writeFile(key, cfg.privateKey, { mode: 0o600 }).pipe(
+        Effect.andThen(fs.chmod(key, 0o600)),
+        Effect.mapError(
+          (error) =>
+            new ProviderError({
+              provider: "namespace",
+              reason: platformReason(error),
+            }),
+        ),
+      );
+      yield* fs
+        .writeFileString(targetFile, `${gateway}\n`, { mode: 0o600 })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: "namespace",
+                reason: platformReason(error),
+              }),
           ),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "namespace",
-            reason: describe(cause),
-          }),
-      });
-      yield* Effect.tryPromise({
-        try: () => writeFile(targetFile, `${gateway}\n`, { mode: 0o600 }),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "namespace",
-            reason: describe(cause),
-          }),
-      });
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(
-            paths.knownHosts,
-            `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
-            { mode: 0o600 },
+        );
+      yield* fs
+        .writeFileString(
+          paths.knownHosts,
+          `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
+          { mode: 0o600 },
+        )
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: "namespace",
+                reason: platformReason(error),
+              }),
           ),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "namespace",
-            reason: describe(cause),
-          }),
-      });
+        );
       yield* Effect.addFinalizer(() =>
-        Effect.promise(() => rm(key, { force: true }).catch(() => undefined)),
+        fs.remove(key, { force: true }).pipe(Effect.ignore),
       );
       const ssh = sshFor(ctl, key, gateway);
       const run = runWith(ssh);
@@ -375,14 +379,15 @@ export const makeOpenLink = (
         return yield* Effect.gen(function* () {
           // A dead master can leave its socket file behind; a later spawn
           // then refuses to multiplex ("ControlSocket already exists").
-          yield* Effect.tryPromise({
-            try: () => rm(ctl, { force: true }),
-            catch: (cause) =>
-              new ProviderError({
-                provider: "namespace",
-                reason: describe(cause),
-              }),
-          });
+          yield* fs.remove(ctl, { force: true }).pipe(
+            Effect.mapError(
+              (error) =>
+                new ProviderError({
+                  provider: "namespace",
+                  reason: platformReason(error),
+                }),
+            ),
+          );
           const masterLog = yield* Ref.make("");
           const master = yield* Effect.acquireRelease(
             Effect.gen(function* () {
@@ -528,6 +533,7 @@ export type SshForward = (
 export const makeSshForward = (
   api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
+  fs: FileSystem.FileSystem,
   sshBin = "ssh",
 ): SshForward => {
   let seq = 0;
@@ -548,32 +554,28 @@ export const makeSshForward = (
         ),
       );
       const target = `${cfg.username}@${cfg.endpoint}`;
-      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name })).dir;
+      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      )).dir;
       const pid = process.pid;
       const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
       const hosts = `${key}.known-hosts`;
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(key, cfg.privateKey, { mode: 0o600 }).then(() =>
-            chmod(key, 0o600),
-          ),
-        catch: (cause) => fail(describe(cause)),
-      });
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(
-            hosts,
-            `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
-            { mode: 0o600 },
-          ),
-        catch: (cause) => fail(describe(cause)),
-      });
+      yield* fs.writeFile(key, cfg.privateKey, { mode: 0o600 }).pipe(
+        Effect.andThen(fs.chmod(key, 0o600)),
+        Effect.mapError((error) => fail(platformReason(error))),
+      );
+      yield* fs
+        .writeFileString(
+          hosts,
+          `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
+          { mode: 0o600 },
+        )
+        .pipe(Effect.mapError((error) => fail(platformReason(error))));
       yield* Effect.addFinalizer(() =>
-        Effect.promise(() =>
-          Promise.all([rm(key, { force: true }), rm(hosts, { force: true })])
-            .then(() => undefined)
-            .catch(() => undefined),
-        ),
+        Effect.all([
+          fs.remove(key, { force: true }),
+          fs.remove(hosts, { force: true }),
+        ]).pipe(Effect.ignore),
       );
       // OpenSSH 8.9 rejects `-L 0:` so the local port is picked here; a
       // bind that lost the race exits at once under ExitOnForwardFailure.

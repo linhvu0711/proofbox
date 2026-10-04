@@ -55,6 +55,7 @@ import {
   toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
 import { makeFakeOpen } from "./support/fake-open.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 // A Namespace JWT the fake Compute API sees (tenant tnt_test, exp
 // 3000-01-01T00:00:00Z).
@@ -1624,7 +1625,7 @@ describe("auth", () => {
             [
               "fake",
               providerEntry({
-                ...makeFakeProvider({ root, watch: "none" }),
+                ...makeFakeProvider({ fs: nodeFs, root, watch: "none" }),
                 list: Deferred.succeed(listing, undefined).pipe(
                   Effect.zipRight(Deferred.await(release)),
                   Effect.as({ infos: [], unreached: [], unfinished: [] }),
@@ -1665,9 +1666,11 @@ describe("auth", () => {
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
+              NodeContext.layer,
               CliOutput.Test,
               providers,
               KeeperClient.Direct.pipe(Layer.provide(providers)),
+              NodeContext.layer,
             ),
           ),
           Effect.withConfigProvider(
@@ -2052,7 +2055,7 @@ describe("auth", () => {
           [
             "slow",
             providerEntry({
-              ...makeFakeProvider({ root, watch: "none" }),
+              ...makeFakeProvider({ fs: nodeFs, root, watch: "none" }),
               name: "slow",
               login: {
                 _tag: "Ways",
@@ -2229,7 +2232,7 @@ describe("auth", () => {
           [
             "robot",
             providerEntry({
-              ...makeFakeProvider({ root, watch: "none" }),
+              ...makeFakeProvider({ fs: nodeFs, root, watch: "none" }),
               name: "robot",
               login: {
                 _tag: "Ways",
@@ -2286,7 +2289,7 @@ describe("auth", () => {
           [
             "robot",
             providerEntry({
-              ...makeFakeProvider({ root, watch: "none" }),
+              ...makeFakeProvider({ fs: nodeFs, root, watch: "none" }),
               name: "robot",
               login: {
                 _tag: "Ways",

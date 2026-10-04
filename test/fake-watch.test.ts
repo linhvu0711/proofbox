@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Option, Schema } from "effect";
 import { afterEach, describe, expect } from "vitest";
@@ -9,18 +10,26 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const wholeFile = (deadline: Date) =>
-  `${JSON.stringify(
-    Schema.encodeSync(SandboxFile)(
-      new SandboxFile({
-        os: "linux",
-        createdAt: new Date(Date.now() - 60_000),
-        idleSeconds: 2,
-        deadline,
-        maxLifeAt: new Date(Date.now() + 3_600_000),
-      }),
-    ),
-  )}\n`;
+// A whole Sandbox: its `sandbox.json` and its Deadline file.
+const writeWhole = (dir: string, deadline: Date) => {
+  writeFileSync(
+    join(dir, "sandbox.json"),
+    `${JSON.stringify(
+      Schema.encodeSync(SandboxFile)(
+        new SandboxFile({
+          os: "linux",
+          createdAt: new Date(Date.now() - 60_000),
+          idleSeconds: 2,
+          maxLifeAt: new Date(Date.now() + 3_600_000),
+        }),
+      ),
+    )}\n`,
+  );
+  writeFileSync(
+    join(dir, "deadline"),
+    `${Math.floor(deadline.getTime() / 1000)}\n`,
+  );
+};
 
 describe("fake watcher", () => {
   afterEach(cleanupEnvs);
@@ -53,32 +62,35 @@ describe("fake watcher", () => {
   });
 
   it.live(
-    "the watcher reads a half-written sandbox.json again and deletes the Sandbox at its Deadline",
+    "the watcher reads an empty Deadline file again and deletes the Sandbox at its Deadline",
     () =>
       Effect.gen(function* () {
-        // Given: a Sandbox folder whose sandbox.json is half written
+        // Given: a whole Sandbox whose Deadline file is still empty
         const env = makeEnv();
         const dir = join(env.root, "abc123");
         mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, "sandbox.json"), '{"deadline":');
-        // When: the watcher runs past one retry, then the file becomes whole
+        writeWhole(dir, new Date(Date.now() - 1000));
+        writeFileSync(join(dir, "deadline"), "");
+        // When: the watcher runs past one retry, then the file is written
         const fiber = yield* Effect.fork(watchSandbox(env.root, "abc123"));
         yield* Effect.sleep("1500 millis");
         const early = yield* Fiber.poll(fiber);
         const stillThere = existsSync(dir);
         writeFileSync(
-          join(dir, "sandbox.json"),
-          wholeFile(new Date(Date.now() - 1000)),
+          join(dir, "deadline"),
+          `${Math.floor((Date.now() - 1000) / 1000)}\n`,
         );
         const exit = yield* Fiber.await(fiber).pipe(
           Effect.timeout("3 seconds"),
         );
         // Then
-        expect(Option.isNone(early)).toBe(true);
-        expect(stillThere).toBe(true);
-        expect(Exit.isSuccess(exit)).toBe(true);
-        expect(existsSync(dir)).toBe(false);
-      }),
+        expect({
+          early: Option.isNone(early),
+          stillThere,
+          done: Exit.isSuccess(exit),
+          gone: !existsSync(dir),
+        }).toEqual({ early: true, stillThere: true, done: true, gone: true });
+      }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.live("the watcher tries a failed delete again after 1 s", () => {
@@ -87,10 +99,7 @@ describe("fake watcher", () => {
     const dir = join(env.root, "abc123");
     const locked = join(dir, "home", "locked");
     mkdirSync(locked, { recursive: true });
-    writeFileSync(
-      join(dir, "sandbox.json"),
-      wholeFile(new Date(Date.now() - 1000)),
-    );
+    writeWhole(dir, new Date(Date.now() - 1000));
     writeFileSync(join(locked, "x"), "x");
     chmodSync(locked, 0o500);
     return Effect.gen(function* () {
@@ -112,6 +121,7 @@ describe("fake watcher", () => {
           if (existsSync(locked)) chmodSync(locked, 0o700);
         }),
       ),
+      Effect.provide(NodeContext.layer),
     );
   });
 });

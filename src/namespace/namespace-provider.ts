@@ -1,18 +1,7 @@
-import { execFile } from "node:child_process";
-import {
-  access,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Cause,
-  Chunk,
   Clock,
   Config,
   Duration,
@@ -22,159 +11,90 @@ import {
   Option,
   Ref,
   Schedule,
-  Stream,
 } from "effect";
-import { checksArgv, checksScript, splitChecks } from "../command-checks.ts";
-import { parseSpan, pushedDeadline } from "../deadline.ts";
+import { captureCommand } from "../command-events.ts";
+import { parseSpan } from "../deadline.ts";
 import {
-  BASE_IMAGE_DIR,
-  baseImageTag,
-  baseImageVersion,
-} from "../docker/base-image.ts";
-import type { DockerClient } from "../docker/docker-client.ts";
-import {
-  LINUX_SCRIPT,
-  makeDockerProvider,
-  sandboxInfoFromLabels,
-} from "../docker/docker-provider.ts";
-import {
-  MacPrepareError,
-  ProviderError,
+  type ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
-  SandboxGoneError,
-  TokenExposedError,
+  platformReason,
   UnknownRegionError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import {
-  type ExecOptions,
-  type ListResult,
-  type Os,
-  type Provider,
-  type ProviderLogin,
-  SandboxInfo,
-  type SandboxRef,
-  type UnfinishedSandbox,
+import type {
+  ListResult,
+  Provider,
+  ProviderLogin,
+  SandboxRef,
+  UnfinishedSandbox,
 } from "../provider.ts";
-import { fileStem, formatSandboxId, makeSandboxName } from "../sandbox-id.ts";
-import { shellJoin } from "../shell.ts";
+import { fileStem, makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
-import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import { pushHostLife } from "./host-life.ts";
-import {
-  MAC_SECRETS_DIR,
-  macChecks,
-  prepareMac,
-  readMac,
-  turnOnSshd,
-  writeMacDeadline,
-} from "./mac-host.ts";
+import type { LinuxHost } from "./linux-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
-import { tenantTokenFor } from "./namespace-login.ts";
+import { fail, gone, type NamespaceHost } from "./namespace-host.ts";
+import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
-import { registryRefs } from "./registry-refs.ts";
-import {
-  pullSnapshot,
-  pushSnapshot,
-  snapshotRef,
-  snapshotTag,
-} from "./snapshot-image.ts";
 import type { Link, OpenLink, SshForward } from "./ssh-link.ts";
-
-const LINUX_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 8 },
-  { cpu: 8, ramGb: 16 },
-  { cpu: 16, ramGb: 32 },
-];
-const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
-const MACOS_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 7 },
-  { cpu: 6, ramGb: 14 },
-];
-const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
-// Every Known line about the Mac was proved on macOS 26; with no selector
-// Namespace gives 15.
-const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
-
-// The host holds Docker itself plus the Sandbox container; keep 1 GB of the
-// Namespace size outside the container's limit so the host stays healthy.
-const MEMORY_RESERVE_GB = 1;
-
-// Each push and each use keeps a Base image version or a Snapshot at
-// least two weeks; one that is not used for that long expires from the
-// registry.
-const IMAGE_KEEP_HOURS = 336;
-
-const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
-
-const exec = promisify(execFile);
-
-const MAC_SCRIPT = checksScript(macChecks());
-
-// Left on a Linux host once its Sandbox is made. Docker removes the
-// container at its Deadline (`--rm`) while the host lives on a while, so
-// with no container this tells an expired Sandbox from one create never
-// finished. The login's home: the host user may not own /var/lib.
-const MADE_MARK = '"$HOME/.proofbox-made"';
 
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
+  readonly executor: CommandExecutor.CommandExecutor;
   readonly login: ProviderLogin;
   readonly openLink: OpenLink;
   readonly forward: SshForward;
-  readonly dockerFor: (link: Link) => DockerClient;
+  // File access, handed in when the Provider is built.
+  readonly fs: FileSystem.FileSystem;
   readonly spawnDetached: (
     provider: string,
     rel: string,
     args: ReadonlyArray<string>,
   ) => Effect.Effect<void, ProviderError>;
+  readonly hosts: {
+    readonly linux: LinuxHost;
+    readonly macos: NamespaceHost;
+  };
 }): Provider => {
   const api = deps.api;
   const forward = deps.forward;
-  const fail = (reason: string) =>
-    new ProviderError({ provider: "namespace", reason });
-  const sandboxId = (ref: SandboxRef) =>
-    formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
-  // `unfinished`: the host is there, but create never made its Sandbox.
-  const gone = (ref: SandboxRef, unfinished?: true) =>
-    new SandboxGoneError({ id: sandboxId(ref), unfinished });
-  const madeElsewhere = (ref: SandboxRef) =>
-    new ProviderUnavailableError({
-      provider: "namespace",
-      reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
-    });
-  const brandFor = (ref: SandboxRef) => ({
-    provider: "namespace",
-    id: () => sandboxId(ref),
-  });
-  const paths = (name: string) => keeperPaths({ provider: "ns", name });
-  const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
-  // The container takes the first six characters of the instance id.
-  const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
-  // Local files avoid an API call; other machines use the host's label.
-  // Hosts made before the OS label existed are Linux.
-  const osOf = Effect.fn("NamespaceProvider.osOf")(function* (ref: SandboxRef) {
-    const file = (yield* refPaths(ref)).os;
-    const text = yield* Effect.promise(() =>
-      readFile(file, "utf8").catch((cause: unknown) =>
-        cause instanceof Error && "code" in cause && cause.code === "ENOENT"
-          ? undefined
-          : "linux",
-      ),
+  const paths = (name: string) =>
+    keeperPaths({ provider: "ns", name }).pipe(
+      Effect.provideService(FileSystem.FileSystem, deps.fs),
     );
+  const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
+  // The one place an OS picks its host. Hosts made before the OS label
+  // existed are Linux.
+  const hostFor = (os: string | undefined) =>
+    os === "macos" ? deps.hosts.macos : deps.hosts.linux;
+  // Local files avoid an API call; other machines use the host's label.
+  const hostOf = Effect.fn("NamespaceProvider.hostOf")(function* (
+    ref: SandboxRef,
+  ) {
+    const file = (yield* refPaths(ref)).os;
+    const text = yield* deps.fs
+      .readFileString(file)
+      .pipe(
+        Effect.catchAll((error) =>
+          Effect.succeed(
+            error._tag === "SystemError" && error.reason === "NotFound"
+              ? undefined
+              : "linux",
+          ),
+        ),
+      );
     if (text !== undefined) {
-      return (text.trim() === "macos" ? "macos" : "linux") satisfies Os;
+      return hostFor(text.trim());
     }
     const hosts = yield* api.list(ref.region ?? DEFAULT_REGION, []);
     const label = hosts.find((host) => host.id === ref.name)?.labels[
       "proofbox.os"
     ];
-    return (label === "macos" ? "macos" : "linux") satisfies Os;
+    return hostFor(label);
   });
 
   // Link bring-up can outlast a short host Deadline, so every open first
@@ -183,22 +103,17 @@ export const makeNamespaceProvider = (deps: {
   const openLink = Effect.fn("NamespaceProvider.openLink")(function* (
     ref: SandboxRef,
     owner: "cli" | "keeper",
-    knownOs?: Os,
+    knownHost?: NamespaceHost,
   ) {
-    const os = knownOs ?? (yield* osOf(ref));
+    const host = knownHost ?? (yield* hostOf(ref));
     const hostPaths = yield* refPaths(ref);
-    if (
-      os === "macos" &&
-      !(yield* Effect.promise(() =>
-        access(hostPaths.sshdKnownHosts)
-          .then(() => true)
-          .catch(() => false),
-      ))
-    ) {
-      return yield* madeElsewhere(ref);
-    }
+    yield* host.reach(ref, hostPaths);
     if (owner === "keeper") {
-      yield* Effect.forkScoped(pushHostLife(api, ref, 120));
+      yield* Effect.forkScoped(
+        pushHostLife(api, ref, 120).pipe(
+          Effect.provideService(FileSystem.FileSystem, deps.fs),
+        ),
+      );
     } else {
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
         ref.region ?? "",
@@ -206,188 +121,37 @@ export const makeNamespaceProvider = (deps: {
         "120",
       ]);
     }
-    return yield* deps.openLink(
-      ref,
-      hostPaths,
-      owner,
-      os === "macos" ? "sshd" : "gateway",
-    );
+    return yield* deps.openLink(ref, hostPaths, owner, host.via);
   });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
   // call so the Keeper's ControlMaster path stays the Keeper's alone.
-  const withCliLink = <A, E>(
+  const withCliLink = <A, E, R>(
     ref: SandboxRef,
-    use: (link: Link) => Effect.Effect<A, E>,
-    os?: Os,
-  ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
+    use: (link: Link) => Effect.Effect<A, E, R>,
+    host?: NamespaceHost,
+  ): Effect.Effect<A, ApiLoginError | ApiError | E, R> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const link = yield* openLink(ref, "cli", os);
+        const link = yield* openLink(ref, "cli", host);
         return yield* use(link);
       }),
     );
 
-  const readTenant = Effect.fn("NamespaceProvider.readTenant")(function* (
-    link: Link,
-  ) {
-    const tenant = yield* link.run(
-      `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
-    );
-    const registry = tenant.stdout.trim();
-    if (tenant.exitCode !== 0 || registry === "") {
-      return yield* fail("could not read the Namespace tenant on the host");
-    }
-    return registry;
-  });
-
-  // A Snapshot without an expiry is kept forever; failing to set one only
-  // costs registry space, so it warns and goes on.
-  const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
-    snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS)),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Snapshot expiry (${error.message})`),
-      ),
-    );
-
-  // A Base image version without an expiry is kept forever too. Its index
-  // and each child digest expire on their own; a Base the registry does
-  // not hold is skipped. Every digest gets its call even when one fails,
-  // so a child never expires before its index.
-  const keepBase = (link: Link, tag: string, progress: Progress) =>
-    registryRefs(link, tag).pipe(
-      Effect.flatMap((refs) =>
-        refs === "missing"
-          ? Effect.void
-          : Effect.validateAll(
-              refs,
-              (ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-              { discard: true },
-            ).pipe(Effect.mapError((errors) => errors[0])),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Base image expiry (${error.message})`),
-      ),
-    );
-
-  // The Snapshot's image tag, pulled onto the host; undefined when the
-  // Sandbox must start from the Base image instead.
-  const pullStart = Effect.fn("NamespaceProvider.pullStart")(function* (
-    link: Link,
-    tenant: string,
-    fingerprint: string,
-    progress: Progress,
-  ) {
-    const tag = snapshotTag(tenant, fingerprint);
-    const pulled = yield* progress
-      .step("pulling the Snapshot", pullSnapshot(link, tag))
-      .pipe(
-        Effect.catchAll((error) =>
-          progress
-            .warn(
-              `could not pull the Snapshot (${error.message}); running the Setup script`,
-            )
-            .pipe(Effect.as("failed" as const)),
-        ),
-      );
-    if (pulled !== "pulled") {
-      return undefined;
-    }
-    yield* keepSnapshot(link, tag, progress);
-    return tag;
-  });
-
-  const getWith = Effect.fn("NamespaceProvider.getWith")(function* (
-    link: Link,
-    ref: SandboxRef,
-  ) {
-    const container = containerOf(ref);
-    const result = yield* link.run(
-      `docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}' ${container} && docker exec -u root ${container} cat /run/proofbox/deadline`,
-    );
-    const stderr = result.stderr.toLowerCase();
-    // The container can stop or be removed between inspect and the deadline
-    // read; either way the Sandbox is gone rather than malformed.
-    const removed =
-      stderr.includes("no such object") || stderr.includes("no such container");
-    const missing = removed || stderr.includes("is not running");
-    if (result.exitCode !== 0 || missing) {
-      if (removed) {
-        // No container and no mark: create never made the Sandbox.
-        const marked = yield* link.run(`test -e ${MADE_MARK}`);
-        return yield* marked.exitCode === 0 ? gone(ref) : gone(ref, true);
-      }
-      if (missing) {
-        return yield* gone(ref);
-      }
-      return yield* fail(
-        `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    const first = result.stdout.split("\n", 1)[0] ?? "";
-    const separator = first.lastIndexOf("|");
-    if (separator === -1) {
-      return yield* fail(
-        `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    if (first.slice(separator + 1).trim() !== "true") {
-      return yield* gone(ref);
-    }
-    const seconds = Number(result.stdout.trim().split("\n").pop());
-    if (!Number.isFinite(seconds)) {
-      return yield* fail(
-        `could not read the Deadline: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    const labels = yield* Effect.try({
-      try: () => JSON.parse(first.slice(0, separator)) as unknown,
-      catch: (cause) => fail(describe(cause)),
-    });
-    const info = yield* sandboxInfoFromLabels(
-      brandFor(ref),
-      ref.name.slice(0, 6),
-      labels,
-      seconds,
-    );
-    return new SandboxInfo({
-      name: ref.name,
-      region: ref.region,
-      os: info.os,
-      createdAt: info.createdAt,
-      idleSeconds: info.idleSeconds,
-      deadline: info.deadline,
-      maxLifeAt: info.maxLifeAt,
-      base: info.base,
-      size: info.size,
-    });
-  });
-
-  const getAs = (os: Os, ref: SandboxRef) =>
-    withCliLink(
-      ref,
-      (link) => (os === "macos" ? readMac(link, ref) : getWith(link, ref)),
-      os,
-    );
+  const getAs = (host: NamespaceHost, ref: SandboxRef) =>
+    withCliLink(ref, (link) => host.read(link, ref), host);
 
   const get = Effect.fn("NamespaceProvider.get")(function* (ref: SandboxRef) {
-    return yield* getAs(yield* osOf(ref), ref);
+    return yield* getAs(yield* hostOf(ref), ref);
   });
 
   // The local record of the Deadline, which the detached host-expiry reads.
   const recordDeadline = (file: string, deadline: Date) =>
-    Effect.promise(() =>
-      writeFile(file, String(Math.ceil(deadline.getTime() / 1000)), {
+    deps.fs
+      .writeFileString(file, String(Math.ceil(deadline.getTime() / 1000)), {
         mode: 0o600,
-      }).catch(() => {}),
-    );
-
-  // The container's Deadline file, `seconds` from the host's own clock.
-  const writeLinuxDeadline = (link: Link, ref: SandboxRef, seconds: number) =>
-    link.run(
-      `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
-    );
+      })
+      .pipe(Effect.ignore);
 
   const checkWritten = (
     ref: SandboxRef,
@@ -419,11 +183,11 @@ export const makeNamespaceProvider = (deps: {
       ref.name,
       String(seconds),
     ]);
-    const os = yield* osOf(ref);
-    const written = yield* withCliLink(ref, (link) =>
-      os === "macos"
-        ? writeMacDeadline(link, seconds)
-        : writeLinuxDeadline(link, ref, seconds),
+    const host = yield* hostOf(ref);
+    const written = yield* withCliLink(
+      ref,
+      (link) => host.writeDeadline(link, ref, seconds),
+      host,
     );
     yield* checkWritten(ref, written);
   });
@@ -432,25 +196,19 @@ export const makeNamespaceProvider = (deps: {
   const listHostsFor = Effect.fn("NamespaceProvider.listHostsFor")(function* (
     region: string,
   ) {
-    const [linux, macos] = yield* Effect.all(
-      [
-        api.list(region, [{ name: "proofbox.os", value: "linux" }]),
-        api.list(region, [{ name: "proofbox.os", value: "macos" }]),
-      ],
+    const listed = yield* Effect.forEach(
+      [deps.hosts.linux, deps.hosts.macos],
+      (host) =>
+        api
+          .list(region, [{ name: "proofbox.os", value: host.os }])
+          .pipe(
+            Effect.map((instances) =>
+              instances.map((instance) => ({ host, region, instance })),
+            ),
+          ),
       { concurrency: 2 },
     );
-    return [
-      ...linux.map((instance) => ({
-        os: "linux" as const,
-        region,
-        instance,
-      })),
-      ...macos.map((instance) => ({
-        os: "macos" as const,
-        region,
-        instance,
-      })),
-    ];
+    return listed.flat();
   });
 
   const list = Effect.gen(function* () {
@@ -489,7 +247,7 @@ export const makeNamespaceProvider = (deps: {
     const byId = new Map<
       string,
       {
-        os: "linux" | "macos";
+        host: NamespaceHost;
         region: string;
         instance: (typeof hosts)[number]["instance"];
       }
@@ -497,7 +255,7 @@ export const makeNamespaceProvider = (deps: {
     for (const host of hosts) {
       if (!byId.has(host.instance.id)) {
         byId.set(host.instance.id, {
-          os: host.os,
+          host: host.host,
           region:
             host.instance.labels["proofbox.region"] ??
             host.instance.region ??
@@ -515,59 +273,67 @@ export const makeNamespaceProvider = (deps: {
       ),
     );
     const dir = (yield* paths("__probe__")).dir;
-    yield* Effect.promise(async () => {
-      const entries = await readdir(dir).catch(() => [] as string[]);
-      // Only files at least ten minutes old are pruned: an ns-new-* staging
-      // key belongs to a create in flight, and a host registered moments ago
-      // can still be ahead of the ListInstances answer.
-      const stale = async (file: string) => {
-        const info = await stat(join(dir, file)).catch(() => null);
-        return info !== null && Date.now() - info.mtimeMs > 600_000;
-      };
-      await Promise.all(
-        entries
-          .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
-          .filter(
-            (name): name is string =>
-              name !== undefined && !name.startsWith("new-"),
-          )
-          .filter((name) => !alive.has(name))
-          .map(async (name) => {
-            if (!(await stale(`ns-${name}.key`))) return;
-            await Promise.all(
-              [
-                ".key",
-                ".key.pub",
-                ".max-life",
-                ".deadline",
-                ".os",
-                ".ctl",
-                ".sock",
-                ".sshkey",
-                ".sshtarget",
-                ".known-hosts",
-                ".sshd-known-hosts",
-              ].map((suffix) =>
-                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
-                  () => {},
-                ),
-              ),
-            );
-          }),
-      ).then(() => {});
-    });
+    const entries = yield* deps.fs
+      .readDirectory(dir)
+      .pipe(Effect.orElseSucceed(() => []));
+    // Only files at least ten minutes old are pruned: an ns-new-* staging
+    // key belongs to a create in flight, and a host registered moments ago
+    // can still be ahead of the ListInstances answer.
+    const stale = (file: string) =>
+      deps.fs.stat(join(dir, file)).pipe(
+        Effect.map(
+          (info) =>
+            Option.isSome(info.mtime) &&
+            Date.now() - info.mtime.value.getTime() > 600_000,
+        ),
+        Effect.orElseSucceed(() => false),
+      );
+    yield* Effect.forEach(
+      entries
+        .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
+        .filter(
+          (name): name is string =>
+            name !== undefined && !name.startsWith("new-"),
+        )
+        .filter((name) => !alive.has(name)),
+      (name) =>
+        Effect.gen(function* () {
+          if (!(yield* stale(`ns-${name}.key`))) return;
+          yield* Effect.forEach(
+            [
+              ".key",
+              ".key.pub",
+              ".max-life",
+              ".deadline",
+              ".os",
+              ".ctl",
+              ".sock",
+              ".sshkey",
+              ".sshtarget",
+              ".known-hosts",
+              ".sshd-known-hosts",
+            ],
+            (suffix) =>
+              deps.fs
+                .remove(join(dir, `ns-${name}${suffix}`), { force: true })
+                .pipe(Effect.ignore),
+            { concurrency: "unbounded" },
+          );
+        }),
+      { concurrency: "unbounded" },
+    );
     // A host Namespace still makes has no link to read over yet, and one
     // whose Sandbox state was never written reads as never made: both are
     // Unfinished Sandboxes. Any other gone host is dropped.
     const unfinished: Array<UnfinishedSandbox> = [];
     const infos = yield* Effect.forEach(
       live,
-      ({ os, region, instance }) =>
+      ({ host, region, instance }) =>
         Effect.gen(function* () {
           const entry = {
             name: instance.id,
             region,
-            os,
+            os: host.os,
             createdAt: instance.createdAt,
           };
           if (instance.starting === true) {
@@ -575,22 +341,17 @@ export const makeNamespaceProvider = (deps: {
             return undefined;
           }
           const ref = { name: instance.id, region };
-          if (os === "macos") {
-            const hostPaths = yield* refPaths(ref);
-            const pinned = yield* Effect.promise(() =>
-              access(hostPaths.sshdKnownHosts)
-                .then(() => true)
-                .catch(() => false),
-            );
-            if (!pinned) {
-              unreached.push({
-                where: `Namespace region ${region}`,
-                reason: madeElsewhere(ref).message,
-              });
-              return undefined;
-            }
+          const reached = yield* host
+            .reach(ref, yield* refPaths(ref))
+            .pipe(Effect.either);
+          if (Either.isLeft(reached)) {
+            unreached.push({
+              where: `Namespace region ${region}`,
+              reason: reached.left.message,
+            });
+            return undefined;
           }
-          return yield* getAs(os, ref).pipe(
+          return yield* getAs(host, ref).pipe(
             Effect.catchTag("SandboxGoneError", (error) =>
               Effect.sync(() => {
                 if (error.unfinished === true) {
@@ -635,22 +396,27 @@ export const makeNamespaceProvider = (deps: {
     // keypair and Max-life cap are removed whether or not the host is
     // still listed.
     const dir = yield* refPaths(ref);
-    yield* Effect.promise(() =>
-      Promise.all([
-        rm(dir.key, { force: true }).catch(() => {}),
-        rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
-        rm(dir.maxLife, { force: true }).catch(() => {}),
-        rm(dir.deadline, { force: true }).catch(() => {}),
-        rm(dir.os, { force: true }).catch(() => {}),
-        rm(dir.knownHosts, { force: true }).catch(() => {}),
-        rm(dir.sshdKnownHosts, { force: true }).catch(() => {}),
-        rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
-          force: true,
-        }).catch(() => {}),
-        rm(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
-          force: true,
-        }).catch(() => {}),
-      ]).then(() => {}),
+    yield* Effect.all(
+      [
+        deps.fs.remove(dir.key, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(`${dir.key}.pub`, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.maxLife, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.deadline, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.os, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.knownHosts, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.sshdKnownHosts, { force: true }).pipe(Effect.ignore),
+        deps.fs
+          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
+            force: true,
+          })
+          .pipe(Effect.ignore),
+        deps.fs
+          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
+            force: true,
+          })
+          .pipe(Effect.ignore),
+      ],
+      { concurrency: "unbounded" },
     );
     return present ? ("deleted" as const) : ("gone" as const);
   });
@@ -685,8 +451,8 @@ export const makeNamespaceProvider = (deps: {
         known: KNOWN_REGIONS,
       });
     }
-    const macos = req.os === "macos";
-    const size = req.size ?? (macos ? DEFAULT_MACOS_SIZE : DEFAULT_SIZE);
+    const host = hostFor(req.os);
+    const size = req.size ?? host.defaultSize;
     const staged = yield* paths(`new-${process.pid}`);
     const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
     // Whatever part of the make is left — key files, the host — leaves
@@ -695,22 +461,30 @@ export const makeNamespaceProvider = (deps: {
     let hostRef: SandboxRef | undefined;
     let deadlineAt = 0;
     const cleanup = Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        Promise.all([
-          rm(keyBase, { force: true }).catch(() => {}),
-          rm(`${keyBase}.pub`, { force: true }).catch(() => {}),
-        ]).then(() => {}),
+      yield* Effect.all(
+        [
+          deps.fs.remove(keyBase, { force: true }).pipe(Effect.ignore),
+          deps.fs.remove(`${keyBase}.pub`, { force: true }).pipe(Effect.ignore),
+        ],
+        { concurrency: "unbounded" },
       );
       if (hostRef !== undefined) {
         const hostPaths = yield* refPaths(hostRef);
-        yield* Effect.promise(() =>
-          Promise.all([
-            rm(hostPaths.key, { force: true }).catch(() => {}),
-            rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
-            rm(hostPaths.maxLife, { force: true }).catch(() => {}),
-            rm(hostPaths.os, { force: true }).catch(() => {}),
-            rm(hostPaths.sshdKnownHosts, { force: true }).catch(() => {}),
-          ]).then(() => {}),
+        yield* Effect.all(
+          [
+            deps.fs.remove(hostPaths.key, { force: true }).pipe(Effect.ignore),
+            deps.fs
+              .remove(`${hostPaths.key}.pub`, { force: true })
+              .pipe(Effect.ignore),
+            deps.fs
+              .remove(hostPaths.maxLife, { force: true })
+              .pipe(Effect.ignore),
+            deps.fs.remove(hostPaths.os, { force: true }).pipe(Effect.ignore),
+            deps.fs
+              .remove(hostPaths.sshdKnownHosts, { force: true })
+              .pipe(Effect.ignore),
+          ],
+          { concurrency: "unbounded" },
         );
         yield* api
           .destroy(hostRef.region ?? "", hostRef.name)
@@ -719,21 +493,32 @@ export const makeNamespaceProvider = (deps: {
     });
     return yield* Effect.gen(function* () {
       const progress = yield* Progress;
-      yield* Effect.tryPromise({
-        try: () =>
-          exec("ssh-keygen", [
-            "-q",
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-C",
-            "proofbox",
-            "-f",
-            keyBase,
-          ]).then(() => {}),
-        catch: (cause) => fail(`ssh-keygen failed: ${describe(cause)}`),
-      });
+      const keygen = yield* captureCommand(
+        Command.make(
+          "ssh-keygen",
+          "-q",
+          "-t",
+          "ed25519",
+          "-N",
+          "",
+          "-C",
+          "proofbox",
+          "-f",
+          keyBase,
+        ),
+      ).pipe(
+        Effect.provideService(CommandExecutor.CommandExecutor, deps.executor),
+        Effect.mapError((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? fail("ssh-keygen failed: spawn ssh-keygen ENOENT")
+            : fail(`ssh-keygen failed: ${error.message}`),
+        ),
+      );
+      if (keygen.exitCode !== 0) {
+        return yield* fail(
+          `ssh-keygen failed: exit ${keygen.exitCode}: ${keygen.stderr.trim()}`,
+        );
+      }
       const durationSeconds = Math.min(
         Duration.toSeconds(req.idle) + 60,
         Duration.toSeconds(req.maxLife),
@@ -745,11 +530,13 @@ export const makeNamespaceProvider = (deps: {
       const maxLifeSeconds = Math.floor(
         (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
       );
-      const sshKey = (yield* Effect.tryPromise({
-        try: () => readFile(`${keyBase}.pub`, "utf8"),
-        catch: (cause) =>
-          fail(`could not read the host key: ${describe(cause)}`),
-      })).trim();
+      const sshKey = (yield* deps.fs
+        .readFileString(`${keyBase}.pub`)
+        .pipe(
+          Effect.mapError((error) =>
+            fail(`could not read the host key: ${platformReason(error)}`),
+          ),
+        )).trim();
       const spanText = yield* createTimeout.pipe(
         Effect.mapError((error) => fail(error.message)),
       );
@@ -774,15 +561,10 @@ export const makeNamespaceProvider = (deps: {
             .create(region, {
               shape: {
                 os: req.os,
-                machineArch: macos ? "arm64" : "amd64",
+                machineArch: host.machine.arch,
                 virtualCpu: size.cpu,
                 memoryMegabytes: size.ramGb * 1024,
-                selectors: macos
-                  ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
-                      name,
-                      value,
-                    }))
-                  : [],
+                selectors: host.machine.selectors,
               },
               labels: [
                 { name: "proofbox.os", value: req.os },
@@ -861,21 +643,23 @@ export const makeNamespaceProvider = (deps: {
         );
       }
       const hostPaths = yield* refPaths(ref);
-      yield* Effect.tryPromise({
-        try: async () => {
-          await rename(keyBase, hostPaths.key);
-          await rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
-          await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
-            mode: 0o600,
-          });
-          await writeFile(hostPaths.deadline, String(deadlineAt), {
-            mode: 0o600,
-          });
-          await writeFile(hostPaths.os, req.os, { mode: 0o600 });
-        },
-        catch: (cause) =>
-          fail(`could not store the host key: ${describe(cause)}`),
-      });
+      yield* Effect.gen(function* () {
+        yield* deps.fs.rename(keyBase, hostPaths.key);
+        yield* deps.fs.rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
+        yield* deps.fs.writeFileString(
+          hostPaths.maxLife,
+          String(maxLifeSeconds),
+          { mode: 0o600 },
+        );
+        yield* deps.fs.writeFileString(hostPaths.deadline, String(deadlineAt), {
+          mode: 0o600,
+        });
+        yield* deps.fs.writeFileString(hostPaths.os, req.os, { mode: 0o600 });
+      }).pipe(
+        Effect.mapError((error) =>
+          fail(`could not store the host key: ${platformReason(error)}`),
+        ),
+      );
       // The host's own Deadline starts when Namespace finishes creating it, so
       // it can sit later than the Max life; a detached process destroys
       // the host at the absolute Max life.
@@ -896,11 +680,11 @@ export const makeNamespaceProvider = (deps: {
             if (left > 0) {
               const pushedAt =
                 Math.floor(Date.now() / 1000) + Math.min(durationSeconds, left);
-              yield* Effect.promise(() =>
-                writeFile(hostPaths.deadline, String(pushedAt), {
+              yield* deps.fs
+                .writeFileString(hostPaths.deadline, String(pushedAt), {
                   mode: 0o600,
-                }).catch(() => {}),
-              );
+                })
+                .pipe(Effect.ignore);
               yield* api
                 .extend(region, instanceId, Math.min(durationSeconds, left))
                 .pipe(Effect.ignore);
@@ -910,113 +694,12 @@ export const makeNamespaceProvider = (deps: {
         ),
       );
       const link = yield* deps.openLink(ref, hostPaths, "cli", "gateway");
-      if (macos) {
-        yield* progress.step(
-          "turning on sshd",
-          turnOnSshd(link, ref, hostPaths),
-        );
-        const sshd = yield* deps.openLink(ref, hostPaths, "cli", "sshd").pipe(
-          Effect.catchTag("ProviderUnavailableError", () =>
-            Effect.fail(
-              new MacPrepareError({
-                id: sandboxId(ref),
-                what: "sshd cannot be reached",
-              }),
-            ),
-          ),
-        );
-        return yield* prepareMac(sshd, {
-          ref,
-          idle: req.idle,
-          maxLifeAt: new Date(maxLifeSeconds * 1000),
-          size,
-        });
-      }
-      const registry = yield* readTenant(link);
-      const version = yield* baseImageVersion(
-        BASE_IMAGE_DIR,
-        LINUX_TOOL_BUNDLE,
-      );
-      const baseTag = `nscr.io/${registry}/${baseImageTag(version)}`;
-      const snapshotImage =
-        req.snapshot === undefined
-          ? undefined
-          : yield* pullStart(link, registry, req.snapshot, progress);
-      const inner = makeDockerProvider({
-        client: deps.dockerFor(link),
-        imageTag: snapshotImage ?? baseTag,
-        registry: true,
-        memoryReserveGb: MEMORY_RESERVE_GB,
-        // Publish the VNC port for the Live view; the host has only a
-        // private address, and the SSH gateway forwards onto that
-        // address, so the publish must cover it — loopback binds are
-        // unreachable.
-        runArgs: [
-          "-p",
-          "5900:5900",
-          ...(snapshotImage === undefined
-            ? []
-            : ["--label", `proofbox.snapshot=${req.snapshot}`]),
-        ],
-        brand: brandFor(ref),
-      });
-      const info = yield* inner.create({
-        ...req,
+      return yield* host.make(link, {
+        req,
+        ref,
+        paths: hostPaths,
         size,
-        name: instanceId.slice(0, 6),
         maxLifeAt: new Date(maxLifeSeconds * 1000),
-      });
-      // A Snapshot's Fingerprint holds the Base version, so this is its
-      // Base too.
-      yield* keepBase(link, baseTag, progress);
-      // The Base image must hide the host's workload token from user code:
-      // neither the token file nor the link-local token service may answer.
-      const docker = deps.dockerFor(link);
-      const container = containerOf(ref);
-      yield* progress.step(
-        "checking the Namespace token is out of reach",
-        Effect.gen(function* () {
-          const file = yield* docker.execText(container, "app", [
-            "sh",
-            "-c",
-            "test ! -e /var/run/nsc/token.json",
-          ]);
-          if (file.exitCode !== 0) {
-            return yield* new TokenExposedError({
-              id: sandboxId(ref),
-              what: "the token file",
-            });
-          }
-          const service = yield* docker.execText(container, "app", [
-            "sh",
-            "-c",
-            "! curl -s -m 3 -o /dev/null http://169.254.169.42/",
-          ]);
-          if (service.exitCode !== 0) {
-            return yield* new TokenExposedError({
-              id: sandboxId(ref),
-              what: "the token service",
-            });
-          }
-        }),
-      );
-      const marked = yield* link.run(`touch ${MADE_MARK}`);
-      if (marked.exitCode !== 0) {
-        return yield* fail(
-          `could not mark the host: ${(marked.stderr || marked.stdout).trim()}`,
-        );
-      }
-      return new SandboxInfo({
-        name: ref.name,
-        region: ref.region,
-        os: info.os,
-        createdAt: info.createdAt,
-        idleSeconds: info.idleSeconds,
-        deadline: info.deadline,
-        maxLifeAt: info.maxLifeAt,
-        base: info.base,
-        snapshot: info.snapshot,
-        size: info.size,
       });
     }).pipe(
       // A host that vanishes mid-create is a Provider error, not a gone
@@ -1050,7 +733,9 @@ export const makeNamespaceProvider = (deps: {
       yield* recordDeadline(deadlineFile, deadline);
       if (seconds > 0) {
         const pushing = yield* Effect.forkIn(
-          pushHostLife(api, ref, seconds),
+          pushHostLife(api, ref, seconds).pipe(
+            Effect.provideService(FileSystem.FileSystem, deps.fs),
+          ),
           scope,
         );
         const last = yield* Ref.getAndSet(lastHostPush, Option.some(pushing));
@@ -1060,23 +745,11 @@ export const makeNamespaceProvider = (deps: {
       }
       return seconds;
     });
-    const mac = (yield* osOf(ref)) === "macos";
+    const host = yield* hostOf(ref);
     // The gone-watch reads over the Keeper's own link: no new link, and
     // no extend-main, every 2 s.
-    const read = mac ? readMac(link, ref) : getWith(link, ref);
+    const read = host.read(link, ref);
     const info = yield* read;
-    const script = mac ? MAC_SCRIPT : LINUX_SCRIPT;
-    // A Mac runs the script over the link itself; Linux in its container.
-    const call = mac
-      ? (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-          link.stream(shellJoin(argv), options)
-      : (() => {
-          const docker = deps.dockerFor(link);
-          const container = containerOf(ref);
-          return (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-            docker.execStream(container, argv, options, "root");
-        })();
-    const pushNow = Effect.flatMap(pushedDeadline(info), pushHost);
     return {
       info,
       get: read,
@@ -1084,161 +757,27 @@ export const makeNamespaceProvider = (deps: {
         deadline: Date,
       ) {
         const seconds = yield* pushHost(deadline);
-        yield* checkWritten(
-          ref,
-          yield* mac
-            ? writeMacDeadline(link, seconds)
-            : writeLinuxDeadline(link, ref, seconds),
-        );
+        yield* checkWritten(ref, yield* host.writeDeadline(link, ref, seconds));
       }),
-      // One call over the link per command: the script pushes the
-      // Sandbox's Deadline and counts kills around it (ADR 0015). The
-      // host side of each push stays here.
-      exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const nowMillis = yield* Clock.currentTimeMillis;
-            yield* pushNow;
-            return splitChecks(
-              call(checksArgv(script, info, nowMillis, argv), options),
-              {
-                gone: () => gone(ref),
-                pushFailed: (detail) =>
-                  fail(`could not write the Deadline: ${detail}`),
-              },
-            ).pipe(
-              Stream.tap((event) =>
-                event._tag === "Exit" ? pushNow : Effect.void,
-              ),
-            );
-          }),
-        ),
+      // One call over the link per command: the command run's script
+      // pushes the Sandbox's Deadline and counts kills around it (ADR
+      // 0015). The host side of each push stays here, as `pushHost`.
+      transport: {
+        shell: host.checks,
+        call: host.call(link, ref),
+        gone: () => gone(ref),
+        fail: (reason: string) => fail(reason),
+        pushHost: (deadline: Date) => Effect.asVoid(pushHost(deadline)),
+      },
     };
   });
 
   const liveView = Effect.fn("NamespaceProvider.liveView")(function* (
     ref: SandboxRef,
   ) {
-    if ((yield* osOf(ref)) === "macos") {
-      const link = yield* openLink(ref, "cli");
-      // The candidate goes on stdin, never the command line. As on
-      // Linux, a lock serializes live-view starts, the stored password
-      // is reused when set — one password per Mac — and each viewer
-      // drops a session marker the finalizer counts. The printed line
-      // is the settled password. macOS has no flock, so the lock is a
-      // mkdir'ed dir that a waiter steals once its pid is gone, or once
-      // it has sat over two seconds with no pid at all — a holder that
-      // died before writing it.
-      const candidate = makeSandboxName(8);
-      const events = yield* link
-        .stream(
-          `sudo -n sh -c ${shellJoin([
-            'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
-          ])} ${candidate}`,
-          {
-            stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
-          },
-        )
-        .pipe(Stream.runCollect);
-      let exitCode = 1;
-      let stdout = "";
-      let stderr = "";
-      for (const event of Chunk.toReadonlyArray(events)) {
-        if (event._tag === "Exit") {
-          exitCode = event.code;
-        } else if (event._tag === "Stdout") {
-          stdout += Buffer.from(event.bytes).toString("utf8");
-        } else if (event._tag === "Stderr") {
-          stderr += Buffer.from(event.bytes).toString("utf8");
-        }
-      }
-      const password = stdout.trim();
-      if (exitCode !== 0 || password === "") {
-        return yield* fail(
-          `the Live view could not set the VNC password: ${stderr.trim()}`,
-        );
-      }
-      yield* Effect.addFinalizer(() =>
-        link
-          .run(
-            `sudo -n sh -c ${shellJoin([
-              'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then rm -f "$L/$1"; exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
-              "sh",
-              candidate,
-            ])}`,
-          )
-          .pipe(Effect.ignore),
-      );
-      const live = yield* forward(ref, 5900);
-      return {
-        address: `127.0.0.1:${live.port}`,
-        password,
-        gone: live.gone,
-      };
-    }
-    const link = yield* openLink(ref, "cli");
-    const docker = deps.dockerFor(link);
-    const container = containerOf(ref);
-    // The marker doubles as this session's slot and as the candidate
-    // password; the flock'd script reuses an open session's password when
-    // one is set, otherwise stores the candidate it reads from stdin —
-    // never argv — and prints the settled password on stdout. One x11vnc
-    // serves every viewer, so the password is one per sandbox.
-    const session = makeSandboxName(8);
-    const startX11vnc = docker
-      .execStream(
-        container,
-        [
-          "sh",
-          "-c",
-          'umask 077; mkdir -p ~/.vnc /tmp/proofbox-live; exec 9>/tmp/proofbox-live/.lock; flock -w 15 9 || exit 1; if [ -s /tmp/proofbox-live/.password ]; then pw=$(cat /tmp/proofbox-live/.password); else IFS= read -r pw || exit 1; printf "%s\\n%s\\ny\\n" "$pw" "$pw" | x11vnc -storepasswd ~/.vnc/passwd >/dev/null || exit 1; printf "%s\\n" "$pw" > /tmp/proofbox-live/.password; fi; pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log >/dev/null || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; touch "/tmp/proofbox-live/$0"; printf "%s" "$pw"',
-          session,
-        ],
-        {
-          stdin: Stream.make(new TextEncoder().encode(`${session}\n`)),
-        },
-      )
-      .pipe(
-        Stream.runCollect,
-        Effect.map((events) => {
-          let exitCode = 1;
-          let stdout = "";
-          let stderr = "";
-          for (const event of Chunk.toReadonlyArray(events)) {
-            if (event._tag === "Exit") {
-              exitCode = event.code;
-            } else if (event._tag === "Stdout") {
-              stdout += Buffer.from(event.bytes).toString("utf8");
-            } else if (event._tag === "Stderr") {
-              stderr += Buffer.from(event.bytes).toString("utf8");
-            }
-          }
-          return { exitCode, stdout, stderr };
-        }),
-        Effect.mapError((error) => `docker exec failed: ${error.message}`),
-        Effect.filterOrFail(
-          (result) => result.exitCode === 0 && result.stdout !== "",
-          (result) => `x11vnc did not start: ${result.stderr.trim()}`,
-        ),
-        Effect.map((result) => result.stdout),
-      );
-    const password = yield* Effect.retry(
-      startX11vnc,
-      Schedule.spaced(Duration.seconds(1)).pipe(
-        Schedule.upTo(Duration.seconds(10)),
-      ),
-    ).pipe(Effect.mapError((error) => fail(describe(error))));
-    yield* Effect.addFinalizer(() =>
-      docker
-        .execText(container, "app", [
-          "sh",
-          "-c",
-          'rm -f "/tmp/proofbox-live/$1"; if [ -z "$(ls -A /tmp/proofbox-live 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f /tmp/proofbox-live/.password ~/.vnc/passwd; pkill -x x11vnc; fi; true',
-          "sh",
-          session,
-        ])
-        .pipe(Effect.ignore),
-    );
+    const host = yield* hostOf(ref);
+    const link = yield* openLink(ref, "cli", host);
+    const password = yield* host.livePassword(link, ref);
     const live = yield* forward(ref, 5900);
     return {
       address: `127.0.0.1:${live.port}`,
@@ -1247,25 +786,20 @@ export const makeNamespaceProvider = (deps: {
     };
   });
 
-  // The Snapshot holds the container's disk; the Secrets live in a tmpfs,
-  // which docker commit leaves out.
+  // Only a Linux host has a container to save.
   const saveSnapshot = Effect.fn("NamespaceProvider.saveSnapshot")(function* (
     ref: SandboxRef,
     fingerprint: string,
   ) {
-    const progress = yield* Progress;
     yield* withCliLink(ref, (link) =>
-      Effect.gen(function* () {
-        const tag = snapshotTag(yield* readTenant(link), fingerprint);
-        yield* pushSnapshot(link, containerOf(ref), tag);
-        yield* keepSnapshot(link, tag, progress);
-      }),
+      deps.hosts.linux.saveSnapshot(link, ref, fingerprint),
     );
   });
 
   return {
     name: "namespace",
     idPrefix: "ns",
+    loginFiles: [NAMESPACE_LOGIN_FILES],
     login: {
       _tag: "Ways",
       browser: {
@@ -1273,6 +807,7 @@ export const makeNamespaceProvider = (deps: {
         complete: completeLogin,
         makeToken: (session, request) =>
           tenantTokenFor(session).pipe(
+            Effect.provideService(FileSystem.FileSystem, deps.fs),
             Effect.flatMap((tenant) => api.makeToken(tenant, request)),
           ),
       },
@@ -1280,24 +815,12 @@ export const makeNamespaceProvider = (deps: {
     },
     regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },
     offers: {
-      linux: {
-        sizes: LINUX_SIZES,
-        features: new Set([
-          "desktop",
-          "recording",
-          "live-view",
-          "secrets",
-          "snapshot",
-        ]),
-      },
-      macos: {
-        sizes: MACOS_SIZES,
-        features: new Set(["desktop", "recording", "secrets", "live-view"]),
-      },
+      linux: deps.hosts.linux.offer,
+      macos: deps.hosts.macos.offer,
     },
     liveView,
     snapshots: {
-      baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
+      baseVersion: deps.hosts.linux.baseVersion,
       save: saveSnapshot,
     },
     create,
@@ -1305,9 +828,7 @@ export const makeNamespaceProvider = (deps: {
     list,
     delete: del,
     extend,
-    stateDir: () => "/var/lib/proofbox",
-    secretsDir: (_name, os) =>
-      os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
+    sandboxFolders: (_name, os) => hostFor(os).folders,
     connect,
   };
 };

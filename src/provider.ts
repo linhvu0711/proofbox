@@ -9,6 +9,7 @@ import {
   type Scope,
   type Stream,
 } from "effect";
+import type { Transport } from "./command-checks.ts";
 import {
   type BadLoginsFileError,
   type LoginExpiredError,
@@ -179,6 +180,8 @@ export type SandboxCallError =
   | TokenRejectedError
   | TokenPermissionError;
 
+// A Sandbox reached over one link. It runs commands through a transport
+// that the command run drives (ADR 0015).
 export interface Connection {
   // The Sandbox as `connect` read it.
   readonly info: SandboxInfo;
@@ -186,22 +189,31 @@ export interface Connection {
   readonly get: Effect.Effect<SandboxInfo, SandboxCallError>;
   // One Deadline push over this connection, with no command.
   readonly extend: (deadline: Date) => Effect.Effect<void, SandboxCallError>;
-  // Runs a command with its checks in the same remote call (ADR 0015): the
-  // Deadline pushed by the idle time before and after it, and the
-  // memory-kill counts around it on the Exit event.
-  readonly exec: (
-    argv: ReadonlyArray<string>,
-    options?: ExecOptions,
-  ) => Stream.Stream<
-    ExecEvent,
-    ProviderError | ProviderUnavailableError | SandboxGoneError
-  >;
+  // How each command reaches the Sandbox.
+  readonly transport: Transport;
+}
+
+// The folders a Provider keeps proofbox's own files in; the file names
+// live in `src/sandbox-file.ts`.
+export interface SandboxFolders {
+  readonly state: string;
+  readonly secrets: string;
+}
+
+// Files a saved login leaves in the runtime dir, by name; `what` names
+// them when they cannot be removed.
+export interface LoginFiles {
+  readonly what: string;
+  readonly names: RegExp;
 }
 
 export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
   readonly login: LoginPart;
+  // The files a saved login leaves in the runtime dir; logout removes them
+  // with the login.
+  readonly loginFiles: ReadonlyArray<LoginFiles>;
   // A Provider whose API is regional names the regions it knows and the
   // one new Sandboxes go to when the login has none.
   readonly regions?: {
@@ -339,8 +351,7 @@ export interface Provider {
     | LoginExpiredError
     | BadLoginsFileError
   >;
-  readonly stateDir: (name: string) => string;
-  readonly secretsDir: (name: string, os: Os) => string;
+  readonly sandboxFolders: (name: string, os: Os) => SandboxFolders;
   readonly connect: (
     sandbox: SandboxRef,
   ) => Effect.Effect<

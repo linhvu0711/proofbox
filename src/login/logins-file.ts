@@ -1,13 +1,6 @@
 import { randomBytes } from "node:crypto";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Config, Duration, Effect, Schema } from "effect";
 import { BadLoginsFileError, LoginsBusyError } from "../errors.ts";
 import { withFileLock } from "../file-lock.ts";
@@ -45,21 +38,18 @@ export const loginsPath = Effect.map(Config.string("HOME"), (home) =>
 
 // A missing file means no logins; anything unreadable is a bad one.
 export const readLogins = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* loginsPath;
   const bad = (reason: string) => new BadLoginsFileError({ path, reason });
-  const text = yield* Effect.tryPromise({
-    try: () => readFile(path, "utf8"),
-    catch: (cause) => cause,
-  }).pipe(
-    Effect.catchAll((cause) =>
-      typeof cause === "object" &&
-      cause !== null &&
-      "code" in cause &&
-      cause.code === "ENOENT"
-        ? Effect.succeed(undefined)
-        : Effect.fail(bad("could not be read")),
-    ),
-  );
+  const text = yield* fs
+    .readFileString(path)
+    .pipe(
+      Effect.catchAll((error) =>
+        error._tag === "SystemError" && error.reason === "NotFound"
+          ? Effect.succeed(undefined)
+          : Effect.fail(bad("could not be read")),
+      ),
+    );
   if (text === undefined) {
     return {};
   }
@@ -78,26 +68,23 @@ export const readLogins = Effect.gen(function* () {
 const saveLogins = Effect.fn("loginsFile.saveLogins")(function* (
   logins: LoginsFile,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* loginsPath;
   const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  yield* Effect.tryPromise({
-    try: async () => {
-      try {
-        await writeFile(
-          temp,
-          `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
-          { mode: 0o600 },
-        );
-        await chmod(temp, 0o600);
-        await rename(temp, path);
-      } catch (cause) {
-        await rm(temp, { force: true });
-        throw cause;
-      }
-    },
-    catch: () =>
-      new BadLoginsFileError({ path, reason: "could not be written" }),
-  });
+  yield* Effect.gen(function* () {
+    yield* fs.writeFileString(
+      temp,
+      `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
+      { mode: 0o600 },
+    );
+    yield* fs.chmod(temp, 0o600);
+    yield* fs.rename(temp, path);
+  }).pipe(
+    Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)),
+    Effect.mapError(
+      () => new BadLoginsFileError({ path, reason: "could not be written" }),
+    ),
+  );
 });
 
 // The lock every change to logins.json runs under. Create and logout also
@@ -108,17 +95,16 @@ export const withLoginsLock = Effect.fn("loginsFile.withLoginsLock")(function* <
   E,
   R,
 >(effect: Effect.Effect<A, E, R>) {
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* loginsPath;
   const dir = dirname(path);
-  yield* Effect.tryPromise({
-    try: async () => {
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      // mkdir's mode only applies to a new dir, so chmod always.
-      await chmod(dir, 0o700);
-    },
-    catch: () =>
-      new BadLoginsFileError({ path, reason: "could not be written" }),
-  });
+  yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 }).pipe(
+    // mkdir's mode only applies to a new dir, so chmod always.
+    Effect.zipRight(fs.chmod(dir, 0o700)),
+    Effect.mapError(
+      () => new BadLoginsFileError({ path, reason: "could not be written" }),
+    ),
+  );
   const lockDir = join(dir, "logins.lock");
   return yield* withFileLock<LoginsBusyError | BadLoginsFileError>({
     dir: lockDir,
@@ -142,5 +128,7 @@ export const rewriteLogins = Effect.fn("loginsFile.rewriteLogins")(function* (
 // Each auth command reads, changes one slot, and writes; the lock keeps
 // an overlapping command's slot from being dropped by the last write.
 // Returns the logins as read under the lock.
-export const changeLogins = (change: (logins: LoginsFile) => LoginsFile) =>
-  withLoginsLock(rewriteLogins(change));
+export const changeLogins = Effect.fn("loginsFile.changeLogins")(
+  (change: (logins: LoginsFile) => LoginsFile) =>
+    withLoginsLock(rewriteLogins(change)),
+);
