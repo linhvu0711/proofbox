@@ -40,6 +40,7 @@ import {
   providerEntry,
 } from "../src/provider.ts";
 import { sleepsNear } from "./support/clock.ts";
+import { commandOf, withCall } from "./support/connection.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -70,14 +71,14 @@ const stubMac = (root: string, answer: Answer) => {
       },
     },
     connect: (sandbox) =>
-      Effect.map(base.connect(sandbox), (connection) => ({
-        ...connection,
-        exec: (argv) =>
+      Effect.map(base.connect(sandbox), (connection) =>
+        withCall(connection, (argv) =>
           Stream.suspend(() => {
             calls.exec += 1;
-            return answer(argv);
+            return answer(commandOf(argv));
           }),
-      })),
+        ),
+      ),
   };
   return { mac, calls };
 };

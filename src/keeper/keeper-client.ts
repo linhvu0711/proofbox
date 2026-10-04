@@ -1,6 +1,6 @@
 import { Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { withRunningPush } from "../deadline.ts";
+import { runCommand } from "../command-checks.ts";
 import {
   AnswerTimeoutError,
   KeeperLostError,
@@ -134,7 +134,7 @@ const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
         ),
       };
 
-// Without a Keeper the stdin stream feeds Connection.exec, which narrows its
+// Without a Keeper the stdin stream feeds the command run, which narrows its
 // failure to a ProviderError; keep the stdin error and report it in place of
 // the wrapped one, as the Keeper path does with feederError.
 const execDirect = Effect.fn("keeperClient.execDirect")(function* (
@@ -153,9 +153,11 @@ const execDirect = Effect.fn("keeperClient.execDirect")(function* (
             Stream.tapError((error) => Ref.set(stdinError, error)),
           ),
         };
-  const events: Stream.Stream<ExecEvent, KeeperExecError> = withRunningPush(
+  const events: Stream.Stream<ExecEvent, KeeperExecError> = runCommand(
     connection,
-  )(connection.exec(argv, narrowStdin(fed))).pipe(
+    argv,
+    narrowStdin(fed),
+  ).pipe(
     Stream.catchAll((execError) =>
       Stream.unwrap(
         Ref.get(stdinError).pipe(

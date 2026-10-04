@@ -11,6 +11,7 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, Duration, Effect, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
+import { runCommand } from "../src/command-checks.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { Progress } from "../src/progress.ts";
 
@@ -135,7 +136,7 @@ describe("fake Provider", () => {
         .pipe(
           Effect.flatMap((connection) =>
             Stream.runCollect(
-              connection.exec(["cat"], {
+              runCommand(connection, ["cat"], {
                 stdin: Stream.make(new TextEncoder().encode("hi\n")),
               }),
             ),
@@ -151,7 +152,11 @@ describe("fake Provider", () => {
         .join("");
       expect(stdout).toBe("hi\n");
       expect(events.some((event) => event._tag === "Stderr")).toBe(false);
-      expect(events[events.length - 1]).toEqual({ _tag: "Exit", code: 0 });
+      expect(events[events.length - 1]).toEqual({
+        _tag: "Exit",
+        code: 0,
+        kills: { before: 0, after: 0 },
+      });
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 
@@ -173,7 +178,7 @@ describe("fake Provider", () => {
         .pipe(
           Effect.flatMap((connection) =>
             Stream.runCollect(
-              connection.exec(["sh", "-c", 'read x; echo "rc:$?"']),
+              runCommand(connection, ["sh", "-c", 'read x; echo "rc:$?"']),
             ),
           ),
           Effect.scoped,
@@ -191,7 +196,7 @@ describe("fake Provider", () => {
         .join("");
       expect({ stdout, last: events[events.length - 1] }).toEqual({
         stdout: "rc:1\n",
-        last: { _tag: "Exit", code: 0 },
+        last: { _tag: "Exit", code: 0, kills: { before: 0, after: 0 } },
       });
     }).pipe(Effect.provide(NodeContext.layer)),
   );
@@ -219,7 +224,7 @@ describe("fake Provider", () => {
           .connect({ name: sandbox.name, region: undefined })
           .pipe(
             Effect.flatMap((connection) =>
-              Stream.runDrain(connection.exec(["true"])),
+              Stream.runDrain(runCommand(connection, ["true"])),
             ),
             Effect.scoped,
             Effect.flip,

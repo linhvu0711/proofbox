@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, ConfigProvider, Effect, Layer, Ref, Stream } from "effect";
+import { Chunk, ConfigProvider, Effect, Layer, Ref } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
@@ -18,18 +18,17 @@ import {
   providerEntry,
   SandboxInfo,
 } from "../src/provider.ts";
+import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 const tempRoots: string[] = [];
 
-// A fake Sandbox of the given OS and size, where each command's Exit
-// carries one more memory kill after it than before it: some process is
-// killed while the command runs.
+// A fake Sandbox of the given OS and size. A command raises its memory-kill
+// count with `echo 1 > ../memory-kills`, from the Sandbox's home folder.
 const layers = (os: "linux" | "macos" = "macos") => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
   tempRoots.push(root);
   const base = makeFakeProvider({ root, watch: "none" });
   const size = os === "macos" ? { cpu: 4, ramGb: 7 } : { cpu: 4, ramGb: 8 };
-  let kills = 0;
   const provider: Provider = {
     ...base,
     offers: {
@@ -50,17 +49,6 @@ const layers = (os: "linux" | "macos" = "macos") => {
       Effect.map(base.connect(sandbox), (connection) => ({
         ...connection,
         info: new SandboxInfo({ ...connection.info, os, size }),
-        exec: (argv, options) =>
-          connection.exec(argv, options).pipe(
-            Stream.map((event) => {
-              if (event._tag !== "Exit") {
-                return event;
-              }
-              const before = kills;
-              kills += 1;
-              return { ...event, kills: { before, after: kills } };
-            }),
-          ),
       })),
   };
   const providers = Layer.succeed(
@@ -112,6 +100,36 @@ describe("exec out of memory", () => {
     for (const root of tempRoots.splice(0)) {
       rmSync(root, { recursive: true, force: true });
     }
+    cleanupEnvs();
+  });
+
+  it("a command killed for memory through a Keeper on the fake Provider exits 122 and names the next size", async () => {
+    // Given: a fake Sandbox, its Keeper started by create
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--size",
+      "4x8",
+    ]);
+    const id = created.stdout.trim();
+    // When: the command is killed for memory
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "echo 1 > ../memory-kills; exit 137",
+    ]);
+    // Then
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+      exitCode: 122,
+      stderr: "Sandbox ran out of memory (4x8). Try --size 8x16.\n",
+    });
   });
 
   it.effect(
@@ -120,8 +138,8 @@ describe("exec out of memory", () => {
       Effect.gen(function* () {
         // Given
         const id = yield* created;
-        // When
-        yield* execInSandbox(id, ["true"]);
+        // When: some other process is killed while the command runs
+        yield* execInSandbox(id, ["sh", "-c", "echo 1 > ../memory-kills"]);
         // Then
         const output = yield* CliOutput;
         expect(yield* output.exitCode).toBe(0);
@@ -137,7 +155,11 @@ describe("exec out of memory", () => {
         const id = yield* created;
         // When
         // (ssh reports a SIGKILLed command as 137)
-        yield* execInSandbox(id, ["sh", "-c", "exit 137"]);
+        yield* execInSandbox(id, [
+          "sh",
+          "-c",
+          "echo 1 > ../memory-kills; exit 137",
+        ]);
         // Then
         const output = yield* CliOutput;
         expect(yield* output.exitCode).toBe(122);
@@ -153,8 +175,8 @@ describe("exec out of memory", () => {
       Effect.gen(function* () {
         // Given
         const id = yield* created;
-        // When
-        yield* execInSandbox(id, ["true"]);
+        // When: some other process is killed while the command runs
+        yield* execInSandbox(id, ["sh", "-c", "echo 1 > ../memory-kills"]);
         // Then
         const output = yield* CliOutput;
         expect(yield* output.exitCode).toBe(122);

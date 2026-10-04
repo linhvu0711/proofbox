@@ -1,10 +1,5 @@
-import { Clock, Duration, Effect, Option, Schema, Stream } from "effect";
-import {
-  type ChecksShell,
-  checksArgv,
-  checksScript,
-  splitChecks,
-} from "../command-checks.ts";
+import { Clock, Duration, Effect, Option, Schema } from "effect";
+import { type ChecksShell, checksScript } from "../command-checks.ts";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -59,6 +54,8 @@ export const LINUX_CHECKS: ChecksShell = {
   run: 'unset PWD OLDPWD; HOME=/home/app setpriv --reuid=app --regid=app --init-groups "$@"',
 };
 
+// The Namespace connection runs this script itself until #160 moves it onto
+// the command run.
 export const LINUX_SCRIPT = checksScript(LINUX_CHECKS);
 
 const DOCKER_BRAND: ProviderBrand = {
@@ -394,26 +391,15 @@ export const makeDockerProvider = (options: {
       info,
       get: get(sandbox),
       extend: (deadline: Date) => writeDeadline(sandbox.name, deadline),
-      // One root `docker exec` per command: the script pushes, counts, and
-      // drops to `app` around it (ADR 0015).
-      exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-        Stream.unwrap(
-          Effect.map(Clock.currentTimeMillis, (nowMillis) =>
-            splitChecks(
-              client.execStream(
-                container,
-                checksArgv(LINUX_SCRIPT, info, nowMillis, argv),
-                options,
-                "root",
-              ),
-              {
-                gone: () => gone(sandbox.name),
-                pushFailed: (detail) =>
-                  fail(`could not write the Deadline: ${detail}`),
-              },
-            ),
-          ),
-        ),
+      // One root `docker exec` per command: the command run's script
+      // pushes, counts, and drops to `app` around it (ADR 0015).
+      transport: {
+        shell: LINUX_CHECKS,
+        call: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
+          client.execStream(container, argv, options, "root"),
+        gone: () => gone(sandbox.name),
+        fail: (reason: string) => fail(reason),
+      },
     };
   });
 

@@ -41,6 +41,7 @@ import {
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
+import { withCall } from "./support/connection.ts";
 import {
   eventually,
   keeperClientLayers,
@@ -104,7 +105,7 @@ const countedSandbox = (
       })
       .pipe(Effect.provideService(Progress, noProgress));
     const calls = { get: 0, extend: 0 };
-    const watched = { get: 0 };
+    const watched = { get: 0, extend: 0 };
     const linux = fake.offers.linux;
     const counted: Provider = {
       ...fake,
@@ -134,6 +135,11 @@ const countedSandbox = (
             watched.get += 1;
             return connection.get;
           }),
+          extend: (deadline: Date) =>
+            Effect.suspend(() => {
+              watched.extend += 1;
+              return connection.extend(deadline);
+            }),
         })),
     };
     return {
@@ -160,17 +166,12 @@ const warmKeeper = (
     const layers = yield* startKeeper(sandbox.id, sandbox.counted);
     sandbox.calls.get = 0;
     sandbox.calls.extend = 0;
-    const deadline = Effect.map(
-      sandbox.fake.get({ name: sandbox.name, region: undefined }),
-      (read) => read.deadline.toISOString(),
-    );
     return {
       id: sandbox.id,
       name: sandbox.name,
       calls: sandbox.calls,
       watched: sandbox.watched,
       layers,
-      deadline,
     };
   });
 
@@ -389,7 +390,7 @@ describe("Keeper", () => {
     // the Keeper still serves
     await sleep(200);
     expect(writeError).toBeUndefined();
-    expect(replies).toEqual([{ exit: 0 }]);
+    expect(replies).toEqual([{ exit: 0, kills: [0, 0] }]);
     const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
     expect(again.stdout).toBe("still\n");
     expect(again.exitCode).toBe(0);
@@ -825,30 +826,15 @@ describe("Keeper", () => {
     () => {
       const env = makeEnv();
       return Effect.gen(function* () {
-        // Given: a Provider whose every Exit carries memory-kill counts
+        // Given: a Sandbox that has seen 2 memory kills
         const sandbox = yield* countedSandbox(env);
-        const provider: Provider = {
-          ...sandbox.counted,
-          connect: (ref) =>
-            Effect.map(sandbox.counted.connect(ref), (connection) => ({
-              ...connection,
-              exec: (argv, options) =>
-                connection
-                  .exec(argv, options)
-                  .pipe(
-                    Stream.map((event) =>
-                      event._tag === "Exit"
-                        ? { ...event, kills: { before: 2, after: 5 } }
-                        : event,
-                    ),
-                  ),
-            })),
-        };
-        const layers = yield* startKeeper(sandbox.id, provider);
-        // When
+        writeFileSync(join(env.root, sandbox.name, "memory-kills"), "2\n");
+        const layers = yield* startKeeper(sandbox.id, sandbox.counted);
+        // When: 3 more happen while the command runs
         const events = yield* Effect.flatMap(KeeperClient, (client) =>
-          Effect.flatMap(client.exec(sandbox.id, ["true"]), (stream) =>
-            Stream.runCollect(stream),
+          Effect.flatMap(
+            client.exec(sandbox.id, ["sh", "-c", "echo 5 > ../memory-kills"]),
+            (stream) => Stream.runCollect(stream),
           ),
         ).pipe(Effect.provide(layers));
         // Then
@@ -860,41 +846,6 @@ describe("Keeper", () => {
       }).pipe(runtimeConfig(env));
     },
   );
-
-  it.scoped(
-    "a command through the Keeper pushes the Deadline by the idle time",
-    () => {
-      const env = makeEnv();
-      return Effect.gen(function* () {
-        // Given
-        const keeper = yield* warmKeeper(env);
-        yield* TestClock.adjust("10 minutes");
-        // When
-        yield* execInSandbox(keeper.id, ["true"]).pipe(
-          Effect.provide(keeper.layers),
-        );
-        // Then
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  it.scoped("a command through the Keeper never pushes past Max life", () => {
-    const env = makeEnv();
-    return Effect.gen(function* () {
-      // Given
-      const keeper = yield* warmKeeper(env, {
-        maxLife: Duration.minutes(20),
-      });
-      yield* TestClock.adjust("10 minutes");
-      // When
-      yield* execInSandbox(keeper.id, ["true"]).pipe(
-        Effect.provide(keeper.layers),
-      );
-      // Then
-      expect(yield* keeper.deadline).toBe("1970-01-01T00:20:00.000Z");
-    }).pipe(runtimeConfig(env));
-  });
 
   it.scoped(
     "a Sandbox gone under a warm Keeper fails with the same message",
@@ -1314,7 +1265,6 @@ describe("Keeper", () => {
         // Then
         expect(result.stdout.toString("utf8")).toBe("clicked\n");
         expect(keeper.calls).toEqual({ get: 0, extend: 0 });
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1343,9 +1293,9 @@ describe("Keeper", () => {
         yield* TestClock.adjust("14 minutes");
         // Then
         expect({
-          deadline: yield* keeper.deadline,
+          extends: keeper.watched.extend,
           running: yield* running(`sleep ${nap}`),
-        }).toEqual({ deadline: "1970-01-01T00:25:00.000Z", running: false });
+        }).toEqual({ extends: 0, running: false });
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1431,16 +1381,16 @@ describe("Keeper", () => {
       const failing: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fail(
                 new ProviderError({
                   provider: "fake",
                   reason: "spawn ENOENT (docker exec sh -c echo tok-2718)",
                 }),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, failing);
@@ -1498,9 +1448,8 @@ describe("Keeper", () => {
       const scripted: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fromIterable(events).pipe(
                 Stream.flatMap((event) =>
                   event === "pause"
@@ -1508,7 +1457,8 @@ describe("Keeper", () => {
                     : Stream.make(event),
                 ),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, scripted);
