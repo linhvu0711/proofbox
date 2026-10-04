@@ -11,10 +11,11 @@ const writeFakeSandbox = (root: string, name: string, idleSeconds = 900) => {
       os: "linux",
       idleSeconds,
       createdAt: "2999-01-01T00:00:00.000Z",
-      deadline: "2999-01-01T00:15:00.000Z",
       maxLifeAt: "2999-01-01T03:00:00.000Z",
     })}\n`,
   );
+  // 2999-01-01T00:15:00Z
+  writeFileSync(join(root, name, "deadline"), "32472144900\n");
 };
 
 // A Sandbox folder a create started and never finished: no sandbox.json.

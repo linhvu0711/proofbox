@@ -52,7 +52,6 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
   idleSeconds: IdleSeconds,
-  deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   size: Schema.optional(Size),
   snapshot: Schema.optional(Schema.String),
@@ -149,12 +148,19 @@ export const makeFakeProvider = (options: {
     const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
       Effect.mapError((error) => fail(error.message)),
     );
+    const seconds = yield* Effect.tryPromise({
+      try: () => readFile(join(dir, "deadline"), "utf8"),
+      catch: (cause) => (!existsSync(dir) ? gone(name) : fail(describe(cause))),
+    });
+    if (!/^[0-9]+\n?$/.test(seconds)) {
+      return yield* fail(`could not read the Deadline: ${seconds.trim()}`);
+    }
     const info = new SandboxInfo({
       name,
       os: file.os,
       createdAt: file.createdAt,
       idleSeconds: file.idleSeconds,
-      deadline: file.deadline,
+      deadline: new Date(Number(seconds.trim()) * 1000),
       maxLifeAt: file.maxLifeAt,
       size: file.size,
       snapshot: file.snapshot,
@@ -170,20 +176,16 @@ export const makeFakeProvider = (options: {
     return info;
   });
 
-  // Write a temp file and rename it over sandbox.json, so a concurrent read
+  // Write a temp file and rename it over the file, so a concurrent read
   // sees the old file or the new one, never a half-written one.
-  const writeFileInfo = Effect.fn("FakeProvider.writeFileInfo")(function* (
-    name: string,
-    file: SandboxFile,
+  const writeWhole = Effect.fn("FakeProvider.writeWhole")(function* (
+    path: string,
+    text: string,
   ) {
-    const path = join(root, name, "sandbox.json");
     const temp = `${path}.${randomUUID()}.tmp`;
     yield* Effect.tryPromise({
       try: async () => {
-        await writeFile(
-          temp,
-          `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
-        );
+        await writeFile(temp, text);
         await rename(temp, path);
       },
       catch: (cause) => fail(describe(cause)),
@@ -193,6 +195,19 @@ export const makeFakeProvider = (options: {
       ),
     );
   });
+
+  const writeFileInfo = (name: string, file: SandboxFile) =>
+    writeWhole(
+      join(root, name, "sandbox.json"),
+      `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+    );
+
+  // The Deadline in its own file, in epoch seconds, as Docker keeps it.
+  const writeDeadline = (name: string, deadline: Date) =>
+    writeWhole(
+      join(root, name, "deadline"),
+      `${Math.floor(deadline.getTime() / 1000)}\n`,
+    );
 
   const createWork = Effect.fn("FakeProvider.createWork")(function* (req: {
     readonly os: Os;
@@ -259,15 +274,17 @@ export const makeFakeProvider = (options: {
       os: req.os,
       createdAt,
       idleSeconds,
-      deadline: nextDeadline({
-        now: createdAt,
-        idle: req.idle,
-        maxLifeAt,
-      }),
       maxLifeAt,
       size: req.size,
       snapshot: entry === undefined ? undefined : req.snapshot,
     });
+    const deadline = nextDeadline({
+      now: createdAt,
+      idle: req.idle,
+      maxLifeAt,
+    });
+    // The Deadline file first, so a Sandbox with a sandbox.json has one.
+    yield* writeDeadline(name, deadline);
     yield* writeFileInfo(name, file);
     const hold = options.createHold;
     if (hold !== undefined) {
@@ -312,7 +329,7 @@ export const makeFakeProvider = (options: {
     if (options.watch === "process") {
       yield* spawnDetached("fake", "fake/watch-main", [root, name]);
     }
-    return new SandboxInfo({ name, ...file });
+    return new SandboxInfo({ name, ...file, deadline });
   });
 
   const create = Effect.fn("FakeProvider.create")(function* (req: {
@@ -432,17 +449,8 @@ export const makeFakeProvider = (options: {
     sandbox: SandboxRef,
     deadline: Date,
   ) {
-    const info = yield* readFileInfo(sandbox.name);
-    const file = new SandboxFile({
-      os: info.os,
-      createdAt: info.createdAt,
-      idleSeconds: info.idleSeconds,
-      deadline,
-      maxLifeAt: info.maxLifeAt,
-      size: info.size,
-      snapshot: info.snapshot,
-    });
-    yield* writeFileInfo(sandbox.name, file);
+    yield* readFileInfo(sandbox.name);
+    yield* writeDeadline(sandbox.name, deadline);
   });
 
   // Copy into a temp entry and rename it over the old one, so a create

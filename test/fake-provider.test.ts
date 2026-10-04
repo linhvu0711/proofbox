@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -83,6 +89,31 @@ describe("fake Provider", () => {
       expect(readdirSync(join(root, sandbox.name))).not.toContainEqual(
         expect.stringMatching(/\.tmp$/),
       );
+    }),
+  );
+
+  it.effect("extend writes the Deadline that get reads, in whole seconds", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox
+      const root = makeRoot();
+      const fake = makeFakeProvider({ root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const ref = { name: sandbox.name, region: undefined };
+      // When
+      yield* fake.extend(ref, new Date(1_200_500));
+      const info = yield* fake.get(ref);
+      const file = readFileSync(join(root, sandbox.name, "deadline"), "utf8");
+      // Then
+      expect({ deadline: info.deadline.toISOString(), file }).toEqual({
+        deadline: "1970-01-01T00:20:00.000Z",
+        file: "1200\n",
+      });
     }),
   );
 

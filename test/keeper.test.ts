@@ -495,12 +495,13 @@ describe("Keeper", () => {
     const name = created.stdout.trim().slice("fake:".length);
     const pid = keeperPid(env, name);
     // When: the Deadline passes. Write a temp file and rename it, like the
-    // fake does, so the Keeper never reads a half-written sandbox.json.
-    const sandboxFile = join(env.root, name, "sandbox.json");
-    const meta = JSON.parse(readFileSync(sandboxFile, "utf8"));
-    meta.deadline = new Date(Date.now() - 1000).toISOString();
-    writeFileSync(`${sandboxFile}.tmp`, `${JSON.stringify(meta)}\n`);
-    renameSync(`${sandboxFile}.tmp`, sandboxFile);
+    // fake does, so the Keeper never reads a half-written Deadline file.
+    const deadlineFile = join(env.root, name, "deadline");
+    writeFileSync(
+      `${deadlineFile}.tmp`,
+      `${Math.floor((Date.now() - 1000) / 1000)}\n`,
+    );
+    renameSync(`${deadlineFile}.tmp`, deadlineFile);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await sleep(200);
