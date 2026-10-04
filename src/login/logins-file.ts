@@ -165,13 +165,18 @@ export const changeLogins = Effect.fn("loginsFile.changeLogins")(
 );
 
 export const changeHarnessLogins = Effect.fn("loginsFile.changeHarnessLogins")(
-  (change: (logins: HarnessLoginsFile) => HarnessLoginsFile) =>
-    withLoginsLock(
+  function* (change: (logins: HarnessLoginsFile) => HarnessLoginsFile) {
+    const path = yield* harnessLoginsPath;
+    return yield* withLoginsLock(
       Effect.gen(function* () {
         const logins = yield* readHarnessLogins;
-        const path = yield* harnessLoginsPath;
         yield* saveFileAt(path, HarnessLoginsFile, change(logins));
         return logins;
       }),
-    ),
+    ).pipe(
+      Effect.catchTag("BadLoginsFileError", (error) =>
+        Effect.fail(new BadLoginsFileError({ path, reason: error.reason })),
+      ),
+    );
+  },
 );

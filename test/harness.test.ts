@@ -42,6 +42,24 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("harness login with a blocked config directory names the Harness logins file", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    writeFileSync(join(home, ".config"), "blocked");
+    // When
+    const result = await runCli(env, ["harness", "login", "claude"], {
+      input: "sk-ant-oat01-abcd\n",
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      `Bad logins file ${loginsFile(home)}: could not be written; delete it and log in again\n`,
+    );
+    expect(result.exitCode).toBe(125);
+    expect(readFileSync(join(home, ".config"), "utf8")).toBe("blocked");
+  });
+
   it("harness login fake and auth status run through the CLI in tests", async () => {
     // Given
     const env = makeEnv();
