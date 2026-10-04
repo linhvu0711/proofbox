@@ -1,4 +1,3 @@
-import { posix } from "node:path";
 import { Schema } from "effect";
 import type { WorkFile } from "./work-files.ts";
 
@@ -13,9 +12,6 @@ export const HashList = Schema.Struct({
   }),
 });
 export type HashList = typeof HashList.Type;
-
-export const hashListPath = (stateDir: string) =>
-  posix.join(stateDir, "work-hashes.json");
 
 export const toHashList = (files: ReadonlyArray<WorkFile>): HashList => ({
   version: 1 as const,

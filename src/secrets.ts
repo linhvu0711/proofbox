@@ -1,5 +1,4 @@
 import { readFile, stat } from "node:fs/promises";
-import { posix } from "node:path";
 import { Effect, Redacted, Schema } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
@@ -11,7 +10,7 @@ import {
 } from "./errors.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
-import { writeSandboxFile } from "./sandbox-file.ts";
+import { sandboxFiles, writeSandboxFile } from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
 import { shellJoin } from "./shell.ts";
 
@@ -141,7 +140,7 @@ export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (
       Effect.gen(function* () {
         const code = yield* writeSandboxFile(
           rawId,
-          posix.join(provider.secretsDir(id.name, info.os), "env"),
+          sandboxFiles(provider, id.name, info.os).secrets,
           new TextEncoder().encode(body),
           { executable: false },
         );
