@@ -8,6 +8,7 @@ import {
   withDeadlinePush,
 } from "../deadline.ts";
 import {
+  HarnessVersionNeedsHarnessError,
   MissingCapabilityError,
   ProviderError,
   platformReason,
@@ -17,6 +18,7 @@ import {
   UnknownProviderError,
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
+import { checkHarnessCreate } from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
@@ -40,6 +42,8 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly envFile?: string | undefined;
     readonly maxSize?: string | undefined;
     readonly size?: string | undefined;
+    readonly harness?: string | undefined;
+    readonly harnessVersion?: string | undefined;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const providers = yield* Providers;
@@ -68,6 +72,24 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         "nothing was created",
       );
     }
+    if (options.harnessVersion !== undefined && options.harness === undefined) {
+      return yield* new HarnessVersionNeedsHarnessError();
+    }
+    if (options.harness !== undefined && !offer.features.has("secrets")) {
+      return yield* lacksFeature(
+        provider,
+        options.os,
+        "secrets",
+        "nothing was created",
+      );
+    }
+    const check =
+      options.harness === undefined
+        ? undefined
+        : yield* checkHarnessCreate(options.harness, options.work ?? ".");
+    if (check !== undefined) {
+      yield* check.entry.load;
+    }
     const idle =
       options.idle === undefined
         ? idleDefault(options.os)
@@ -77,7 +99,11 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         ? MAX_LIFE_DEFAULT
         : yield* parseSpan("max-life", options.maxLife);
     const setupPath = options.setup;
-    if (setupPath !== undefined && options.work === undefined) {
+    if (
+      setupPath !== undefined &&
+      options.work === undefined &&
+      options.harness === undefined
+    ) {
       return yield* new SetupNeedsWorkError();
     }
     const maxSize =

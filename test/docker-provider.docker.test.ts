@@ -23,6 +23,7 @@ import {
 import { makeDockerClient } from "../src/docker/docker-client.ts";
 import { makeDockerProvider } from "../src/docker/docker-provider.ts";
 import { ToolBundleHashError } from "../src/errors.ts";
+import { HarnessesLive } from "../src/harness-registry.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -345,6 +346,7 @@ describe("Docker Provider", () => {
               Layer.mergeAll(
                 NodeContext.layer,
                 CliOutput.Test,
+                HarnessesLive,
                 providers,
                 KeeperClient.Direct.pipe(Layer.provide(providers)),
                 Layer.succeed(

@@ -337,6 +337,47 @@ export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
   }
 }
 
+export class HarnessVersionNeedsHarnessError extends Data.TaggedError(
+  "HarnessVersionNeedsHarnessError",
+) {
+  get message() {
+    return "--harness-version needs --harness <name>. Nothing was created.";
+  }
+}
+
+export class NotGithubRepoError extends Data.TaggedError("NotGithubRepoError")<{
+  readonly folder: string;
+  readonly reason: string;
+}> {
+  get message() {
+    return `A Harness needs a GitHub repo: ${this.folder} ${this.reason}. Nothing was created.`;
+  }
+}
+
+export class NoHarnessLoginError extends Data.TaggedError(
+  "NoHarnessLoginError",
+)<{
+  readonly harness: string;
+  readonly expired: boolean;
+  readonly howToMake: string;
+}> {
+  get message() {
+    const reason = this.expired
+      ? `The Harness login for ${this.harness} expired`
+      : `No Harness login for ${this.harness}`;
+    return `${reason}; run proofbox harness login ${this.harness}. ${this.howToMake}. Nothing was created.`;
+  }
+}
+
+export class NoGithubLoginError extends Data.TaggedError("NoGithubLoginError")<{
+  readonly owner: string;
+  readonly repo: string;
+}> {
+  get message() {
+    return `No GitHub login for ${this.owner.toLowerCase()}; run proofbox github login ${this.owner.toLowerCase()} with a fine-grained token for ${this.owner}/${this.repo}. Nothing was created.`;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{

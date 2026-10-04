@@ -16,6 +16,7 @@ import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import { readWorkFolder, sendWorkFolder } from "../src/commands/upload.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
+import { HarnessesLive } from "../src/harness-registry.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -68,6 +69,7 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
   const base = Layer.mergeAll(
     NodeContext.layer,
     CliOutput.Test,
+    HarnessesLive,
     providers,
     Layer.succeed(
       Progress,
