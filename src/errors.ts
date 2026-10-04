@@ -54,6 +54,14 @@ export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
   }
 }
 
+// The Keeper closed or broke the connection before its last frame. It may
+// have read the request, so the request never goes again. `reason` is the
+// socket error's message; a plain close has none, and the reader of the
+// reply says what it waited for.
+export class KeeperLostError extends Data.TaggedError("KeeperLostError")<{
+  readonly reason?: string | undefined;
+}> {}
+
 export class BadSpanError extends Data.TaggedError("BadSpanError")<{
   readonly flag: string;
   readonly value: string;

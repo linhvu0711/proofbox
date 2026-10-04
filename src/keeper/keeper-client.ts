@@ -1,22 +1,9 @@
-import { execFile } from "node:child_process";
-import { readFile, rm } from "node:fs/promises";
-import { createConnection, type Socket } from "node:net";
-import { promisify } from "node:util";
-import {
-  Clock,
-  Data,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schedule,
-  Stream,
-} from "effect";
+import { Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { withRunningPush } from "../deadline.ts";
 import {
   AnswerTimeoutError,
+  KeeperLostError,
   ProviderError,
   SandboxGoneError,
   type UploadFailedError,
@@ -30,47 +17,33 @@ import {
   type SandboxCallError,
   type SandboxRef,
 } from "../provider.ts";
-import { fileStem, formatSandboxId, resolveSandboxId } from "../sandbox-id.ts";
-import { spawnDetached } from "../spawn-detached.ts";
+import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
+import {
+  keeperAway,
+  reachKeeper,
+  startKeeper,
+  stopKeeper,
+} from "./lifecycle.ts";
 import { keeperPaths } from "./paths.ts";
 import {
-  decodeReply,
+  connectKeeper,
   encodeInput,
   encodeRequest,
-  type ReplyFrame,
+  readReplies,
+  writeFrame,
 } from "./protocol.ts";
-
-const codeOf = (cause: unknown) =>
-  typeof cause === "object" && cause !== null && "code" in cause
-    ? String((cause as { code: unknown }).code)
-    : "";
-
-const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
-
-// No Keeper answers: none is there, or one left before it read the
-// request, as a Keeper does when its Sandbox is gone.
-const KEEPER_AWAY = new Set([...RETRY_CODES, "EPIPE", "ECONNRESET"]);
-
-// The Keeper closed or broke the connection before its last frame. It may
-// have read the request, so the request never goes again.
-class KeeperLostError extends Data.TaggedError("KeeperLostError")<{
-  readonly reason: string;
-}> {}
 
 // The Sandbox as the Provider reads it once the Keeper is lost: a gone
 // Sandbox fails gone, and any other failure keeps the lost reason.
 const readAfterLost = Effect.fn("keeperClient.readAfterLost")(function* (
   provider: Provider,
   sandbox: SandboxRef,
-  lost: KeeperLostError,
+  reason: string,
 ) {
   return yield* Effect.catchIf(
     provider.get(sandbox),
     (error) => !(error instanceof SandboxGoneError),
-    () =>
-      Effect.fail(
-        new ProviderError({ provider: provider.name, reason: lost.reason }),
-      ),
+    () => Effect.fail(new ProviderError({ provider: provider.name, reason })),
   );
 });
 
@@ -204,185 +177,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       const providers = yield* Providers;
       const output = yield* CliOutput;
 
-      const connectSocket = (socket: string, provider: string) =>
-        Effect.async<Socket, ProviderError>((resume) => {
-          const s = createConnection({ path: socket }, () =>
-            resume(Effect.succeed(s)),
-          );
-          s.once("error", (error) => {
-            s.destroy();
-            resume(
-              Effect.fail(
-                new ProviderError({
-                  provider,
-                  reason: codeOf(error) || error.message,
-                }),
-              ),
-            );
-          });
-        });
-
       const start = Effect.fn("KeeperClient.start")(function* (rawId: string) {
-        const id = yield* resolveSandboxId(rawId, providers);
-        const paths = yield* keeperPaths({
-          provider: id.prefix,
-          name: fileStem(id),
-        });
-        yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
-          formatSandboxId({
-            provider: id.prefix,
-            region: id.region,
-            name: id.name,
-          }),
-        ]);
-        yield* connectSocket(paths.socket, id.provider.name).pipe(
-          Effect.retry({
-            while: (error) => RETRY_CODES.has(error.reason),
-            schedule: Schedule.spaced("50 millis").pipe(
-              Schedule.upTo("10 seconds"),
-            ),
-          }),
-          Effect.tap((socket) => Effect.sync(() => socket.destroy())),
-        );
+        yield* startKeeper(yield* resolveSandboxId(rawId, providers));
       });
-
-      const frames = (socket: Socket, provider: string) =>
-        Stream.asyncPush<
-          ExecEvent,
-          ProviderError | SandboxGoneError | KeeperLostError
-        >((emit) =>
-          Effect.acquireRelease(
-            Effect.sync(() => {
-              let pending = "";
-              let done = false;
-              socket.on("data", (chunk) => {
-                pending += chunk.toString("utf8");
-                let newline = pending.indexOf("\n");
-                while (newline !== -1) {
-                  const line = pending.slice(0, newline);
-                  pending = pending.slice(newline + 1);
-                  newline = pending.indexOf("\n");
-                  try {
-                    const frame = decodeReply(JSON.parse(line));
-                    if ("out" in frame) {
-                      emit.single({
-                        _tag: "Stdout",
-                        bytes: new Uint8Array(Buffer.from(frame.out, "base64")),
-                      });
-                    } else if ("err" in frame) {
-                      emit.single({
-                        _tag: "Stderr",
-                        bytes: new Uint8Array(Buffer.from(frame.err, "base64")),
-                      });
-                    } else if ("exit" in frame) {
-                      emit.single(
-                        frame.kills === undefined
-                          ? { _tag: "Exit", code: frame.exit }
-                          : {
-                              _tag: "Exit",
-                              code: frame.exit,
-                              kills: {
-                                before: frame.kills[0],
-                                after: frame.kills[1],
-                              },
-                            },
-                      );
-                      done = true;
-                      emit.end();
-                    } else if ("gone" in frame) {
-                      done = true;
-                      emit.fail(new SandboxGoneError({ id: frame.gone }));
-                    } else {
-                      done = true;
-                      emit.fail(
-                        new ProviderError({
-                          provider,
-                          reason:
-                            "fail" in frame
-                              ? frame.fail
-                              : "the Keeper sent Sandbox info for a command",
-                        }),
-                      );
-                    }
-                  } catch (cause) {
-                    done = true;
-                    emit.fail(
-                      new ProviderError({
-                        provider,
-                        reason:
-                          cause instanceof Error
-                            ? cause.message
-                            : String(cause),
-                      }),
-                    );
-                  }
-                  if (done) {
-                    return;
-                  }
-                }
-              });
-              socket.once("close", () => {
-                if (!done) {
-                  done = true;
-                  emit.fail(
-                    new KeeperLostError({
-                      reason:
-                        "Keeper closed the connection before the command exited",
-                    }),
-                  );
-                }
-              });
-              socket.once("error", (error) => {
-                if (!done) {
-                  done = true;
-                  emit.fail(new KeeperLostError({ reason: error.message }));
-                }
-              });
-            }),
-            () =>
-              Effect.sync(() => {
-                socket.destroy();
-              }),
-          ),
-        );
-
-      // The request, the first line to a Keeper. A failure keeps the
-      // socket's code as its reason, as connectSocket does, so a Keeper that
-      // left before it read the request is told apart; the socket goes.
-      const writeRequest = (socket: Socket, provider: string, frame: unknown) =>
-        Effect.async<void, ProviderError>((resume) => {
-          socket.write(`${JSON.stringify(frame)}\n`, (error) => {
-            if (error) {
-              socket.destroy();
-            }
-            resume(
-              error
-                ? Effect.fail(
-                    new ProviderError({
-                      provider,
-                      reason: codeOf(error) || error.message,
-                    }),
-                  )
-                : Effect.void,
-            );
-          });
-        });
-
-      const writeLine = (socket: Socket, provider: string, frame: unknown) =>
-        Effect.async<void, ProviderError>((resume) => {
-          socket.write(`${JSON.stringify(frame)}\n`, (error) =>
-            resume(
-              error
-                ? Effect.fail(
-                    new ProviderError({
-                      provider,
-                      reason: error.message,
-                    }),
-                  )
-                : Effect.void,
-            ),
-          );
-        });
 
       const exec = Effect.fn("KeeperClient.exec")(function* (
         rawId: string,
@@ -391,37 +188,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       ) {
         const id = yield* resolveSandboxId(rawId, providers);
         const provider = id.provider;
-        const paths = yield* keeperPaths({
-          provider: id.prefix,
-          name: fileStem(id),
-        });
-        // The Keeper never read a request it dropped, so after a new Keeper
-        // starts the request goes again.
-        const connect = connectSocket(paths.socket, id.provider.name).pipe(
-          Effect.tap((socket) =>
-            writeRequest(
-              socket,
-              id.provider.name,
-              encodeRequest(
-                options?.stdin === undefined
-                  ? { exec: [...argv] }
-                  : { exec: [...argv], stdin: true },
-              ),
-            ),
-          ),
-        );
-        // With no Keeper, the Provider says first whether the Sandbox is
-        // still there: a gone one fails here, with no Keeper started for it.
-        const socket = yield* connect.pipe(
-          Effect.map(Option.some),
-          Effect.catchAll((error) =>
-            KEEPER_AWAY.has(error.reason)
-              ? Effect.zipRight(
-                  provider.get(id),
-                  Effect.option(Effect.zipRight(start(rawId), connect)),
-                )
-              : Effect.succeed(Option.none<Socket>()),
-          ),
+        const socket = yield* reachKeeper(
+          id,
+          options?.stdin === undefined
+            ? { exec: [...argv] }
+            : { exec: [...argv], stdin: true },
         );
         if (socket._tag === "None") {
           yield* output.err(
@@ -434,14 +205,14 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           const stdin = options.stdin;
           yield* Effect.forkScoped(
             Stream.runForEach(stdin, (chunk) =>
-              writeLine(
+              writeFrame(
                 socket.value,
                 id.provider.name,
                 encodeInput({ in: Buffer.from(chunk).toString("base64") }),
               ),
             ).pipe(
               Effect.zipRight(
-                writeLine(
+                writeFrame(
                   socket.value,
                   id.provider.name,
                   encodeInput({ end: true }),
@@ -458,10 +229,58 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             ),
           );
         }
-        const events: Stream.Stream<ExecEvent, KeeperExecError> = frames(
+        const lostOnCommand = (reason: string) =>
+          Effect.flatMap(readAfterLost(provider, id, reason), () =>
+            Effect.fail(new ProviderError({ provider: provider.name, reason })),
+          );
+        const events: Stream.Stream<ExecEvent, KeeperExecError> = readReplies(
           socket.value,
           id.provider.name,
         ).pipe(
+          Stream.mapEffect(
+            (
+              frame,
+            ): Effect.Effect<ExecEvent, ProviderError | SandboxGoneError> => {
+              if ("out" in frame) {
+                return Effect.succeed({
+                  _tag: "Stdout",
+                  bytes: new Uint8Array(Buffer.from(frame.out, "base64")),
+                });
+              }
+              if ("err" in frame) {
+                return Effect.succeed({
+                  _tag: "Stderr",
+                  bytes: new Uint8Array(Buffer.from(frame.err, "base64")),
+                });
+              }
+              if ("exit" in frame) {
+                return Effect.succeed(
+                  frame.kills === undefined
+                    ? { _tag: "Exit", code: frame.exit }
+                    : {
+                        _tag: "Exit",
+                        code: frame.exit,
+                        kills: {
+                          before: frame.kills[0],
+                          after: frame.kills[1],
+                        },
+                      },
+                );
+              }
+              if ("gone" in frame) {
+                return Effect.fail(new SandboxGoneError({ id: frame.gone }));
+              }
+              return Effect.fail(
+                new ProviderError({
+                  provider: provider.name,
+                  reason:
+                    "fail" in frame
+                      ? frame.fail
+                      : "the Keeper sent Sandbox info for a command",
+                }),
+              );
+            },
+          ),
           Stream.catchAll((frameError) =>
             Stream.unwrap(
               Ref.get(feederError).pipe(
@@ -471,15 +290,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                       ? Stream.fail(fed)
                       : frameError instanceof KeeperLostError
                         ? Stream.fromEffect(
-                            Effect.flatMap(
-                              readAfterLost(provider, id, frameError),
-                              () =>
-                                Effect.fail(
-                                  new ProviderError({
-                                    provider: provider.name,
-                                    reason: frameError.reason,
-                                  }),
-                                ),
+                            lostOnCommand(
+                              frameError.reason ??
+                                "Keeper closed the connection before the command exited",
                             ),
                           )
                         : Stream.fail(frameError),
@@ -493,7 +306,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         return withAnswerLimit(
           events,
           options?.limit,
-          writeLine(
+          writeFrame(
             socket.value,
             id.provider.name,
             encodeInput({ giveUp: true }),
@@ -502,80 +315,8 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       });
 
       const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {
-        const id = yield* resolveSandboxId(rawId, providers);
-        const paths = yield* keeperPaths({
-          provider: id.prefix,
-          name: fileStem(id),
-        });
-        const pidText = yield* Effect.promise(() =>
-          readFile(paths.pid, "utf8").catch(() => ""),
-        );
-        const pid = Number.parseInt(pidText.trim(), 10);
-        if (Number.isFinite(pid)) {
-          // A stale pid file can name a reused, unrelated pid; only signal a
-          // process that still runs keeper-main.
-          const isKeeper = yield* Effect.promise(() =>
-            promisify(execFile)("ps", ["-p", String(pid), "-o", "command="])
-              .then(({ stdout }) => stdout.includes("keeper-main"))
-              .catch(() => false),
-          );
-          if (isKeeper) {
-            yield* Effect.sync(() => {
-              try {
-                process.kill(pid, "SIGTERM");
-              } catch {
-                // ESRCH and friends: Keeper already gone
-              }
-            });
-          }
-        }
-        yield* Effect.promise(() =>
-          Promise.all([
-            rm(paths.socket, { force: true }).catch(() => {}),
-            rm(paths.pid, { force: true }).catch(() => {}),
-          ]).then(() => {}),
-        );
+        yield* stopKeeper(yield* resolveSandboxId(rawId, providers));
       });
-
-      // The one reply to a request that is not a command.
-      const oneReply = (socket: Socket, provider: string) =>
-        Effect.async<ReplyFrame, ProviderError | KeeperLostError>((resume) => {
-          let pending = "";
-          let done = false;
-          const finish = (
-            result: Effect.Effect<ReplyFrame, ProviderError | KeeperLostError>,
-          ) => {
-            if (!done) {
-              done = true;
-              socket.destroy();
-              resume(result);
-            }
-          };
-          const fail = (reason: string) =>
-            finish(Effect.fail(new ProviderError({ provider, reason })));
-          const lost = (reason: string) =>
-            finish(Effect.fail(new KeeperLostError({ reason })));
-          socket.on("data", (chunk) => {
-            pending += chunk.toString("utf8");
-            const newline = pending.indexOf("\n");
-            if (newline === -1) {
-              return;
-            }
-            try {
-              finish(
-                Effect.succeed(
-                  decodeReply(JSON.parse(pending.slice(0, newline))),
-                ),
-              );
-            } catch (cause) {
-              fail(cause instanceof Error ? cause.message : String(cause));
-            }
-          });
-          socket.once("close", () =>
-            lost("Keeper closed the connection before it answered"),
-          );
-          socket.once("error", (error) => lost(error.message));
-        });
 
       // The Sandbox as the warm Keeper read it at connect, with no remote
       // call. With no Keeper up, the Provider reads it, as before the
@@ -588,7 +329,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         });
         // No Keeper took the request: none answers, or one left before it
         // read it.
-        const socket = yield* connectSocket(
+        const socket = yield* connectKeeper(
           paths.socket,
           id.provider.name,
         ).pipe(
@@ -597,14 +338,14 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             Option.match({
               onNone: () => Effect.succeedNone,
               onSome: (socket) =>
-                writeRequest(
+                writeFrame(
                   socket,
                   id.provider.name,
                   encodeRequest({ info: true }),
                 ).pipe(
                   Effect.as(Option.some(socket)),
                   Effect.catchIf(
-                    (error) => KEEPER_AWAY.has(error.reason),
+                    (error) => keeperAway(error),
                     () => Effect.succeedNone,
                   ),
                 ),
@@ -614,11 +355,26 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         if (Option.isNone(socket)) {
           return yield* id.provider.get(id);
         }
-        const reply = yield* oneReply(socket.value, id.provider.name).pipe(
+        // The reader never ends before a last frame, so an empty reply
+        // counts as a close.
+        const reply = yield* readReplies(socket.value, id.provider.name).pipe(
+          Stream.runHead,
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(new KeeperLostError({})),
+              onSome: (frame) => Effect.succeed(frame),
+            }),
+          ),
           Effect.catchTag("KeeperLostError", (lost) =>
-            Effect.map(readAfterLost(id.provider, id, lost), (info) => ({
-              info,
-            })),
+            Effect.map(
+              readAfterLost(
+                id.provider,
+                id,
+                lost.reason ??
+                  "Keeper closed the connection before it answered",
+              ),
+              (info) => ({ info }),
+            ),
           ),
         );
         if ("info" in reply) {
@@ -628,7 +384,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         // run commands with no Deadline push: stop it, so the next command
         // starts a new one.
         if ("fail" in reply && reply.fail === "bad request") {
-          yield* stop(rawId);
+          yield* stopKeeper(id);
           return yield* id.provider.get(id);
         }
         return yield* new ProviderError({
