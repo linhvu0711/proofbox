@@ -81,3 +81,50 @@ test("github login with no owner is refused and saves nothing", async () => {
     saved: false,
   });
 });
+
+test("github login refuses an empty token and saves nothing", async () => {
+  const env = makeEnv();
+  const home = makeHome();
+  const result = await runCli(env, ["github", "login", "acme"], {
+    input: "",
+    set: { HOME: home },
+  });
+  expect({
+    ...result,
+    saved: existsSync(join(home, ".config", "proofbox", "github-logins.json")),
+  }).toEqual({
+    stderr:
+      "Not a fine-grained GitHub token. Make one for acme at https://github.com/settings/personal-access-tokens/new, then run: echo <token> | proofbox github login acme\n",
+    stdout: "",
+    exitCode: 125,
+    saved: false,
+  });
+});
+
+test("github login refuses a classic token and keeps the saved one", async () => {
+  const env = makeEnv();
+  const home = makeHome();
+  await runCli(env, ["github", "login", "acme"], {
+    input: "github_pat_11AAAA1111\n",
+    set: { HOME: home },
+  });
+  const result = await runCli(env, ["github", "login", "acme"], {
+    input: "ghp_abc123\n",
+    set: { HOME: home },
+  });
+  expect({
+    ...result,
+    file: JSON.parse(
+      readFileSync(
+        join(home, ".config", "proofbox", "github-logins.json"),
+        "utf8",
+      ),
+    ),
+  }).toEqual({
+    stderr:
+      "Not a fine-grained GitHub token. Make one for acme at https://github.com/settings/personal-access-tokens/new, then run: echo <token> | proofbox github login acme\n",
+    stdout: "",
+    exitCode: 125,
+    file: { acme: { token: "github_pat_11AAAA1111" } },
+  });
+});

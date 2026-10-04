@@ -558,6 +558,16 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
   }
 }
 
+export class NotFineGrainedTokenError extends Data.TaggedError(
+  "NotFineGrainedTokenError",
+)<{
+  readonly owner: string;
+}> {
+  get message() {
+    return `Not a fine-grained GitHub token. Make one for ${this.owner} at https://github.com/settings/personal-access-tokens/new, then run: echo <token> | proofbox github login ${this.owner}`;
+  }
+}
+
 export class NoTokenMakingError extends Data.TaggedError("NoTokenMakingError")<{
   readonly provider: string;
 }> {
