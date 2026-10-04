@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import {
   ConfigProvider,
   Duration,
@@ -9,7 +9,7 @@ import {
   Option,
   Schedule,
 } from "effect";
-import { ProviderError } from "./errors.ts";
+import { ProviderError, platformReason } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { keeperPaths, ownStart, stillRuns } from "./keeper/paths.ts";
 import {
@@ -29,15 +29,17 @@ import { formatSandboxId } from "./sandbox-id.ts";
 const localSandboxes = Effect.fn("localSandboxes.localSandboxes")(function* (
   prefix: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" })).dir;
-  const entries = yield* Effect.tryPromise({
-    try: () => readdir(dir),
-    catch: (cause) =>
-      new ProviderError({
-        provider: prefix,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  });
+  const entries = yield* fs.readDirectory(dir).pipe(
+    Effect.mapError(
+      (error) =>
+        new ProviderError({
+          provider: prefix,
+          reason: platformReason(error),
+        }),
+    ),
+  );
   return entries.flatMap((entry) => {
     const stem = /^(.+)\.max-life$/.exec(entry)?.[1];
     if (stem === undefined || !stem.startsWith(`${prefix}-`)) {
@@ -69,20 +71,27 @@ const markCreate = Effect.fn("localSandboxes.markCreate")(function* (
     `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
   );
   const started = yield* ownStart;
-  yield* Effect.tryPromise({
-    try: () => writeFile(path, `${process.pid}\n${started}\n`, { mode: 0o600 }),
-    catch: (cause) =>
-      new ProviderError({
-        provider: prefix,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  });
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs
+    .writeFileString(path, `${process.pid}\n${started}\n`, { mode: 0o600 })
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderError({
+            provider: prefix,
+            reason: platformReason(error),
+          }),
+      ),
+    );
   return path;
 });
 
-const unmarkCreate = Effect.fn("localSandboxes.unmarkCreate")((path: string) =>
-  Effect.promise(() => rm(path, { force: true }).catch(() => {})),
-);
+const unmarkCreate = Effect.fn("localSandboxes.unmarkCreate")(function* (
+  path: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* Effect.ignore(fs.remove(path, { force: true }));
+});
 
 // The marks of the creates still running for one Provider. A mark whose
 // process is gone, or whose process id now belongs to a process that
@@ -90,35 +99,35 @@ const unmarkCreate = Effect.fn("localSandboxes.unmarkCreate")((path: string) =>
 const liveCreates = Effect.fn("localSandboxes.liveCreates")(function* (
   prefix: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" })).dir;
-  const marks = yield* Effect.tryPromise({
-    try: async () => {
-      const found: Array<{ readonly name: string; readonly text: string }> = [];
-      for (const entry of await readdir(dir)) {
-        if (
-          /^\d+-[0-9a-f]+$/.test(
-            entry.startsWith(`${prefix}-creating-`)
-              ? entry.slice(`${prefix}-creating-`.length)
-              : "",
-          )
-        ) {
-          // A mark removed since readdir is a create that just finished.
-          const text = await readFile(join(dir, entry), "utf8").catch(
-            () => undefined,
-          );
-          if (text !== undefined) {
-            found.push({ name: entry, text });
-          }
-        }
+  const entries = yield* fs.readDirectory(dir).pipe(
+    Effect.mapError(
+      (error) =>
+        new ProviderError({
+          provider: prefix,
+          reason: platformReason(error),
+        }),
+    ),
+  );
+  const marks: Array<{ readonly name: string; readonly text: string }> = [];
+  for (const entry of entries) {
+    if (
+      /^\d+-[0-9a-f]+$/.test(
+        entry.startsWith(`${prefix}-creating-`)
+          ? entry.slice(`${prefix}-creating-`.length)
+          : "",
+      )
+    ) {
+      // A mark removed since readdir is a create that just finished.
+      const text = yield* fs
+        .readFileString(join(dir, entry))
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (text !== undefined) {
+        marks.push({ name: entry, text });
       }
-      return found;
-    },
-    catch: (cause) =>
-      new ProviderError({
-        provider: prefix,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  });
+    }
+  }
   const live: Array<string> = [];
   for (const mark of marks) {
     const [pid = "", started = ""] = mark.text.split("\n");
@@ -326,20 +335,22 @@ export const logOut = Effect.fn("localSandboxes.logOut")(function* (
           provider: provider.idPrefix,
           name: "__probe__",
         })).dir;
-        yield* Effect.tryPromise({
-          try: async () => {
-            for (const file of await readdir(dir)) {
-              if (files.names.test(file)) {
-                await rm(join(dir, file), { force: true });
-              }
+        const fs = yield* FileSystem.FileSystem;
+        yield* Effect.gen(function* () {
+          for (const file of yield* fs.readDirectory(dir)) {
+            if (files.names.test(file)) {
+              yield* fs.remove(join(dir, file), { force: true });
             }
-          },
-          catch: (cause) =>
-            new ProviderError({
-              provider: provider.name,
-              reason: String(cause),
-            }),
-        });
+          }
+        }).pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: provider.name,
+                reason: platformReason(error),
+              }),
+          ),
+        );
       }),
     );
     if (Either.isLeft(cleared)) {
