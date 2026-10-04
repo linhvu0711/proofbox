@@ -1,4 +1,4 @@
-import type { Effect } from "effect";
+import type { Effect, Scope } from "effect";
 import type { ChecksShell, Transport } from "../command-checks.ts";
 import {
   ProviderError,
@@ -42,6 +42,16 @@ export interface NamespaceHost {
   readonly checks: ChecksShell;
   // How one argv reaches the Sandbox over the host's link.
   readonly call: (link: Link, ref: SandboxRef) => Transport["call"];
+  // Sets up VNC for one Live view and gives its password. Scoped: the
+  // view's finalizer runs when the scope closes.
+  readonly livePassword: (
+    link: Link,
+    ref: SandboxRef,
+  ) => Effect.Effect<
+    string,
+    ProviderError | ProviderUnavailableError,
+    Scope.Scope
+  >;
 }
 
 export const describe = (cause: unknown) =>

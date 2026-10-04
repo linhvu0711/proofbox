@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Cause,
-  Chunk,
   Clock,
   Config,
   Duration,
@@ -20,7 +19,6 @@ import {
   Option,
   Ref,
   Schedule,
-  Stream,
 } from "effect";
 import { captureCommand } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
@@ -50,7 +48,6 @@ import {
   type UnfinishedSandbox,
 } from "../provider.ts";
 import { fileStem, makeSandboxName } from "../sandbox-id.ts";
-import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import { pushHostLife } from "./host-life.ts";
@@ -983,126 +980,9 @@ export const makeNamespaceProvider = (deps: {
   const liveView = Effect.fn("NamespaceProvider.liveView")(function* (
     ref: SandboxRef,
   ) {
-    if ((yield* hostOf(ref)).os === "macos") {
-      const link = yield* openLink(ref, "cli");
-      // The candidate goes on stdin, never the command line. As on
-      // Linux, a lock serializes live-view starts, the stored password
-      // is reused when set — one password per Mac — and each viewer
-      // drops a session marker the finalizer counts. The printed line
-      // is the settled password. macOS has no flock, so the lock is a
-      // mkdir'ed dir that a waiter steals once its pid is gone, or once
-      // it has sat over two seconds with no pid at all — a holder that
-      // died before writing it.
-      const candidate = makeSandboxName(8);
-      const events = yield* link
-        .stream(
-          `sudo -n sh -c ${shellJoin([
-            'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
-          ])} ${candidate}`,
-          {
-            stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
-          },
-        )
-        .pipe(Stream.runCollect);
-      let exitCode = 1;
-      let stdout = "";
-      let stderr = "";
-      for (const event of Chunk.toReadonlyArray(events)) {
-        if (event._tag === "Exit") {
-          exitCode = event.code;
-        } else if (event._tag === "Stdout") {
-          stdout += Buffer.from(event.bytes).toString("utf8");
-        } else if (event._tag === "Stderr") {
-          stderr += Buffer.from(event.bytes).toString("utf8");
-        }
-      }
-      const password = stdout.trim();
-      if (exitCode !== 0 || password === "") {
-        return yield* fail(
-          `the Live view could not set the VNC password: ${stderr.trim()}`,
-        );
-      }
-      yield* Effect.addFinalizer(() =>
-        link
-          .run(
-            `sudo -n sh -c ${shellJoin([
-              'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then rm -f "$L/$1"; exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
-              "sh",
-              candidate,
-            ])}`,
-          )
-          .pipe(Effect.ignore),
-      );
-      const live = yield* forward(ref, 5900);
-      return {
-        address: `127.0.0.1:${live.port}`,
-        password,
-        gone: live.gone,
-      };
-    }
-    const link = yield* openLink(ref, "cli");
-    const docker = deps.dockerFor(link);
-    const container = containerOf(ref);
-    // The marker doubles as this session's slot and as the candidate
-    // password; the flock'd script reuses an open session's password when
-    // one is set, otherwise stores the candidate it reads from stdin —
-    // never argv — and prints the settled password on stdout. One x11vnc
-    // serves every viewer, so the password is one per sandbox.
-    const session = makeSandboxName(8);
-    const startX11vnc = docker
-      .execStream(
-        container,
-        [
-          "sh",
-          "-c",
-          'umask 077; mkdir -p ~/.vnc /tmp/proofbox-live; exec 9>/tmp/proofbox-live/.lock; flock -w 15 9 || exit 1; if [ -s /tmp/proofbox-live/.password ]; then pw=$(cat /tmp/proofbox-live/.password); else IFS= read -r pw || exit 1; printf "%s\\n%s\\ny\\n" "$pw" "$pw" | x11vnc -storepasswd ~/.vnc/passwd >/dev/null || exit 1; printf "%s\\n" "$pw" > /tmp/proofbox-live/.password; fi; pgrep -x x11vnc >/dev/null || x11vnc -display :99 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -bg -o /tmp/x11vnc.log >/dev/null || { sleep 1; tail -c 1500 /tmp/x11vnc.log >&2; exit 1; }; touch "/tmp/proofbox-live/$0"; printf "%s" "$pw"',
-          session,
-        ],
-        {
-          stdin: Stream.make(new TextEncoder().encode(`${session}\n`)),
-        },
-      )
-      .pipe(
-        Stream.runCollect,
-        Effect.map((events) => {
-          let exitCode = 1;
-          let stdout = "";
-          let stderr = "";
-          for (const event of Chunk.toReadonlyArray(events)) {
-            if (event._tag === "Exit") {
-              exitCode = event.code;
-            } else if (event._tag === "Stdout") {
-              stdout += Buffer.from(event.bytes).toString("utf8");
-            } else if (event._tag === "Stderr") {
-              stderr += Buffer.from(event.bytes).toString("utf8");
-            }
-          }
-          return { exitCode, stdout, stderr };
-        }),
-        Effect.mapError((error) => `docker exec failed: ${error.message}`),
-        Effect.filterOrFail(
-          (result) => result.exitCode === 0 && result.stdout !== "",
-          (result) => `x11vnc did not start: ${result.stderr.trim()}`,
-        ),
-        Effect.map((result) => result.stdout),
-      );
-    const password = yield* Effect.retry(
-      startX11vnc,
-      Schedule.spaced(Duration.seconds(1)).pipe(
-        Schedule.upTo(Duration.seconds(10)),
-      ),
-    ).pipe(Effect.mapError((error) => fail(describe(error))));
-    yield* Effect.addFinalizer(() =>
-      docker
-        .execText(container, "app", [
-          "sh",
-          "-c",
-          'rm -f "/tmp/proofbox-live/$1"; if [ -z "$(ls -A /tmp/proofbox-live 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f /tmp/proofbox-live/.password ~/.vnc/passwd; pkill -x x11vnc; fi; true',
-          "sh",
-          session,
-        ])
-        .pipe(Effect.ignore),
-    );
+    const host = yield* hostOf(ref);
+    const link = yield* openLink(ref, "cli", host);
+    const password = yield* host.livePassword(link, ref);
     const live = yield* forward(ref, 5900);
     return {
       address: `127.0.0.1:${live.port}`,

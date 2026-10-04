@@ -39,7 +39,7 @@ import type {
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
-import type { Link } from "../src/namespace/ssh-link.ts";
+import type { Link, SshForward } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
@@ -124,6 +124,10 @@ const fakeDocker = (options: {
   // Collect the tag of every pull and every push.
   readonly pulls?: Array<string>;
   readonly pushed?: Array<string>;
+  // What every `execStream` sends, such as the Live view's x11vnc start.
+  readonly liveEvents?: ReadonlyArray<ExecEvent>;
+  // Collects the argv of every `execText`, joined by spaces.
+  readonly execs?: Array<string>;
 }): DockerClient => {
   let labels: Record<string, string> = {};
   const ok = (stdout = "") =>
@@ -157,6 +161,7 @@ const fakeDocker = (options: {
       }),
     execText: (_container, _user, argv) => {
       const line = argv.join(" ");
+      options.execs?.push(line);
       if (argv[0] === "sha256sum") {
         const file = TOOL_BUNDLE.find((tool) => tool.path === argv[1]);
         return ok(`${file?.linux?.amd64.sha256 ?? ""}  ${argv[1]}\n`);
@@ -183,7 +188,10 @@ const fakeDocker = (options: {
       }
       return ok();
     },
-    execStream: () => Stream.empty,
+    execStream: () =>
+      options.liveEvents === undefined
+        ? Stream.empty
+        : Stream.fromIterable(options.liveEvents),
     inspect: () =>
       Effect.succeed(Option.some({ labels: { ...labels }, running: true })),
     listNames: Effect.succeed([]),
@@ -315,6 +323,7 @@ const makeProvider = (
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly region?: string;
+    readonly forward?: SshForward;
   },
 ) => {
   const api = fakeApi(calls, options);
@@ -333,7 +342,7 @@ const makeProvider = (
       region: Option.fromNullable(options?.region),
     }),
     openLink,
-    forward: () => Effect.die("unused"),
+    forward: options?.forward ?? (() => Effect.die("unused")),
     dockerFor: () => docker,
     spawnDetached: () => Effect.void,
     hosts: {
@@ -554,6 +563,92 @@ describe("Namespace Provider", () => {
           ],
         ]);
       }),
+  );
+
+  it.effect(
+    "a Linux Live view starts x11vnc in the container and forwards port 5900",
+    () =>
+      Effect.gen(function* () {
+        // Given: x11vnc prints the settled password; the forward lands on 50124
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        }).pipe(Effect.provide(NodeContext.layer));
+        writeFileSync(paths.os, "linux\n");
+        const provider = makeProvider(
+          calls,
+          fakeDocker({
+            liveEvents: [
+              {
+                _tag: "Stdout",
+                bytes: new TextEncoder().encode("Pw4xQ9zT"),
+              },
+              { _tag: "Exit", code: 0 },
+            ],
+          }),
+          tenantRun,
+          {
+            forward: (ref, port) =>
+              Ref.update(calls, (all) => [
+                ...all,
+                `portForward ${ref.region}:${ref.name} ${port}`,
+              ]).pipe(Effect.as({ port: 50124, gone: Effect.never })),
+          },
+        );
+        const liveView = provider.liveView;
+        // When
+        const view = yield* liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView({ name: "abc123def4567", region: "us" });
+        // Then
+        expect({
+          address: view.address,
+          password: view.password,
+          forwarded: (yield* Ref.get(calls)).includes(
+            "portForward us:abc123def4567 5900",
+          ),
+        }).toEqual({
+          address: "127.0.0.1:50124",
+          password: "Pw4xQ9zT",
+          forwarded: true,
+        });
+      }).pipe(Effect.scoped, runtimeConfig()),
+  );
+
+  it.effect("closing the last Linux Live view stops x11vnc", () =>
+    Effect.gen(function* () {
+      // Given: x11vnc prints the settled password; each docker exec is kept
+      const execs: Array<string> = [];
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:abc123def4567",
+      }).pipe(Effect.provide(NodeContext.layer));
+      writeFileSync(paths.os, "linux\n");
+      const provider = makeProvider(
+        yield* Ref.make<ReadonlyArray<string>>([]),
+        fakeDocker({
+          liveEvents: [
+            { _tag: "Stdout", bytes: new TextEncoder().encode("Pw4xQ9zT") },
+            { _tag: "Exit", code: 0 },
+          ],
+          execs,
+        }),
+        tenantRun,
+        {
+          forward: () => Effect.succeed({ port: 50124, gone: Effect.never }),
+        },
+      );
+      const liveView = provider.liveView;
+      // When: a Live view opens and its scope closes
+      yield* (
+        liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView({ name: "abc123def4567", region: "us" })
+      ).pipe(Effect.scoped);
+      // Then
+      expect(execs.at(-1)).toContain("pkill -x x11vnc");
+    }).pipe(runtimeConfig()),
   );
 
   it.effect(

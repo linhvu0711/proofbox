@@ -14,6 +14,7 @@ import {
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
+import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
@@ -609,6 +610,63 @@ export const makeMacHost = (_deps: {
     }
   });
 
+  // The VNC password one Live view uses; its finalizer turns VNC off once
+  // the last view closes.
+  const livePassword = Effect.fn("macHost.livePassword")(function* (
+    link: Link,
+    _ref: SandboxRef,
+  ) {
+    // The candidate goes on stdin, never the command line. As on
+    // Linux, a lock serializes live-view starts, the stored password
+    // is reused when set — one password per Mac — and each viewer
+    // drops a session marker the finalizer counts. The printed line
+    // is the settled password. macOS has no flock, so the lock is a
+    // mkdir'ed dir that a waiter steals once its pid is gone, or once
+    // it has sat over two seconds with no pid at all — a holder that
+    // died before writing it.
+    const candidate = makeSandboxName(8);
+    const events = yield* link
+      .stream(
+        `sudo -n sh -c ${shellJoin([
+          'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
+        ])} ${candidate}`,
+        {
+          stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
+        },
+      )
+      .pipe(Stream.runCollect);
+    let exitCode = 1;
+    let stdout = "";
+    let stderr = "";
+    for (const event of Chunk.toReadonlyArray(events)) {
+      if (event._tag === "Exit") {
+        exitCode = event.code;
+      } else if (event._tag === "Stdout") {
+        stdout += Buffer.from(event.bytes).toString("utf8");
+      } else if (event._tag === "Stderr") {
+        stderr += Buffer.from(event.bytes).toString("utf8");
+      }
+    }
+    const password = stdout.trim();
+    if (exitCode !== 0 || password === "") {
+      return yield* fail(
+        `the Live view could not set the VNC password: ${stderr.trim()}`,
+      );
+    }
+    yield* Effect.addFinalizer(() =>
+      link
+        .run(
+          `sudo -n sh -c ${shellJoin([
+            'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then rm -f "$L/$1"; exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
+            "sh",
+            candidate,
+          ])}`,
+        )
+        .pipe(Effect.ignore),
+    );
+    return password;
+  });
+
   return {
     os: "macos",
     via: "sshd",
@@ -618,5 +676,6 @@ export const makeMacHost = (_deps: {
     checks: macChecks(),
     // The script runs over the link itself: the Mac is the Sandbox.
     call: (link) => (argv, options) => link.stream(shellJoin(argv), options),
+    livePassword,
   };
 };
