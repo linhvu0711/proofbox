@@ -40,6 +40,40 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("harness login claude with only spaces on stdin names claude setup-token and saves nothing", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "claude"], {
+      input: "   \n",
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "No token on stdin. Make one with `claude setup-token`, then run: echo <token> | proofbox harness login claude\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(join(home, ".config", "proofbox"))).toBe(false);
+  });
+
+  it("harness login codex with nothing on stdin names the OpenAI API keys page and saves nothing", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "codex"], {
+      input: "",
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "No API key on stdin. Make one at https://platform.openai.com/api-keys, then run: echo <key> | proofbox harness login codex\n",
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(join(home, ".config", "proofbox"))).toBe(false);
+  });
+
   it("harness login codex saves the API key, owner-only", async () => {
     // Given
     const env = makeEnv();

@@ -576,6 +576,19 @@ export class NoTokenError extends Data.TaggedError("NoTokenError")<{
   }
 }
 
+export class NoHarnessTokenError extends Data.TaggedError(
+  "NoHarnessTokenError",
+)<{
+  readonly harness: string;
+  readonly what: "token" | "API key";
+  readonly placeholder: "<token>" | "<key>";
+  readonly howToMake: string;
+}> {
+  get message() {
+    return `No ${this.what} on stdin. ${this.howToMake}, then run: echo ${this.placeholder} | proofbox harness login ${this.harness}`;
+  }
+}
+
 export class NoTokenMakingError extends Data.TaggedError("NoTokenMakingError")<{
   readonly provider: string;
 }> {
