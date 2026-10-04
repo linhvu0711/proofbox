@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -425,6 +425,33 @@ describe("Namespace Provider", () => {
       expect(info.os).toBe("linux");
       expect(yield* Ref.get(calls)).toEqual([]);
     }).pipe(runtimeConfig()),
+  );
+
+  it.effect(
+    "an unreadable local OS file reads as Linux with no API lookup",
+    () =>
+      Effect.gen(function* () {
+        // Given: the local OS file takes precedence over the API label.
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+          instances: [
+            { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
+          ],
+        });
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        }).pipe(Effect.provide(NodeContext.layer));
+        mkdirSync(paths.os);
+        // When
+        const info = yield* provider.get({
+          name: "abc123def4567",
+          region: "us",
+        });
+        // Then
+        expect(info.os).toBe("linux");
+        expect(yield* Ref.get(calls)).toEqual([]);
+      }).pipe(runtimeConfig()),
   );
 
   it.effect(
