@@ -19,6 +19,24 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
   }
 }
 
+export class HarnessError extends Data.TaggedError("HarnessError")<{
+  readonly harness: string;
+  readonly reason: string;
+}> {
+  override get message() {
+    return `Harness ${this.harness} failed: ${this.reason}`;
+  }
+}
+
+export class NoSuchHarnessError extends Data.TaggedError("NoSuchHarnessError")<{
+  readonly harness: string;
+  readonly known: ReadonlyArray<string>;
+}> {
+  override get message() {
+    return `No Harness named "${this.harness}". Harnesses: ${this.known.join(", ")}.`;
+  }
+}
+
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
 )<{

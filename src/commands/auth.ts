@@ -1,4 +1,3 @@
-import { text } from "node:stream/consumers";
 import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { parseSpan, TOKEN_SPAN } from "../deadline.ts";
@@ -25,6 +24,7 @@ import {
 } from "../login/logins-file.ts";
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
+import { readStdinText } from "../login/stdin-token.ts";
 import { Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -81,14 +81,7 @@ export const loginToProvider = Effect.fn("auth.loginToProvider")(
     }
     const output = yield* CliOutput;
     if (options.token) {
-      const raw = yield* Effect.tryPromise({
-        try: () => text(process.stdin),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "local",
-            reason: cause instanceof Error ? cause.message : String(cause),
-          }),
-      });
+      const raw = yield* readStdinText();
       const token = raw.trim();
       if (token === "") {
         return yield* new NoTokenError({ provider: provider.name });

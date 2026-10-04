@@ -11,6 +11,7 @@ import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
+import { loginToHarness } from "./commands/harness.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { openLive } from "./commands/live.ts";
@@ -328,6 +329,16 @@ const upload = Command.make(
     }),
 );
 
+const harnessLogin = Command.make(
+  "login",
+  { harness: Args.text({ name: "harness" }) },
+  ({ harness }) => loginToHarness(harness),
+);
+
+const harness = Command.make("harness").pipe(
+  Command.withSubcommands([harnessLogin]),
+);
+
 const live = Command.make(
   "live",
   {
@@ -355,6 +366,7 @@ const command = Command.make("proofbox").pipe(
     record,
     mark,
     auth,
+    harness,
   ]),
 );
 
