@@ -345,7 +345,7 @@ const makeProvider = (
     forward: options?.forward ?? (() => Effect.die("unused")),
     spawnDetached: () => Effect.void,
     hosts: {
-      linux: makeLinuxHost({ api, dockerFor: () => docker }),
+      linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
       macos: unusedHost("macos"),
     },
   });
@@ -489,7 +489,7 @@ describe("Namespace Provider", () => {
               [provider, rel, args] as const,
             ]),
           hosts: {
-            linux: makeLinuxHost({ api, dockerFor }),
+            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor }),
             macos: unusedHost("macos"),
           },
         });
@@ -1462,7 +1462,7 @@ const warmNamespace = (
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
       hosts: {
-        linux: makeLinuxHost({ api, dockerFor: () => docker }),
+        linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
         macos: unusedHost("macos"),
       },
     });

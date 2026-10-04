@@ -30,6 +30,7 @@ export const ProvidersLive = Layer.effect(
         Effect.map(([client, provider]) =>
           provider.makeDockerProvider({
             client: client.makeDockerClient(executor),
+            fs,
           }),
         ),
       ),
@@ -67,6 +68,7 @@ export const ProvidersLive = Layer.effect(
               hosts: {
                 linux: linuxHost.makeLinuxHost({
                   api: namespaceApi,
+                  fs,
                   dockerFor,
                 }),
                 macos: macHost.makeMacHost({ openLink, fs }),

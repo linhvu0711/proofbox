@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { packagePath } from "../entry.ts";
-import { ProviderError } from "../errors.ts";
+import { ProviderError, platformReason } from "../errors.ts";
 import { Progress } from "../progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient } from "./docker-client.ts";
@@ -13,36 +14,43 @@ export const BASE_IMAGE_DIR = packagePath("images/linux/");
 export const baseImageVersion = (
   dir: string,
   bundle: ReadonlyArray<unknown>,
-): Effect.Effect<string, ProviderError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const entries = await readdir(dir, {
-        recursive: true,
-        withFileTypes: true,
-      });
-      const files = entries
-        .filter((entry) => entry.isFile())
-        .map((entry) =>
-          relative(dir, join(entry.parentPath, entry.name)).replaceAll(
-            "\\",
-            "/",
+): Effect.Effect<string, ProviderError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const entries = yield* Effect.tryPromise({
+      try: () => readdir(dir, { recursive: true, withFileTypes: true }),
+      catch: (cause) =>
+        new ProviderError({
+          provider: "docker",
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    });
+    const files = entries
+      .filter((entry) => entry.isFile())
+      .map((entry) =>
+        relative(dir, join(entry.parentPath, entry.name)).replaceAll("\\", "/"),
+      )
+      .sort();
+    const hash = createHash("sha256");
+    for (const path of files) {
+      hash.update(`${path}\0`);
+      hash.update(
+        yield* fs
+          .readFile(join(dir, path))
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new ProviderError({
+                  provider: "docker",
+                  reason: platformReason(error),
+                }),
+            ),
           ),
-        )
-        .sort();
-      const hash = createHash("sha256");
-      for (const path of files) {
-        hash.update(`${path}\0`);
-        hash.update(await readFile(join(dir, path)));
-        hash.update("\0");
-      }
-      hash.update(JSON.stringify(bundle));
-      return hash.digest("hex").slice(0, 12);
-    },
-    catch: (cause) =>
-      new ProviderError({
-        provider: "docker",
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
+      );
+      hash.update("\0");
+    }
+    hash.update(JSON.stringify(bundle));
+    return hash.digest("hex").slice(0, 12);
   });
 
 export const baseImageTag = (version: string) =>

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, Effect, Fiber, Layer, Ref, Stream, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
@@ -49,7 +50,7 @@ describe("Base image", () => {
       // Then
       expect(first).toBe("8c858f0d6b7a");
       expect(second).toBe("dda6097aecf9");
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.effect("macOS tools leave the Linux Base image version unchanged", () =>
@@ -81,7 +82,7 @@ describe("Base image", () => {
       const before = yield* baseImageVersion(dir, linuxOnly);
       // Then
       expect(now).toBe(before);
-    }),
+    }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.effect("a slow Base image build prints progress on stderr", () =>

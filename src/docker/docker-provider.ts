@@ -1,3 +1,4 @@
+import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Option, Schema } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
 import { nextDeadline } from "../deadline.ts";
@@ -109,6 +110,7 @@ export const sandboxInfoFromLabels = Effect.fn(
 
 export const makeDockerProvider = (options: {
   readonly client: DockerClient;
+  readonly fs: FileSystem.FileSystem;
   readonly imageTag?: string;
   readonly runArgs?: ReadonlyArray<string>;
   readonly registry?: boolean;
@@ -362,7 +364,10 @@ export const makeDockerProvider = (options: {
     // Prove the daemon answers before anything is made — and before the
     // progress line prints, so a dead daemon reports only the error.
     const arch = yield* client.serverArch;
-    const version = yield* baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE);
+    const version = yield* baseImageVersion(
+      BASE_IMAGE_DIR,
+      LINUX_TOOL_BUNDLE,
+    ).pipe(Effect.provideService(FileSystem.FileSystem, options.fs));
     const bundle = yield* toolBundleForArch(arch);
     const tag = options.imageTag ?? baseImageTag(version);
     yield* ensureBaseImage(
