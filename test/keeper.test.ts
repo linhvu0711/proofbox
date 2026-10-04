@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -1265,6 +1265,34 @@ describe("Keeper", () => {
         expect(error.message).toBe(
           `Provider fake failed: Unexpected token 'o', "not json" is not valid JSON`,
         );
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "stop leaves a process that is not a Keeper alone and removes the Keeper files",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a pid file that names a process other than a Keeper
+        const sandbox = yield* coldSandbox(env);
+        const child = spawn("sleep", ["30"]);
+        yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
+        const pid = yield* Effect.orDie(Effect.fromNullable(child.pid));
+        const pidFile = join(env.runtime, `fake-${sandbox.name}.pid`);
+        const socketFile = join(env.runtime, `fake-${sandbox.name}.sock`);
+        writeFileSync(pidFile, `${pid}\n`);
+        writeFileSync(socketFile, "");
+        // When
+        yield* Effect.flatMap(KeeperClient, (client) =>
+          client.stop(sandbox.id),
+        ).pipe(Effect.provide(sandbox.layers));
+        // Then
+        expect({
+          alive: alive(pid),
+          pid: existsSync(pidFile),
+          socket: existsSync(socketFile),
+        }).toEqual({ alive: true, pid: false, socket: false });
       }).pipe(runtimeConfig(env));
     },
   );
