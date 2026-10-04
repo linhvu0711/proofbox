@@ -61,6 +61,40 @@ const fakeLogins = (env: CliEnv) => {
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
 };
 
+it("a clone GitHub refuses fails create, deletes the Sandbox, and names the owner and the repo", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  git(
+    folder,
+    "remote",
+    "set-url",
+    "origin",
+    "https://github.com/acme/gone.git",
+  );
+  fakeLogins(env);
+  // When
+  const result = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  // Then
+  expect({
+    code: result.exitCode,
+    out: result.stdout,
+    cloning: result.stderr.includes("proofbox: cloning acme/gone\n"),
+    message: result.stderr.endsWith(
+      "GitHub refused the clone of acme/gone; git's lines are above. Check that the GitHub login for acme can read acme/gone and has not expired, then run proofbox github login acme and create again. This Sandbox was deleted.\n",
+    ),
+    sandboxes: readdirSync(env.root),
+  }).toEqual({
+    code: 125,
+    out: "",
+    cloning: true,
+    message: true,
+    sandboxes: [],
+  });
+});
+
 it("create --harness puts the Caller's uncommitted changes, deletions, and new files on top", async () => {
   // Given
   const env = makeEnv();

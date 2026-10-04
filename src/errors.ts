@@ -378,6 +378,15 @@ export class NoGithubLoginError extends Data.TaggedError("NoGithubLoginError")<{
   }
 }
 
+export class CloneRefusedError extends Data.TaggedError("CloneRefusedError")<{
+  readonly owner: string;
+  readonly repo: string;
+}> {
+  get message() {
+    return `GitHub refused the clone of ${this.owner}/${this.repo}; git's lines are above. Check that the GitHub login for ${this.owner.toLowerCase()} can read ${this.owner}/${this.repo} and has not expired, then run proofbox github login ${this.owner.toLowerCase()} and create again. This Sandbox was deleted.`;
+  }
+}
+
 export class SetupScriptFailedError extends Data.TaggedError(
   "SetupScriptFailedError",
 )<{

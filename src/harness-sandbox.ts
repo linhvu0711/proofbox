@@ -1,10 +1,12 @@
 import { join, resolve } from "node:path";
 import { Command, FileSystem } from "@effect/platform";
 import { Clock, Config, Effect, Option, Redacted, Stream } from "effect";
+import { CliOutput } from "./cli-output.ts";
 import { runKeepingTail } from "./command-tail.ts";
 import { harnessEntryFor } from "./commands/harness.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
+  CloneRefusedError,
   NoGithubLoginError,
   NoHarnessLoginError,
   ProviderError,
@@ -105,12 +107,14 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
             ["sh", "-c", FETCH, "sh", url, repo.base, ...ignore],
             Stream.make(new TextEncoder().encode(`${Redacted.value(token)}\n`)),
           );
-          if (fetched.code !== 0)
-            return yield* new UploadFailedError({
-              id: rawId,
-              command: "git",
-              code: fetched.code,
+          if (fetched.code !== 0) {
+            const output = yield* CliOutput;
+            for (const line of fetched.lines) yield* output.err(line);
+            return yield* new CloneRefusedError({
+              owner: repo.owner,
+              repo: repo.repo,
             });
+          }
           let bundle: Uint8Array | undefined;
           if (repo.baseCommit !== repo.head) {
             const dir = yield* fs.makeTempDirectoryScoped();
@@ -138,17 +142,15 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
                 command: "git",
                 code,
               });
-            bundle = yield* fs
-              .readFile(path)
-              .pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ProviderError({
-                      provider: "local",
-                      reason: platformReason(error),
-                    }),
-                ),
-              );
+            bundle = yield* fs.readFile(path).pipe(
+              Effect.mapError(
+                (error) =>
+                  new ProviderError({
+                    provider: "local",
+                    reason: platformReason(error),
+                  }),
+              ),
+            );
           }
           const placed = yield* runKeepingTail(
             rawId,
