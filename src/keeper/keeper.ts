@@ -135,12 +135,12 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           argv: ReadonlyArray<string>,
           options?: ExecOptions,
         ) => {
-          const tally = {
-            out: 0,
-            err: 0,
-            exit: undefined as number | undefined,
-            firstMs: undefined as number | undefined,
-          };
+          const tally: {
+            out: number;
+            err: number;
+            exit: number | undefined;
+            firstMs: number | undefined;
+          } = { out: 0, err: 0, exit: undefined, firstMs: undefined };
           let logged = false;
           const log = (start: number, ended: string) =>
             Effect.flatMap(Clock.currentTimeMillis, (now) => {
