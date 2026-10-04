@@ -23,81 +23,32 @@ import {
 import { captureCommand } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
-  BASE_IMAGE_DIR,
-  baseImageTag,
-  baseImageVersion,
-} from "../docker/base-image.ts";
-import type { DockerClient } from "../docker/docker-client.ts";
-import { makeDockerProvider } from "../docker/docker-provider.ts";
-import {
-  MacPrepareError,
   type ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
-  TokenExposedError,
   UnknownRegionError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
-import {
-  type ListResult,
-  type Provider,
-  type ProviderLogin,
-  SandboxInfo,
-  type SandboxRef,
-  type UnfinishedSandbox,
+import type {
+  ListResult,
+  Provider,
+  ProviderLogin,
+  SandboxRef,
+  UnfinishedSandbox,
 } from "../provider.ts";
 import { fileStem, makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
-import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import { pushHostLife } from "./host-life.ts";
-import { containerOf, MADE_MARK } from "./linux-host.ts";
-import { MAC_SECRETS_DIR, prepareMac, turnOnSshd } from "./mac-host.ts";
+import type { LinuxHost } from "./linux-host.ts";
+import { MAC_SECRETS_DIR } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
-import {
-  brandFor,
-  describe,
-  fail,
-  gone,
-  type NamespaceHost,
-  sandboxId,
-} from "./namespace-host.ts";
+import { describe, fail, gone, type NamespaceHost } from "./namespace-host.ts";
 import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
-import { registryRefs } from "./registry-refs.ts";
-import {
-  pullSnapshot,
-  pushSnapshot,
-  snapshotRef,
-  snapshotTag,
-} from "./snapshot-image.ts";
 import type { Link, OpenLink, SshForward } from "./ssh-link.ts";
-
-const LINUX_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 8 },
-  { cpu: 8, ramGb: 16 },
-  { cpu: 16, ramGb: 32 },
-];
-const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
-const MACOS_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 7 },
-  { cpu: 6, ramGb: 14 },
-];
-const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
-// Every Known line about the Mac was proved on macOS 26; with no selector
-// Namespace gives 15.
-const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
-
-// The host holds Docker itself plus the Sandbox container; keep 1 GB of the
-// Namespace size outside the container's limit so the host stays healthy.
-const MEMORY_RESERVE_GB = 1;
-
-// Each push and each use keeps a Base image version or a Snapshot at
-// least two weeks; one that is not used for that long expires from the
-// registry.
-const IMAGE_KEEP_HOURS = 336;
 
 export const makeNamespaceProvider = (deps: {
   readonly api: NamespaceApi;
@@ -107,14 +58,13 @@ export const makeNamespaceProvider = (deps: {
   readonly forward: SshForward;
   // File access, handed in when the Provider is built.
   readonly fs: FileSystem.FileSystem;
-  readonly dockerFor: (link: Link) => DockerClient;
   readonly spawnDetached: (
     provider: string,
     rel: string,
     args: ReadonlyArray<string>,
   ) => Effect.Effect<void, ProviderError>;
   readonly hosts: {
-    readonly linux: NamespaceHost;
+    readonly linux: LinuxHost;
     readonly macos: NamespaceHost;
   };
 }): Provider => {
@@ -180,87 +130,17 @@ export const makeNamespaceProvider = (deps: {
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
   // call so the Keeper's ControlMaster path stays the Keeper's alone.
-  const withCliLink = <A, E>(
+  const withCliLink = <A, E, R>(
     ref: SandboxRef,
-    use: (link: Link) => Effect.Effect<A, E>,
+    use: (link: Link) => Effect.Effect<A, E, R>,
     host?: NamespaceHost,
-  ): Effect.Effect<A, ApiLoginError | ApiError | E> =>
+  ): Effect.Effect<A, ApiLoginError | ApiError | E, R> =>
     Effect.scoped(
       Effect.gen(function* () {
         const link = yield* openLink(ref, "cli", host);
         return yield* use(link);
       }),
     );
-
-  const readTenant = Effect.fn("NamespaceProvider.readTenant")(function* (
-    link: Link,
-  ) {
-    const tenant = yield* link.run(
-      `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
-    );
-    const registry = tenant.stdout.trim();
-    if (tenant.exitCode !== 0 || registry === "") {
-      return yield* fail("could not read the Namespace tenant on the host");
-    }
-    return registry;
-  });
-
-  // A Snapshot without an expiry is kept forever; failing to set one only
-  // costs registry space, so it warns and goes on.
-  const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
-    snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS)),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Snapshot expiry (${error.message})`),
-      ),
-    );
-
-  // A Base image version without an expiry is kept forever too. Its index
-  // and each child digest expire on their own; a Base the registry does
-  // not hold is skipped. Every digest gets its call even when one fails,
-  // so a child never expires before its index.
-  const keepBase = (link: Link, tag: string, progress: Progress) =>
-    registryRefs(link, tag).pipe(
-      Effect.flatMap((refs) =>
-        refs === "missing"
-          ? Effect.void
-          : Effect.validateAll(
-              refs,
-              (ref) => api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-              { discard: true },
-            ).pipe(Effect.mapError((errors) => errors[0])),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Base image expiry (${error.message})`),
-      ),
-    );
-
-  // The Snapshot's image tag, pulled onto the host; undefined when the
-  // Sandbox must start from the Base image instead.
-  const pullStart = Effect.fn("NamespaceProvider.pullStart")(function* (
-    link: Link,
-    tenant: string,
-    fingerprint: string,
-    progress: Progress,
-  ) {
-    const tag = snapshotTag(tenant, fingerprint);
-    const pulled = yield* progress
-      .step("pulling the Snapshot", pullSnapshot(link, tag))
-      .pipe(
-        Effect.catchAll((error) =>
-          progress
-            .warn(
-              `could not pull the Snapshot (${error.message}); running the Setup script`,
-            )
-            .pipe(Effect.as("failed" as const)),
-        ),
-      );
-    if (pulled !== "pulled") {
-      return undefined;
-    }
-    yield* keepSnapshot(link, tag, progress);
-    return tag;
-  });
 
   const getAs = (host: NamespaceHost, ref: SandboxRef) =>
     withCliLink(ref, (link) => host.read(link, ref), host);
@@ -562,8 +442,8 @@ export const makeNamespaceProvider = (deps: {
         known: KNOWN_REGIONS,
       });
     }
-    const macos = req.os === "macos";
-    const size = req.size ?? (macos ? DEFAULT_MACOS_SIZE : DEFAULT_SIZE);
+    const host = hostFor(req.os);
+    const size = req.size ?? host.defaultSize;
     const staged = yield* paths(`new-${process.pid}`);
     const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
     // Whatever part of the make is left — key files, the host — leaves
@@ -662,15 +542,10 @@ export const makeNamespaceProvider = (deps: {
             .create(region, {
               shape: {
                 os: req.os,
-                machineArch: macos ? "arm64" : "amd64",
+                machineArch: host.machine.arch,
                 virtualCpu: size.cpu,
                 memoryMegabytes: size.ramGb * 1024,
-                selectors: macos
-                  ? Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
-                      name,
-                      value,
-                    }))
-                  : [],
+                selectors: host.machine.selectors,
               },
               labels: [
                 { name: "proofbox.os", value: req.os },
@@ -798,113 +673,12 @@ export const makeNamespaceProvider = (deps: {
         ),
       );
       const link = yield* deps.openLink(ref, hostPaths, "cli", "gateway");
-      if (macos) {
-        yield* progress.step(
-          "turning on sshd",
-          turnOnSshd(link, ref, hostPaths),
-        );
-        const sshd = yield* deps.openLink(ref, hostPaths, "cli", "sshd").pipe(
-          Effect.catchTag("ProviderUnavailableError", () =>
-            Effect.fail(
-              new MacPrepareError({
-                id: sandboxId(ref),
-                what: "sshd cannot be reached",
-              }),
-            ),
-          ),
-        );
-        return yield* prepareMac(sshd, {
-          ref,
-          idle: req.idle,
-          maxLifeAt: new Date(maxLifeSeconds * 1000),
-          size,
-        }).pipe(Effect.provideService(FileSystem.FileSystem, deps.fs));
-      }
-      const registry = yield* readTenant(link);
-      const version = yield* baseImageVersion(
-        BASE_IMAGE_DIR,
-        LINUX_TOOL_BUNDLE,
-      );
-      const baseTag = `nscr.io/${registry}/${baseImageTag(version)}`;
-      const snapshotImage =
-        req.snapshot === undefined
-          ? undefined
-          : yield* pullStart(link, registry, req.snapshot, progress);
-      const inner = makeDockerProvider({
-        client: deps.dockerFor(link),
-        imageTag: snapshotImage ?? baseTag,
-        registry: true,
-        memoryReserveGb: MEMORY_RESERVE_GB,
-        // Publish the VNC port for the Live view; the host has only a
-        // private address, and the SSH gateway forwards onto that
-        // address, so the publish must cover it — loopback binds are
-        // unreachable.
-        runArgs: [
-          "-p",
-          "5900:5900",
-          ...(snapshotImage === undefined
-            ? []
-            : ["--label", `proofbox.snapshot=${req.snapshot}`]),
-        ],
-        brand: brandFor(ref),
-      });
-      const info = yield* inner.create({
-        ...req,
+      return yield* host.make(link, {
+        req,
+        ref,
+        paths: hostPaths,
         size,
-        name: instanceId.slice(0, 6),
         maxLifeAt: new Date(maxLifeSeconds * 1000),
-      });
-      // A Snapshot's Fingerprint holds the Base version, so this is its
-      // Base too.
-      yield* keepBase(link, baseTag, progress);
-      // The Base image must hide the host's workload token from user code:
-      // neither the token file nor the link-local token service may answer.
-      const docker = deps.dockerFor(link);
-      const container = containerOf(ref);
-      yield* progress.step(
-        "checking the Namespace token is out of reach",
-        Effect.gen(function* () {
-          const file = yield* docker.execText(container, "app", [
-            "sh",
-            "-c",
-            "test ! -e /var/run/nsc/token.json",
-          ]);
-          if (file.exitCode !== 0) {
-            return yield* new TokenExposedError({
-              id: sandboxId(ref),
-              what: "the token file",
-            });
-          }
-          const service = yield* docker.execText(container, "app", [
-            "sh",
-            "-c",
-            "! curl -s -m 3 -o /dev/null http://169.254.169.42/",
-          ]);
-          if (service.exitCode !== 0) {
-            return yield* new TokenExposedError({
-              id: sandboxId(ref),
-              what: "the token service",
-            });
-          }
-        }),
-      );
-      const marked = yield* link.run(`touch ${MADE_MARK}`);
-      if (marked.exitCode !== 0) {
-        return yield* fail(
-          `could not mark the host: ${(marked.stderr || marked.stdout).trim()}`,
-        );
-      }
-      return new SandboxInfo({
-        name: ref.name,
-        region: ref.region,
-        os: info.os,
-        createdAt: info.createdAt,
-        idleSeconds: info.idleSeconds,
-        deadline: info.deadline,
-        maxLifeAt: info.maxLifeAt,
-        base: info.base,
-        snapshot: info.snapshot,
-        size: info.size,
       });
     }).pipe(
       // A host that vanishes mid-create is a Provider error, not a gone
@@ -991,19 +765,13 @@ export const makeNamespaceProvider = (deps: {
     };
   });
 
-  // The Snapshot holds the container's disk; the Secrets live in a tmpfs,
-  // which docker commit leaves out.
+  // Only a Linux host has a container to save.
   const saveSnapshot = Effect.fn("NamespaceProvider.saveSnapshot")(function* (
     ref: SandboxRef,
     fingerprint: string,
   ) {
-    const progress = yield* Progress;
     yield* withCliLink(ref, (link) =>
-      Effect.gen(function* () {
-        const tag = snapshotTag(yield* readTenant(link), fingerprint);
-        yield* pushSnapshot(link, containerOf(ref), tag);
-        yield* keepSnapshot(link, tag, progress);
-      }),
+      deps.hosts.linux.saveSnapshot(link, ref, fingerprint),
     );
   });
 
@@ -1026,24 +794,12 @@ export const makeNamespaceProvider = (deps: {
     },
     regions: { known: KNOWN_REGIONS, fallback: DEFAULT_REGION },
     offers: {
-      linux: {
-        sizes: LINUX_SIZES,
-        features: new Set([
-          "desktop",
-          "recording",
-          "live-view",
-          "secrets",
-          "snapshot",
-        ]),
-      },
-      macos: {
-        sizes: MACOS_SIZES,
-        features: new Set(["desktop", "recording", "secrets", "live-view"]),
-      },
+      linux: deps.hosts.linux.offer,
+      macos: deps.hosts.macos.offer,
     },
     liveView,
     snapshots: {
-      baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
+      baseVersion: deps.hosts.linux.baseVersion,
       save: saveSnapshot,
     },
     create,

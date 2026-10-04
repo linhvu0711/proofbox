@@ -63,14 +63,13 @@ export const ProvidersLive = Layer.effect(
               openLink,
               forward: link.makeSshForward(namespaceApi, executor, fs),
               fs,
-              dockerFor,
               spawnDetached,
               hosts: {
                 linux: linuxHost.makeLinuxHost({
                   api: namespaceApi,
                   dockerFor,
                 }),
-                macos: macHost.makeMacHost({ openLink }),
+                macos: macHost.makeMacHost({ openLink, fs }),
               },
             });
           },

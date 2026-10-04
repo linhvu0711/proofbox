@@ -1,5 +1,6 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
@@ -21,6 +22,7 @@ import { TOOL_BUNDLE } from "../tool-bundle.ts";
 import {
   brandFor,
   fail,
+  type MakeRequest,
   type NamespaceHost,
   sandboxId,
 } from "./namespace-host.ts";
@@ -293,7 +295,7 @@ const watchMemory = Effect.fn("macHost.watchMemory")((link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher),
 );
 
-export const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
+const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
   link: Link,
   ref: SandboxRef,
   paths: KeeperPaths,
@@ -501,7 +503,7 @@ const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
 });
 
 // Everything a Mac needs before user code arrives, in order.
-export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
+const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   link: Link,
   req: MacRequest,
 ) {
@@ -587,10 +589,21 @@ const writeMacDeadline = Effect.fn("macHost.writeDeadline")(function* (
   );
 });
 
+const MACOS_SIZES: ReadonlyArray<Size> = [
+  { cpu: 4, ramGb: 7 },
+  { cpu: 6, ramGb: 14 },
+];
+const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
+// Every Known line about the Mac was proved on macOS 26; with no selector
+// Namespace gives 15.
+const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
+
 // A Mac host is the Sandbox itself: no container, and every command runs
 // over the Mac's own sshd.
-export const makeMacHost = (_deps: {
+export const makeMacHost = (deps: {
   readonly openLink: OpenLink;
+  // File access, handed in when the host is built.
+  readonly fs: FileSystem.FileSystem;
 }): NamespaceHost => {
   // Only the machine that made the Mac pinned its sshd host key.
   const reach = Effect.fn("macHost.reach")(function* (
@@ -667,6 +680,33 @@ export const makeMacHost = (_deps: {
     return password;
   });
 
+  // Turns on the Mac's own sshd over the gateway, then prepares the Mac
+  // over sshd (ADR 0022).
+  const make = Effect.fn("macHost.make")(function* (
+    link: Link,
+    made: MakeRequest,
+  ) {
+    const { ref } = made;
+    const progress = yield* Progress;
+    yield* progress.step("turning on sshd", turnOnSshd(link, ref, made.paths));
+    const sshd = yield* deps.openLink(ref, made.paths, "cli", "sshd").pipe(
+      Effect.catchTag("ProviderUnavailableError", () =>
+        Effect.fail(
+          new MacPrepareError({
+            id: sandboxId(ref),
+            what: "sshd cannot be reached",
+          }),
+        ),
+      ),
+    );
+    return yield* prepareMac(sshd, {
+      ref,
+      idle: made.req.idle,
+      maxLifeAt: made.maxLifeAt,
+      size: made.size,
+    }).pipe(Effect.provideService(FileSystem.FileSystem, deps.fs));
+  });
+
   return {
     os: "macos",
     via: "sshd",
@@ -677,5 +717,18 @@ export const makeMacHost = (_deps: {
     // The script runs over the link itself: the Mac is the Sandbox.
     call: (link) => (argv, options) => link.stream(shellJoin(argv), options),
     livePassword,
+    offer: {
+      sizes: MACOS_SIZES,
+      features: new Set(["desktop", "recording", "secrets", "live-view"]),
+    },
+    defaultSize: DEFAULT_MACOS_SIZE,
+    machine: {
+      arch: "arm64",
+      selectors: Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
+        name,
+        value,
+      })),
+    },
+    make,
   };
 };

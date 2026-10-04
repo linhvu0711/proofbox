@@ -1,37 +1,85 @@
 import { Chunk, Duration, Effect, Schedule, Stream } from "effect";
+import {
+  BASE_IMAGE_DIR,
+  baseImageTag,
+  baseImageVersion,
+} from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
 import {
   LINUX_CHECKS,
+  makeDockerProvider,
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
+import {
+  type ProviderError,
+  type ProviderUnavailableError,
+  TokenExposedError,
+} from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
+import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
+import type { Size } from "../size.ts";
+import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
 import {
   brandFor,
   describe,
   fail,
   gone,
+  type MakeRequest,
   type NamespaceHost,
+  sandboxId,
 } from "./namespace-host.ts";
+import { registryRefs } from "./registry-refs.ts";
+import {
+  pullSnapshot,
+  pushSnapshot,
+  snapshotRef,
+  snapshotTag,
+} from "./snapshot-image.ts";
 import type { Link } from "./ssh-link.ts";
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
 // container at its Deadline (`--rm`) while the host lives on a while, so
 // with no container this tells an expired Sandbox from one create never
 // finished. The login's home: the host user may not own /var/lib.
-export const MADE_MARK = '"$HOME/.proofbox-made"';
+const MADE_MARK = '"$HOME/.proofbox-made"';
 
 // The container takes the first six characters of the instance id.
-export const containerOf = (ref: SandboxRef) =>
-  `proofbox-${ref.name.slice(0, 6)}`;
+const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
+
+const LINUX_SIZES: ReadonlyArray<Size> = [
+  { cpu: 4, ramGb: 8 },
+  { cpu: 8, ramGb: 16 },
+  { cpu: 16, ramGb: 32 },
+];
+const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
+// The host holds Docker itself plus the Sandbox container; keep 1 GB of the
+// Namespace size outside the container's limit so the host stays healthy.
+const MEMORY_RESERVE_GB = 1;
+
+// Each push and each use keeps a Base image version or a Snapshot at
+// least two weeks; one that is not used for that long expires from the
+// registry.
+const IMAGE_KEEP_HOURS = 336;
+
+// What a Linux host adds: only it has a container, so only it saves
+// Snapshots.
+export interface LinuxHost extends NamespaceHost {
+  readonly baseVersion: Effect.Effect<string, ProviderError>;
+  readonly saveSnapshot: (
+    link: Link,
+    ref: SandboxRef,
+    fingerprint: string,
+  ) => Effect.Effect<void, ProviderError | ProviderUnavailableError, Progress>;
+}
 
 // A Linux host runs the Sandbox in one Docker container.
 export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
   readonly dockerFor: (link: Link) => DockerClient;
-}): NamespaceHost => {
+}): LinuxHost => {
   const read = Effect.fn("linuxHost.read")(function* (
     link: Link,
     ref: SandboxRef,
@@ -186,6 +234,182 @@ export const makeLinuxHost = (deps: {
     return password;
   });
 
+  const readTenant = Effect.fn("linuxHost.readTenant")(function* (link: Link) {
+    const tenant = yield* link.run(
+      `sed -n 's/.*"tenant_id": *"tenant_\\([a-z0-9]*\\)".*/\\1/p' /var/run/nsc/metadata.json`,
+    );
+    const registry = tenant.stdout.trim();
+    if (tenant.exitCode !== 0 || registry === "") {
+      return yield* fail("could not read the Namespace tenant on the host");
+    }
+    return registry;
+  });
+
+  // A Snapshot without an expiry is kept forever; failing to set one only
+  // costs registry space, so it warns and goes on.
+  const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
+    snapshotRef(link, tag).pipe(
+      Effect.flatMap((ref) =>
+        deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+      ),
+      Effect.catchAll((error) =>
+        progress.warn(`could not set the Snapshot expiry (${error.message})`),
+      ),
+    );
+
+  // A Base image version without an expiry is kept forever too. Its index
+  // and each child digest expire on their own; a Base the registry does
+  // not hold is skipped. Every digest gets its call even when one fails,
+  // so a child never expires before its index.
+  const keepBase = (link: Link, tag: string, progress: Progress) =>
+    registryRefs(link, tag).pipe(
+      Effect.flatMap((refs) =>
+        refs === "missing"
+          ? Effect.void
+          : Effect.validateAll(
+              refs,
+              (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+              { discard: true },
+            ).pipe(Effect.mapError((errors) => errors[0])),
+      ),
+      Effect.catchAll((error) =>
+        progress.warn(`could not set the Base image expiry (${error.message})`),
+      ),
+    );
+
+  // The Snapshot's image tag, pulled onto the host; undefined when the
+  // Sandbox must start from the Base image instead.
+  const pullStart = Effect.fn("linuxHost.pullStart")(function* (
+    link: Link,
+    tenant: string,
+    fingerprint: string,
+    progress: Progress,
+  ) {
+    const tag = snapshotTag(tenant, fingerprint);
+    const pulled = yield* progress
+      .step("pulling the Snapshot", pullSnapshot(link, tag))
+      .pipe(
+        Effect.catchAll((error) =>
+          progress
+            .warn(
+              `could not pull the Snapshot (${error.message}); running the Setup script`,
+            )
+            .pipe(Effect.as("failed" as const)),
+        ),
+      );
+    if (pulled !== "pulled") {
+      return undefined;
+    }
+    yield* keepSnapshot(link, tag, progress);
+    return tag;
+  });
+
+  // Makes the Sandbox's container on the host, from a Snapshot when one
+  // is asked for and found, else from the Base image.
+  const make = Effect.fn("linuxHost.make")(function* (
+    link: Link,
+    made: MakeRequest,
+  ) {
+    const { req, ref, size } = made;
+    const progress = yield* Progress;
+    const registry = yield* readTenant(link);
+    const version = yield* baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE);
+    const baseTag = `nscr.io/${registry}/${baseImageTag(version)}`;
+    const snapshotImage =
+      req.snapshot === undefined
+        ? undefined
+        : yield* pullStart(link, registry, req.snapshot, progress);
+    const inner = makeDockerProvider({
+      client: deps.dockerFor(link),
+      imageTag: snapshotImage ?? baseTag,
+      registry: true,
+      memoryReserveGb: MEMORY_RESERVE_GB,
+      // Publish the VNC port for the Live view; the host has only a
+      // private address, and the SSH gateway forwards onto that
+      // address, so the publish must cover it — loopback binds are
+      // unreachable.
+      runArgs: [
+        "-p",
+        "5900:5900",
+        ...(snapshotImage === undefined
+          ? []
+          : ["--label", `proofbox.snapshot=${req.snapshot}`]),
+      ],
+      brand: brandFor(ref),
+    });
+    const info = yield* inner.create({
+      ...req,
+      size,
+      name: ref.name.slice(0, 6),
+      maxLifeAt: made.maxLifeAt,
+    });
+    // A Snapshot's Fingerprint holds the Base version, so this is its
+    // Base too.
+    yield* keepBase(link, baseTag, progress);
+    // The Base image must hide the host's workload token from user code:
+    // neither the token file nor the link-local token service may answer.
+    const docker = deps.dockerFor(link);
+    const container = containerOf(ref);
+    yield* progress.step(
+      "checking the Namespace token is out of reach",
+      Effect.gen(function* () {
+        const file = yield* docker.execText(container, "app", [
+          "sh",
+          "-c",
+          "test ! -e /var/run/nsc/token.json",
+        ]);
+        if (file.exitCode !== 0) {
+          return yield* new TokenExposedError({
+            id: sandboxId(ref),
+            what: "the token file",
+          });
+        }
+        const service = yield* docker.execText(container, "app", [
+          "sh",
+          "-c",
+          "! curl -s -m 3 -o /dev/null http://169.254.169.42/",
+        ]);
+        if (service.exitCode !== 0) {
+          return yield* new TokenExposedError({
+            id: sandboxId(ref),
+            what: "the token service",
+          });
+        }
+      }),
+    );
+    const marked = yield* link.run(`touch ${MADE_MARK}`);
+    if (marked.exitCode !== 0) {
+      return yield* fail(
+        `could not mark the host: ${(marked.stderr || marked.stdout).trim()}`,
+      );
+    }
+    return new SandboxInfo({
+      name: ref.name,
+      region: ref.region,
+      os: info.os,
+      createdAt: info.createdAt,
+      idleSeconds: info.idleSeconds,
+      deadline: info.deadline,
+      maxLifeAt: info.maxLifeAt,
+      base: info.base,
+      snapshot: info.snapshot,
+      size: info.size,
+    });
+  });
+
+  // The Snapshot holds the container's disk; the Secrets live in a tmpfs,
+  // which docker commit leaves out.
+  const saveSnapshot = Effect.fn("linuxHost.saveSnapshot")(function* (
+    link: Link,
+    ref: SandboxRef,
+    fingerprint: string,
+  ) {
+    const progress = yield* Progress;
+    const tag = snapshotTag(yield* readTenant(link), fingerprint);
+    yield* pushSnapshot(link, containerOf(ref), tag);
+    yield* keepSnapshot(link, tag, progress);
+  });
+
   return {
     os: "linux",
     via: "gateway",
@@ -201,5 +425,20 @@ export const makeLinuxHost = (deps: {
         docker.execStream(container, argv, options, "root");
     },
     livePassword,
+    offer: {
+      sizes: LINUX_SIZES,
+      features: new Set([
+        "desktop",
+        "recording",
+        "live-view",
+        "secrets",
+        "snapshot",
+      ]),
+    },
+    defaultSize: DEFAULT_SIZE,
+    machine: { arch: "amd64", selectors: [] },
+    make,
+    baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
+    saveSnapshot,
   };
 };

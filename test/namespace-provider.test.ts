@@ -343,11 +343,10 @@ const makeProvider = (
     }),
     openLink,
     forward: options?.forward ?? (() => Effect.die("unused")),
-    dockerFor: () => docker,
     spawnDetached: () => Effect.void,
     hosts: {
       linux: makeLinuxHost({ api, dockerFor: () => docker }),
-      macos: makeMacHost({ openLink }),
+      macos: makeMacHost({ openLink, fs: nodeFs }),
     },
   });
 };
@@ -528,7 +527,6 @@ describe("Namespace Provider", () => {
           login: Effect.die("unused"),
           openLink,
           forward: () => Effect.die("unused"),
-          dockerFor,
           spawnDetached: (provider, rel, args) =>
             Ref.update(spawned, (all) => [
               ...all,
@@ -536,7 +534,7 @@ describe("Namespace Provider", () => {
             ]),
           hosts: {
             linux: makeLinuxHost({ api, dockerFor }),
-            macos: makeMacHost({ openLink }),
+            macos: makeMacHost({ openLink, fs: nodeFs }),
           },
         });
         yield* TestClock.setTime(new Date("1970-01-01T00:10:00Z").getTime());
@@ -1618,14 +1616,13 @@ const warmNamespace = (
       }),
       openLink,
       forward: () => Effect.die("unused"),
-      dockerFor: () => docker,
       spawnDetached: (_provider, rel, args) =>
         Effect.sync(() => {
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
       hosts: {
         linux: makeLinuxHost({ api, dockerFor: () => docker }),
-        macos: makeMacHost({ openLink }),
+        macos: makeMacHost({ openLink, fs: nodeFs }),
       },
     });
     // The Max-life cap the host push reads, as create writes it.

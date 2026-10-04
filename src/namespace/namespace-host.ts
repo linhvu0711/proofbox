@@ -6,13 +6,17 @@ import {
   SandboxGoneError,
 } from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
+import type { Progress } from "../progress.ts";
 import type {
   Os,
+  OsOffer,
+  Provider,
   SandboxCallError,
   SandboxInfo,
   SandboxRef,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
+import type { Size } from "../size.ts";
 import type { HostResult, Link, LinkVia } from "./ssh-link.ts";
 
 // What the Namespace Provider asks of one host's OS. The Provider keeps the
@@ -52,7 +56,40 @@ export interface NamespaceHost {
     ProviderError | ProviderUnavailableError,
     Scope.Scope
   >;
+  // What create offers on this OS.
+  readonly offer: OsOffer;
+  readonly defaultSize: Size;
+  // What create asks Namespace for, past the size.
+  readonly machine: {
+    readonly arch: "amd64" | "arm64";
+    readonly selectors: ReadonlyArray<{
+      readonly name: string;
+      readonly value: string;
+    }>;
+  };
+  // Makes the Sandbox once Namespace has made the host and its gateway
+  // link is open.
+  readonly make: (
+    link: Link,
+    made: MakeRequest,
+  ) => Effect.Effect<
+    SandboxInfo,
+    CreateError | SandboxGoneError,
+    Progress | Scope.Scope
+  >;
 }
+
+// What create hands a host once Namespace has made it.
+export interface MakeRequest {
+  readonly req: Parameters<Provider["create"]>[0];
+  readonly ref: SandboxRef;
+  readonly paths: KeeperPaths;
+  readonly size: Size;
+  readonly maxLifeAt: Date;
+}
+
+// A host fails only with what create may fail with.
+type CreateError = Effect.Effect.Error<ReturnType<Provider["create"]>>;
 
 export const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);

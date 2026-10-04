@@ -182,12 +182,11 @@ const makeMac = (
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
           Effect.zipRight(portForward(ref, port)),
         ),
-      dockerFor,
       spawnDetached: (_provider, rel, args) =>
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
       hosts: {
         linux: makeLinuxHost({ api, dockerFor }),
-        macos: makeMacHost({ openLink }),
+        macos: makeMacHost({ openLink, fs: nodeFs }),
       },
     });
     return { provider, calls, requests, commands, detached, links, routed };
