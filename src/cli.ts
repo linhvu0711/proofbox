@@ -11,6 +11,7 @@ import { createSandbox } from "./commands/create.ts";
 import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
+import { loginToGithub } from "./commands/github.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { openLive } from "./commands/live.ts";
@@ -311,6 +312,16 @@ const auth = Command.make("auth").pipe(
   Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
 );
 
+const githubLogin = Command.make(
+  "login",
+  { owner: Args.text({ name: "owner" }) },
+  ({ owner }) => loginToGithub(owner),
+);
+
+const github = Command.make("github").pipe(
+  Command.withSubcommands([githubLogin]),
+);
+
 const upload = Command.make(
   "upload",
   {
@@ -355,6 +366,7 @@ const command = Command.make("proofbox").pipe(
     record,
     mark,
     auth,
+    github,
   ]),
 );
 

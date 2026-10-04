@@ -37,57 +37,70 @@ export const loginsPath = Effect.map(Config.string("HOME"), (home) =>
 );
 
 // A missing file means no logins; anything unreadable is a bad one.
-export const readLogins = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* loginsPath;
-  const bad = (reason: string) => new BadLoginsFileError({ path, reason });
-  const text = yield* fs
-    .readFileString(path)
-    .pipe(
-      Effect.catchAll((error) =>
-        error._tag === "SystemError" && error.reason === "NotFound"
-          ? Effect.succeed(undefined)
-          : Effect.fail(bad("could not be read")),
-      ),
+export const readOwnerOnlyFile = Effect.fn("loginsFile.readOwnerOnlyFile")(
+  function* <A, I>(path: string, schema: Schema.Schema<A, I>, empty: A) {
+    const fs = yield* FileSystem.FileSystem;
+    const bad = (reason: string) => new BadLoginsFileError({ path, reason });
+    const text = yield* fs
+      .readFileString(path)
+      .pipe(
+        Effect.catchAll((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? Effect.succeed(undefined)
+            : Effect.fail(bad("could not be read")),
+        ),
+      );
+    if (text === undefined) {
+      return empty;
+    }
+    const json = yield* Effect.try({
+      try: () => JSON.parse(text) as unknown,
+      catch: () => bad("not JSON"),
+    });
+    return yield* Schema.decodeUnknown(schema)(json).pipe(
+      Effect.mapError(() => bad("not a logins file")),
     );
-  if (text === undefined) {
-    return {};
-  }
-  const json = yield* Effect.try({
-    try: () => JSON.parse(text) as unknown,
-    catch: () => bad("not JSON"),
-  });
-  return yield* Schema.decodeUnknown(LoginsFile)(json).pipe(
-    Effect.mapError(() => bad("not a logins file")),
-  );
-});
+  },
+);
 
-// Write a unique temp file and rename it over logins.json, so a crash
+export const readLogins = Effect.flatMap(loginsPath, (path) =>
+  readOwnerOnlyFile(path, LoginsFile, {}),
+);
+
+// Write a unique temp file and rename it over the logins file, so a crash
 // never leaves half a file; the dir and file stay readable by the owner
 // only.
-const saveLogins = Effect.fn("loginsFile.saveLogins")(function* (
-  logins: LoginsFile,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* loginsPath;
-  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  yield* Effect.gen(function* () {
-    yield* fs.writeFileString(
-      temp,
-      `${JSON.stringify(Schema.encodeSync(LoginsFile)(logins))}\n`,
-      { mode: 0o600 },
+export const writeOwnerOnlyFile = Effect.fn("loginsFile.writeOwnerOnlyFile")(
+  function* <A, I>(path: string, schema: Schema.Schema<A, I>, value: A) {
+    const fs = yield* FileSystem.FileSystem;
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    yield* Effect.gen(function* () {
+      yield* fs.writeFileString(
+        temp,
+        `${JSON.stringify(Schema.encodeSync(schema)(value))}\n`,
+        { mode: 0o600 },
+      );
+      yield* fs.chmod(temp, 0o600);
+      yield* fs.rename(temp, path);
+    }).pipe(
+      Effect.tapError(() =>
+        fs.remove(temp, { force: true }).pipe(Effect.ignore),
+      ),
+      Effect.mapError(
+        () => new BadLoginsFileError({ path, reason: "could not be written" }),
+      ),
     );
-    yield* fs.chmod(temp, 0o600);
-    yield* fs.rename(temp, path);
-  }).pipe(
-    Effect.tapError(() => fs.remove(temp, { force: true }).pipe(Effect.ignore)),
-    Effect.mapError(
-      () => new BadLoginsFileError({ path, reason: "could not be written" }),
-    ),
-  );
-});
+  },
+);
 
-// The lock every change to logins.json runs under. Create and logout also
+const saveLogins = Effect.fn("loginsFile.saveLogins")((logins: LoginsFile) =>
+  Effect.flatMap(loginsPath, (path) =>
+    writeOwnerOnlyFile(path, LoginsFile, logins),
+  ),
+);
+
+// The lock every logins file in ~/.config/proofbox/ runs under, GitHub too.
+// Create and logout also
 // hold it while they check for a login and for a running create, so a
 // create either shows up for logout or finds no login (ADR 0016).
 export const withLoginsLock = Effect.fn("loginsFile.withLoginsLock")(function* <
