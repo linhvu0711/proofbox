@@ -87,20 +87,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     const script =
       setupPath === undefined
         ? undefined
-        : yield* fs
-            .readFile(setupPath)
-            .pipe(
-              Effect.catchAll((error) =>
-                Effect.fail(
-                  error._tag === "SystemError" && error.reason === "NotFound"
-                    ? new SetupScriptMissingError({ path: setupPath })
-                    : new ProviderError({
-                        provider: "local",
-                        reason: platformReason(error),
-                      }),
-                ),
+        : yield* fs.readFile(setupPath).pipe(
+            Effect.catchAll((error) =>
+              Effect.fail(
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? new SetupScriptMissingError({ path: setupPath })
+                  : new ProviderError({
+                      provider: "local",
+                      reason: platformReason(error),
+                    }),
               ),
-            );
+            ),
+          );
     const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
       options.envFile === undefined
