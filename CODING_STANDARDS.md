@@ -52,7 +52,8 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - A test name says the behavior in plain words: `"exec passes stdout, stderr, and exit code unchanged"`.
 - A test sets its config with `ConfigProvider`, with env vars on the child process, or with a dependency it passes in. It never changes `process.env`, not even `PATH`. (effect-config, vitest-vi)
   A change to `process.env` leaks into every other test in the same process.
-- A test never checks how long a command took: machine load changes the time, not the code. To prove a command fails at once, count what it ran, such as the `ssh` calls a fake binary logs.
+- A test in the default suite (`pnpm test`) never checks how long a command took: machine load changes the time, not the code. To prove a command fails at once, count what it ran, such as the `ssh` calls a fake binary logs.
+  The Docker and Namespace suites may check times, since they measure real machines on purpose.
 
 ## Commits
 
