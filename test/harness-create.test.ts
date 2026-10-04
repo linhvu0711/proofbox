@@ -61,6 +61,43 @@ const fakeLogins = (env: CliEnv) => {
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
 };
 
+it("a command after create --harness sees the Harness login and GH_TOKEN", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  fakeLogins(env);
+  const path = join(env.env.HOME ?? "", "secrets.env");
+  writeFileSync(path, "GH_TOKEN=from-env\nAPI_TOKEN=tok-5f2a9c\n", {
+    mode: 0o600,
+  });
+  // When
+  const created = await runCli(
+    env,
+    [...createArgs(folder, "fake"), "--env-file", path],
+    { set: { PROOFBOX_GITHUB_URL: `file://${github}` } },
+  );
+  const result = await runCli(env, [
+    "exec",
+    created.stdout.trim(),
+    "--",
+    "sh",
+    "-c",
+    'printf "%s|%s|%s" "$PROOFBOX_FAKE_HARNESS_TOKEN" "$GH_TOKEN" "$API_TOKEN"',
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    sending: created.stderr.includes("proofbox: sending 4 Secrets\n"),
+    leaked: /fake-tok-1|github_pat_fake1/.test(created.stderr),
+    value: result.stdout,
+  }).toEqual({
+    code: 0,
+    sending: true,
+    leaked: false,
+    value: "fake-tok-1|github_pat_fake1|tok-5f2a9c",
+  });
+});
+
 it("a clone GitHub refuses fails create, deletes the Sandbox, and names the owner and the repo", async () => {
   // Given
   const env = makeEnv();

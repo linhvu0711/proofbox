@@ -247,7 +247,21 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           );
       }
       if (secrets !== undefined) {
-        yield* sendSecrets(id, secrets);
+        yield* sendSecrets(
+          id,
+          check === undefined
+            ? secrets
+            : [
+                ...secrets,
+                { name: check.entry.login.envName, value: check.harnessToken },
+                { name: "GH_TOKEN", value: check.githubToken },
+              ],
+        );
+      } else if (check !== undefined) {
+        yield* sendSecrets(id, [
+          { name: check.entry.login.envName, value: check.harnessToken },
+          { name: "GH_TOKEN", value: check.githubToken },
+        ]);
       }
     }).pipe(
       Effect.tapError(() =>
