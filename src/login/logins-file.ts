@@ -32,8 +32,24 @@ export const LoginsFile = Schema.Record({
 });
 export type LoginsFile = typeof LoginsFile.Type;
 
+export const SavedHarnessLogin = Schema.Struct({
+  token: Schema.Redacted(Schema.String),
+  expiresAt: Schema.optional(Schema.Date),
+});
+export type SavedHarnessLogin = typeof SavedHarnessLogin.Type;
+
+export const HarnessLoginsFile = Schema.Record({
+  key: Schema.String,
+  value: SavedHarnessLogin,
+});
+export type HarnessLoginsFile = typeof HarnessLoginsFile.Type;
+
 export const loginsPath = Effect.map(Config.string("HOME"), (home) =>
   join(home, ".config", "proofbox", "logins.json"),
+);
+
+export const harnessLoginsPath = Effect.map(Config.string("HOME"), (home) =>
+  join(home, ".config", "proofbox", "harness-logins.json"),
 );
 
 // A missing file means no logins; anything unreadable is a bad one.
@@ -65,6 +81,10 @@ export const readOwnerOnlyFile = Effect.fn("loginsFile.readOwnerOnlyFile")(
 
 export const readLogins = Effect.flatMap(loginsPath, (path) =>
   readOwnerOnlyFile(path, LoginsFile, {}),
+);
+
+export const readHarnessLogins = Effect.flatMap(harnessLoginsPath, (path) =>
+  readOwnerOnlyFile(path, HarnessLoginsFile, {}),
 );
 
 // Write a unique temp file and rename it over the logins file, so a crash
@@ -99,10 +119,10 @@ const saveLogins = Effect.fn("loginsFile.saveLogins")((logins: LoginsFile) =>
   ),
 );
 
-// The lock every logins file in ~/.config/proofbox/ runs under, GitHub too.
-// Create and logout also
-// hold it while they check for a login and for a running create, so a
-// create either shows up for logout or finds no login (ADR 0016).
+// The lock every logins file in ~/.config/proofbox/ runs under, GitHub and
+// Harness too. Create and logout also hold it while they check for a login
+// and for a running create, so a create either shows up for logout or
+// finds no login (ADR 0016).
 export const withLoginsLock = Effect.fn("loginsFile.withLoginsLock")(function* <
   A,
   E,
@@ -144,4 +164,21 @@ export const rewriteLogins = Effect.fn("loginsFile.rewriteLogins")(function* (
 export const changeLogins = Effect.fn("loginsFile.changeLogins")(
   (change: (logins: LoginsFile) => LoginsFile) =>
     withLoginsLock(rewriteLogins(change)),
+);
+
+export const changeHarnessLogins = Effect.fn("loginsFile.changeHarnessLogins")(
+  function* (change: (logins: HarnessLoginsFile) => HarnessLoginsFile) {
+    const path = yield* harnessLoginsPath;
+    return yield* withLoginsLock(
+      Effect.gen(function* () {
+        const logins = yield* readHarnessLogins;
+        yield* writeOwnerOnlyFile(path, HarnessLoginsFile, change(logins));
+        return logins;
+      }),
+    ).pipe(
+      Effect.catchTag("BadLoginsFileError", (error) =>
+        Effect.fail(new BadLoginsFileError({ path, reason: error.reason })),
+      ),
+    );
+  },
 );

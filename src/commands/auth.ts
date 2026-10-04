@@ -16,6 +16,7 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
+import { Harnesses } from "../harness.ts";
 import { type LogoutFailure, logOut } from "../local-sandboxes.ts";
 import {
   type GithubLoginsFile,
@@ -23,6 +24,8 @@ import {
 } from "../login/github-logins.ts";
 import {
   changeLogins,
+  type HarnessLoginsFile,
+  readHarnessLogins,
   readLogins,
   type SavedLogin,
 } from "../login/logins-file.ts";
@@ -302,6 +305,20 @@ export const showAuthStatus = Effect.gen(function* () {
     yield* output.out(
       `github:${owner}  logged in with token …${Redacted.value(login.token).slice(-4)}, expiry not known, saved login\n`,
     );
+  }
+  const harnesses = yield* Harnesses;
+  const savedHarnesses = yield* readHarnessLogins.pipe(
+    Effect.catchAll(() => Effect.succeed<HarnessLoginsFile>({})),
+  );
+  for (const [name, entry] of harnesses) {
+    const saved = savedHarnesses[name];
+    if (saved === undefined) continue;
+    const expiresAt = saved.expiresAt;
+    const line =
+      expiresAt !== undefined && expiresAt.getTime() <= now
+        ? `expired ${formatTime(expiresAt)}. Run: proofbox harness login ${name}`
+        : `${entry.login.what} …${Redacted.value(saved.token).slice(-4)}${expiresAt !== undefined ? `, expires ${formatTime(expiresAt)}` : ""}, saved login`;
+    yield* output.out(`harness ${name}  ${line}\n`);
   }
 });
 
