@@ -30,6 +30,7 @@ export const ProvidersLive = Layer.effect(
         Effect.map(([client, provider]) =>
           provider.makeDockerProvider({
             client: client.makeDockerClient(executor),
+            fs,
           }),
         ),
       ),
@@ -52,7 +53,7 @@ export const ProvidersLive = Layer.effect(
             const namespaceApi = api.makeNamespaceApi({
               login: namespaceLogin,
             });
-            const openLink = link.makeOpenLink(namespaceApi, executor);
+            const openLink = link.makeOpenLink(namespaceApi, executor, fs);
             const dockerFor = (sandbox: {
               readonly ssh: ReadonlyArray<string>;
             }) => client.makeDockerClient(executor, { ssh: sandbox.ssh });
@@ -67,6 +68,7 @@ export const ProvidersLive = Layer.effect(
               hosts: {
                 linux: linuxHost.makeLinuxHost({
                   api: namespaceApi,
+                  fs,
                   dockerFor,
                 }),
                 macos: macHost.makeMacHost({ openLink, fs }),

@@ -133,11 +133,11 @@ One rule per line. A rule from a source names the source in parentheses, from th
 ### Effect platform
 
 - A child process runs through `Command` from `@effect/platform`. (platform-command)
-- `node:child_process` is only for a job `Command` cannot do, such as a detached spawn, with a comment that says why.
+- `node:child_process` is only for a job `Command` cannot do, such as a detached spawn, with a comment that says why. [biome noRestrictedImports, in `src/`]
 - A non-zero exit of a child process is a value from `Command.exitCode`, not an error. (platform-command)
 - File access goes through `FileSystem` from `@effect/platform`.
   Its failures come as a `SystemError` with a `reason`, so no code reads raw Node error codes such as `ENOENT`.
-- `node:fs` is only for a job `FileSystem` cannot do, such as `lstat` or a Node stream that a Node API needs, with a comment that says why.
+- `node:fs` is only for a job `FileSystem` cannot do, such as `lstat` or a Node stream that a Node API needs, with a comment that says why. [biome noRestrictedImports, in `src/`]
 - A platform error is matched by `_tag` and `reason`, never by its message. (platform-error)
 - `NodeContext.layer` is provided only in the entry file of a process: `src/main.ts` and each `-main.ts` file. (platform-node-context)
 

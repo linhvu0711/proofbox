@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
@@ -10,6 +10,7 @@ import {
 import {
   MissingCapabilityError,
   ProviderError,
+  platformReason,
   SetupNeedsWorkError,
   SetupScriptMissingError,
   SizeNotOfferedError,
@@ -40,6 +41,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly maxSize?: string | undefined;
     readonly size?: string | undefined;
   }) {
+    const fs = yield* FileSystem.FileSystem;
     const providers = yield* Providers;
     const providerName = options.provider ?? (yield* providerForOs(options.os));
     const entry = providers.get(providerName);
@@ -85,20 +87,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     const script =
       setupPath === undefined
         ? undefined
-        : yield* Effect.tryPromise({
-            try: () => readFile(setupPath),
-            catch: (cause) =>
-              typeof cause === "object" &&
-              cause !== null &&
-              "code" in cause &&
-              cause.code === "ENOENT"
-                ? new SetupScriptMissingError({ path: setupPath })
-                : new ProviderError({
-                    provider: "local",
-                    reason:
-                      cause instanceof Error ? cause.message : String(cause),
-                  }),
-          });
+        : yield* fs.readFile(setupPath).pipe(
+            Effect.catchAll((error) =>
+              Effect.fail(
+                error._tag === "SystemError" && error.reason === "NotFound"
+                  ? new SetupScriptMissingError({ path: setupPath })
+                  : new ProviderError({
+                      provider: "local",
+                      reason: platformReason(error),
+                    }),
+              ),
+            ),
+          );
     const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
       options.envFile === undefined

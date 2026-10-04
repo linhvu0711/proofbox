@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -280,6 +286,21 @@ const UNFINISHED_MAC = {
 };
 
 describe("Namespace macOS Provider", () => {
+  it.effect("macOS create pins the sshd host key in an owner-only file", () => {
+    const runtime = runtimeDir();
+    return Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac();
+      // When
+      yield* mac.provider.create(createMac());
+      // Then
+      expect(
+        statSync(join(runtime, "ns-us:abc123def4567.sshd-known-hosts")).mode &
+          0o777,
+      ).toBe(0o600);
+    }).pipe(withRuntime(runtime));
+  });
+
   it.effect(
     "macOS create turns on sshd over the gateway, then prepares over sshd",
     () => {

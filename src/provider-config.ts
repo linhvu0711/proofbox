@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Config, Effect, Schema } from "effect";
 import { BadConfigError } from "./errors.ts";
 import { type Os, Providers } from "./provider.ts";
@@ -16,23 +16,20 @@ const providerReason = (os: Os) => `"${os}" must be a Provider name`;
 // The config file maps each OS to a Provider name; no file means namespace.
 export const providerForOs = Effect.fn("providerConfig.providerForOs")(
   function* (os: Os) {
+    const fs = yield* FileSystem.FileSystem;
     const home = yield* Config.string("HOME");
     const path = join(home, ".config", "proofbox", "config");
     const bad = (reason: string) => new BadConfigError({ path, reason });
     // Only a missing file means no config; anything unreadable is a bad one.
-    const text = yield* Effect.tryPromise({
-      try: () => readFile(path, "utf8"),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catchAll((cause) =>
-        typeof cause === "object" &&
-        cause !== null &&
-        "code" in cause &&
-        cause.code === "ENOENT"
-          ? Effect.succeed(undefined)
-          : Effect.fail(bad("could not be read")),
-      ),
-    );
+    const text = yield* fs
+      .readFileString(path)
+      .pipe(
+        Effect.catchAll((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? Effect.succeed(undefined)
+            : Effect.fail(bad("could not be read")),
+        ),
+      );
     if (text === undefined) {
       return "namespace";
     }

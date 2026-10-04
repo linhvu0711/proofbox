@@ -113,7 +113,7 @@ describe("ssh link", () => {
         // the create-time local public key otherwise.
         const sshKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
         // When
-        const link = yield* makeOpenLink(api, executor, fake.path)(
+        const link = yield* makeOpenLink(api, executor, nodeFs, fake.path)(
           { name: "abc123def4567", region: "us" },
           paths,
           "keeper",
@@ -208,6 +208,118 @@ describe("ssh link", () => {
     },
   );
 
+  it.effect("the link's known_hosts file is owner-only", () => {
+    const fake = fakeSsh();
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    return Effect.gen(function* () {
+      const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
+        [],
+      );
+      const api: NamespaceApi = {
+        create: () => Effect.die("unused"),
+        wait: () => Effect.die("unused"),
+        destroy: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        list: () => Effect.die("unused"),
+        checkToken: () => Effect.die("unused"),
+        ensureImageExpiry: () => Effect.die("unused"),
+        makeToken: () => Effect.die("unused"),
+        sshConfig: (region, instanceId) =>
+          Ref.update(asked, (all) => [
+            ...all,
+            [region, instanceId] as const,
+          ]).pipe(
+            Effect.as({
+              username: "abc123def4567",
+              endpoint: "ssh.iad4.namespace.so",
+              privateKey: new Uint8Array(PEM),
+              hostKeys: [HOST_KEY],
+            }),
+          ),
+      };
+      const executor = yield* CommandExecutor.CommandExecutor;
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "abc123def4567",
+      });
+      // The gateway key lives next to the control socket under a name
+      // with no .pub sibling — ssh would compare the ephemeral key to
+      // the create-time local public key otherwise.
+      // When
+      yield* makeOpenLink(api, executor, nodeFs, fake.path)(
+        { name: "abc123def4567", region: "us" },
+        paths,
+        "keeper",
+        "gateway",
+      );
+      // Then
+      expect(statSync(paths.knownHosts).mode & 0o777).toBe(0o600);
+    }).pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
+
+  it.effect("the forward's key and known_hosts files are owner-only", () => {
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    const log = join(runtime, "ssh.log");
+    const fake = fakeSshForward(log);
+    return Effect.gen(function* () {
+      const asked = yield* Ref.make<ReadonlyArray<readonly [string, string]>>(
+        [],
+      );
+      const api: NamespaceApi = {
+        create: () => Effect.die("unused"),
+        wait: () => Effect.die("unused"),
+        destroy: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        list: () => Effect.die("unused"),
+        checkToken: () => Effect.die("unused"),
+        ensureImageExpiry: () => Effect.die("unused"),
+        makeToken: () => Effect.die("unused"),
+        sshConfig: (region, instanceId) =>
+          Ref.update(asked, (all) => [
+            ...all,
+            [region, instanceId] as const,
+          ]).pipe(
+            Effect.as({
+              username: "abc123def4567",
+              endpoint: "ssh.iad4.namespace.so",
+              privateKey: new Uint8Array(PEM),
+              hostKeys: [HOST_KEY],
+            }),
+          ),
+      };
+      const executor = yield* CommandExecutor.CommandExecutor;
+      // When
+      yield* makeSshForward(
+        api,
+        executor,
+        nodeFs,
+        fake.path,
+      )({ name: "abc123def4567", region: "us" }, 5900);
+      // Then
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "abc123def4567",
+      });
+      const key = join(paths.dir, `ns-f${process.pid}-0.sshkey`);
+      expect([
+        statSync(key).mode & 0o777,
+        statSync(`${key}.known-hosts`).mode & 0o777,
+      ]).toEqual([0o600, 0o600]);
+    }).pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
+
   it.live("run gives the remote command an empty stdin", () => {
     const fake = fakeSshReading();
     const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
@@ -236,7 +348,7 @@ describe("ssh link", () => {
         provider: "ns",
         name: "abc123def4567",
       });
-      const link = yield* makeOpenLink(api, executor, fake.path)(
+      const link = yield* makeOpenLink(api, executor, nodeFs, fake.path)(
         { name: "abc123def4567", region: "us" },
         paths,
         "keeper",
@@ -311,7 +423,7 @@ describe("ssh link", () => {
           );
         }
         // When
-        const link = yield* makeOpenLink(api, executor, fake.path)(
+        const link = yield* makeOpenLink(api, executor, nodeFs, fake.path)(
           { name: "abc123def4567", region: "us" },
           paths,
           ride ? "cli" : "keeper",

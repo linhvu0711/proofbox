@@ -1,3 +1,4 @@
+import { FileSystem } from "@effect/platform";
 import { Chunk, Duration, Effect, Schedule, Stream } from "effect";
 import {
   BASE_IMAGE_DIR,
@@ -78,6 +79,7 @@ export interface LinuxHost extends NamespaceHost {
 // A Linux host runs the Sandbox in one Docker container.
 export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
+  readonly fs: FileSystem.FileSystem;
   readonly dockerFor: (link: Link) => DockerClient;
 }): LinuxHost => {
   const read = Effect.fn("linuxHost.read")(function* (
@@ -313,7 +315,10 @@ export const makeLinuxHost = (deps: {
     const { req, ref, size } = made;
     const progress = yield* Progress;
     const registry = yield* readTenant(link);
-    const version = yield* baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE);
+    const version = yield* baseImageVersion(
+      BASE_IMAGE_DIR,
+      LINUX_TOOL_BUNDLE,
+    ).pipe(Effect.provideService(FileSystem.FileSystem, deps.fs));
     const baseTag = `nscr.io/${registry}/${baseImageTag(version)}`;
     const snapshotImage =
       req.snapshot === undefined
@@ -321,6 +326,7 @@ export const makeLinuxHost = (deps: {
         : yield* pullStart(link, registry, req.snapshot, progress);
     const inner = makeDockerProvider({
       client: deps.dockerFor(link),
+      fs: deps.fs,
       imageTag: snapshotImage ?? baseTag,
       registry: true,
       memoryReserveGb: MEMORY_RESERVE_GB,
@@ -439,7 +445,9 @@ export const makeLinuxHost = (deps: {
     machine: { arch: "amd64", selectors: [] },
     make,
     folders: { state: "/var/lib/proofbox", secrets: "/run/proofbox/secrets" },
-    baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
+    baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE).pipe(
+      Effect.provideService(FileSystem.FileSystem, deps.fs),
+    ),
     saveSnapshot,
   };
 };

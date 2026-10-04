@@ -48,7 +48,7 @@ const namespace = () =>
     forward: () => Effect.die("unused"),
     spawnDetached: () => Effect.die("unused"),
     hosts: {
-      linux: makeLinuxHost({ api, dockerFor: () => client }),
+      linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => client }),
       macos: makeMacHost({ openLink: () => Effect.die("unused"), fs: nodeFs }),
     },
   });
@@ -56,7 +56,7 @@ const namespace = () =>
 describe("Sandbox files", () => {
   it("a Docker Sandbox keeps each file at its path", () => {
     // Given
-    const provider = makeDockerProvider({ client });
+    const provider = makeDockerProvider({ client, fs: nodeFs });
     // When
     const files = sandboxFiles(provider, "abc123", "linux");
     // Then

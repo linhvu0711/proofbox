@@ -1,5 +1,4 @@
-import { createWriteStream } from "node:fs";
-import { rename, unlink } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { Config, Duration, Effect, Exit, Stream } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { parseSpan } from "./deadline.ts";
@@ -9,6 +8,7 @@ import {
   NoAnswerError,
   OutFileError,
   ProviderError,
+  platformReason,
 } from "./errors.ts";
 import { formatWait } from "./format-time.ts";
 import {
@@ -23,9 +23,6 @@ import {
   type ResolvedSandboxId,
   resolveSandboxId,
 } from "./sandbox-id.ts";
-
-const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
 
 // A helper in the Sandbox, the feature it serves, and its path per OS.
 export interface HelperTable {
@@ -218,6 +215,7 @@ export const fetchHelper = Effect.fn("helper.fetchHelper")(function* (
   const resolved = yield* resolveHelper(rawId, table, options.outcome);
   const { provider, helper } = resolved;
   const keeper = yield* KeeperClient;
+  const fs = yield* FileSystem.FileSystem;
   // One try writes `<dest>.part` from the start and removes it unless the
   // download ended whole, so a second try never sees the first one's bytes.
   const attempt = (limit: AnswerLimit) =>
@@ -226,87 +224,47 @@ export const fetchHelper = Effect.fn("helper.fetchHelper")(function* (
         limit,
       });
       const part = `${dest}.part`;
-      return yield* Effect.acquireUseRelease(
-        Effect.sync(() => createWriteStream(part)),
-        (stream) =>
-          Effect.gen(function* () {
-            let writeError: Error | undefined;
-            stream.on("error", (error) => {
-              writeError = error;
-            });
-            const stderr: Uint8Array[] = [];
-            let code: number | undefined;
-            yield* events.pipe(
-              Stream.runForEach((event) => {
-                if (event._tag === "Stdout") {
-                  if (writeError !== undefined) {
-                    return Effect.fail(
-                      new OutFileError({
-                        path: dest,
-                        reason: describe(writeError),
-                      }),
-                    );
-                  }
-                  return Effect.async<void, OutFileError>((resume) => {
-                    stream.write(event.bytes, (error) => {
-                      resume(
-                        error === undefined || error === null
-                          ? Effect.void
-                          : Effect.fail(
-                              new OutFileError({
-                                path: dest,
-                                reason: describe(error),
-                              }),
-                            ),
-                      );
-                    });
-                  });
-                }
-                if (event._tag === "Stderr") {
-                  stderr.push(event.bytes);
-                } else {
-                  code = event.code;
-                }
-                return Effect.void;
-              }),
-            );
-            yield* Effect.async<void>((resume) => {
-              if (writeError !== undefined) {
-                resume(Effect.void);
-                return;
+      const stderr: Uint8Array[] = [];
+      let code: number | undefined;
+      const outError = (error: Parameters<typeof platformReason>[0]) =>
+        new OutFileError({ path: dest, reason: platformReason(error) });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const file = yield* fs
+            .open(part, { flag: "w" })
+            .pipe(Effect.mapError((error) => outError(error)));
+          yield* events.pipe(
+            Stream.runForEach((event) => {
+              if (event._tag === "Stdout") {
+                return file
+                  .writeAll(event.bytes)
+                  .pipe(Effect.mapError((error) => outError(error)));
               }
-              stream.once("error", () => resume(Effect.void));
-              stream.end(() => resume(Effect.void));
-            });
-            if (writeError !== undefined) {
-              return yield* new OutFileError({
-                path: dest,
-                reason: describe(writeError),
-              });
-            }
-            if (code === 0) {
-              yield* Effect.tryPromise({
-                try: () => rename(part, dest),
-                catch: (cause) =>
-                  new OutFileError({
-                    path: dest,
-                    reason: describe(cause),
-                  }),
-              });
-            }
-            return {
-              provider: provider.name,
-              code,
-              stderr: Buffer.concat(stderr).toString("utf8").trim(),
-            };
-          }),
-        (stream) => Effect.sync(() => stream.destroy()),
+              if (event._tag === "Stderr") {
+                stderr.push(event.bytes);
+              } else {
+                code = event.code;
+              }
+              return Effect.void;
+            }),
+          );
+        }),
       );
+      if (code === 0) {
+        yield* fs
+          .rename(part, dest)
+          .pipe(Effect.mapError((error) => outError(error)));
+      }
+      return {
+        provider: provider.name,
+        code,
+        stderr: Buffer.concat(stderr).toString("utf8").trim(),
+      };
     }).pipe(
       Effect.onExit((exit) =>
         Exit.isSuccess(exit) && exit.value.code === 0
           ? Effect.void
-          : Effect.promise(() => unlink(`${dest}.part`).catch(() => {})),
+          : fs.remove(`${dest}.part`, { force: true }).pipe(Effect.ignore),
       ),
     );
   return yield* withHelperLimit(

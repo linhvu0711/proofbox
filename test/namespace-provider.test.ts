@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -345,7 +345,7 @@ const makeProvider = (
     forward: options?.forward ?? (() => Effect.die("unused")),
     spawnDetached: () => Effect.void,
     hosts: {
-      linux: makeLinuxHost({ api, dockerFor: () => docker }),
+      linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
       macos: unusedHost("macos"),
     },
   });
@@ -428,6 +428,33 @@ describe("Namespace Provider", () => {
   );
 
   it.effect(
+    "an unreadable local OS file reads as Linux with no API lookup",
+    () =>
+      Effect.gen(function* () {
+        // Given: the local OS file takes precedence over the API label.
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+          instances: [
+            { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
+          ],
+        });
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        }).pipe(Effect.provide(NodeContext.layer));
+        mkdirSync(paths.os);
+        // When
+        const info = yield* provider.get({
+          name: "abc123def4567",
+          region: "us",
+        });
+        // Then
+        expect(info.os).toBe("linux");
+        expect(yield* Ref.get(calls)).toEqual([]);
+      }).pipe(runtimeConfig()),
+  );
+
+  it.effect(
     "extend writes the Deadline and starts nsc extend for the seconds left",
     () =>
       Effect.gen(function* () {
@@ -462,7 +489,7 @@ describe("Namespace Provider", () => {
               [provider, rel, args] as const,
             ]),
           hosts: {
-            linux: makeLinuxHost({ api, dockerFor }),
+            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor }),
             macos: unusedHost("macos"),
           },
         });
@@ -1435,7 +1462,7 @@ const warmNamespace = (
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
       hosts: {
-        linux: makeLinuxHost({ api, dockerFor: () => docker }),
+        linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
         macos: unusedHost("macos"),
       },
     });

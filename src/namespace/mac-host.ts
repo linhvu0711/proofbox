@@ -1,4 +1,3 @@
-import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
@@ -8,6 +7,7 @@ import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
   ProviderUnavailableError,
+  platformReason,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
@@ -122,12 +122,11 @@ const sendFile = Effect.fn("macHost.sendFile")(function* (
   link: Link,
   local: string,
   remote: string,
+  fs: FileSystem.FileSystem,
 ) {
-  const bytes = yield* Effect.tryPromise({
-    try: () => readFile(local),
-    catch: (cause) =>
-      fail(cause instanceof Error ? cause.message : String(cause)),
-  });
+  const bytes = yield* fs
+    .readFile(local)
+    .pipe(Effect.mapError((error) => fail(platformReason(error))));
   const events = yield* link
     .stream(
       `cat > ${shellJoin([remote])} && chmod 755 ${shellJoin([remote])}`,
@@ -150,6 +149,7 @@ const sendFile = Effect.fn("macHost.sendFile")(function* (
 const installTools = Effect.fn("macHost.installTools")(function* (
   link: Link,
   ref: SandboxRef,
+  fs: FileSystem.FileSystem,
 ) {
   const tools = TOOL_BUNDLE.flatMap((tool) =>
     tool.macos === undefined
@@ -164,11 +164,16 @@ const installTools = Effect.fn("macHost.installTools")(function* (
         `cd /tmp && rm -rf proofbox-tool && mkdir proofbox-tool && /opt/nsc/bin/nsc artifact cache-url ${shellJoin([tool.source.url])} --out proofbox-tool/archive.zip && unzip -o -q proofbox-tool/archive.zip -d proofbox-tool && mv proofbox-tool/${tool.name} ${shellJoin([tool.path])} && chmod 755 ${shellJoin([tool.path])}`,
       );
     } else {
-      yield* sendFile(link, join(MACOS_DIR, tool.source.file), tool.path);
+      yield* sendFile(link, join(MACOS_DIR, tool.source.file), tool.path, fs);
     }
   }
-  yield* sendFile(link, join(MACOS_DIR, "pixel.sh"), "/opt/proofbox/pixel");
-  yield* sendFile(link, join(MACOS_DIR, "record.sh"), "/opt/proofbox/record");
+  yield* sendFile(link, join(MACOS_DIR, "pixel.sh"), "/opt/proofbox/pixel", fs);
+  yield* sendFile(
+    link,
+    join(MACOS_DIR, "record.sh"),
+    "/opt/proofbox/record",
+    fs,
+  );
   const sums = yield* step(
     link,
     "checking the Tool bundle",
@@ -299,12 +304,12 @@ const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
   link: Link,
   ref: SandboxRef,
   paths: KeeperPaths,
+  fs: FileSystem.FileSystem,
 ) {
-  const pub = yield* Effect.tryPromise({
-    try: () => readFile(`${paths.key}.pub`, "utf8").then((text) => text.trim()),
-    catch: (cause) =>
-      fail(cause instanceof Error ? cause.message : String(cause)),
-  });
+  const pub = yield* fs.readFileString(`${paths.key}.pub`).pipe(
+    Effect.map((text) => text.trim()),
+    Effect.mapError((error) => fail(platformReason(error))),
+  );
   const result = yield* link.run(
     `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub`,
   );
@@ -315,14 +320,11 @@ const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
     });
   }
   const [type, key] = result.stdout.trim().split(/\s+/);
-  yield* Effect.tryPromise({
-    try: () =>
-      writeFile(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
-        mode: 0o600,
-      }),
-    catch: (cause) =>
-      fail(cause instanceof Error ? cause.message : String(cause)),
-  });
+  yield* fs
+    .writeFileString(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
+      mode: 0o600,
+    })
+    .pipe(Effect.mapError((error) => fail(platformReason(error))));
 });
 
 // One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
@@ -391,6 +393,7 @@ const macChecks = (): ChecksShell => ({
 const saveScreen = Effect.fn("macHost.saveScreen")(function* (
   link: Link,
   ref: SandboxRef,
+  fs: FileSystem.FileSystem,
 ) {
   const events = Chunk.toReadonlyArray(
     yield* link
@@ -410,11 +413,9 @@ const saveScreen = Effect.fn("macHost.saveScreen")(function* (
     (yield* keeperPaths({ provider: "ns", name: ref.name })).dir,
     `ns-${ref.name}-prepare.png`,
   );
-  yield* Effect.tryPromise({
-    try: () => writeFile(path, bytes, { mode: 0o600 }),
-    catch: (cause) =>
-      fail(cause instanceof Error ? cause.message : String(cause)),
-  });
+  yield* fs
+    .writeFile(path, bytes, { mode: 0o600 })
+    .pipe(Effect.mapError((error) => fail(platformReason(error))));
   return path;
 });
 
@@ -449,6 +450,7 @@ const keepScreenAwake = Effect.fn("macHost.keepScreenAwake")(function* (
 const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   link: Link,
   ref: SandboxRef,
+  fs: FileSystem.FileSystem,
 ) {
   const shot = yield* link.run(
     `${GUI} /usr/sbin/screencapture -x -t png /tmp/proofbox-test.png && test -s /tmp/proofbox-test.png`,
@@ -469,7 +471,7 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
   );
   const alerted = hint.stdout.trim() !== REPLAYD_HINT;
   if (capture.exitCode !== 0 || alerted) {
-    const screenshot = yield* saveScreen(link, ref);
+    const screenshot = yield* saveScreen(link, ref, fs);
     return yield* new MacPrepareError({
       id: sandboxId(ref),
       what:
@@ -488,12 +490,13 @@ const checkScreen = Effect.fn("macHost.checkScreen")(function* (
 const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
   link: Link,
   ref: SandboxRef,
+  fs: FileSystem.FileSystem,
 ) {
   const sent = yield* link.run(
     `${GUI} osascript -e 'tell application "System Events" to get name of first process' >/dev/null & p=$!; (sleep 10; kill -9 $p; pkill -9 -x osascript) >/dev/null 2>&1 & w=$!; wait $p; rc=$?; kill $w 2>/dev/null; exit $rc`,
   );
   if (sent.exitCode !== 0) {
-    const screenshot = yield* saveScreen(link, ref);
+    const screenshot = yield* saveScreen(link, ref, fs);
     return yield* new MacPrepareError({
       id: sandboxId(ref),
       what: "Apple Events to System Events are blocked",
@@ -507,12 +510,13 @@ const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   link: Link,
   req: MacRequest,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const progress = yield* Progress;
   const createdAt = new Date(yield* Clock.currentTimeMillis);
   yield* makeMacFolders(link);
   yield* progress.step(
     "installing the Tool bundle",
-    installTools(link, req.ref),
+    installTools(link, req.ref, fs),
   );
   yield* progress.step(
     "checking the Namespace token is out of reach",
@@ -536,8 +540,8 @@ const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   );
   yield* progress.step(
     "taking a test screenshot and capture",
-    checkScreen(link, req.ref).pipe(
-      Effect.zipRight(checkAppleEvents(link, req.ref)),
+    checkScreen(link, req.ref, fs).pipe(
+      Effect.zipRight(checkAppleEvents(link, req.ref, fs)),
     ),
   );
   return yield* writeMacState(link, req, createdAt);
@@ -610,11 +614,9 @@ export const makeMacHost = (deps: {
     ref: SandboxRef,
     paths: KeeperPaths,
   ) {
-    const pinned = yield* Effect.promise(() =>
-      access(paths.sshdKnownHosts)
-        .then(() => true)
-        .catch(() => false),
-    );
+    const pinned = yield* deps.fs
+      .exists(paths.sshdKnownHosts)
+      .pipe(Effect.orElseSucceed(() => false));
     if (!pinned) {
       return yield* new ProviderUnavailableError({
         provider: "namespace",
@@ -688,7 +690,10 @@ export const makeMacHost = (deps: {
   ) {
     const { ref } = made;
     const progress = yield* Progress;
-    yield* progress.step("turning on sshd", turnOnSshd(link, ref, made.paths));
+    yield* progress.step(
+      "turning on sshd",
+      turnOnSshd(link, ref, made.paths, deps.fs),
+    );
     const sshd = yield* deps.openLink(ref, made.paths, "cli", "sshd").pipe(
       Effect.catchTag("ProviderUnavailableError", () =>
         Effect.fail(

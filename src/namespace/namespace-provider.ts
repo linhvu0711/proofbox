@@ -1,11 +1,3 @@
-import {
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
@@ -26,6 +18,7 @@ import {
   type ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
+  platformReason,
   UnknownRegionError,
 } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
@@ -43,7 +36,7 @@ import { pushHostLife } from "./host-life.ts";
 import type { LinuxHost } from "./linux-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
-import { describe, fail, gone, type NamespaceHost } from "./namespace-host.ts";
+import { fail, gone, type NamespaceHost } from "./namespace-host.ts";
 import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
@@ -83,13 +76,17 @@ export const makeNamespaceProvider = (deps: {
     ref: SandboxRef,
   ) {
     const file = (yield* refPaths(ref)).os;
-    const text = yield* Effect.promise(() =>
-      readFile(file, "utf8").catch((cause: unknown) =>
-        cause instanceof Error && "code" in cause && cause.code === "ENOENT"
-          ? undefined
-          : "linux",
-      ),
-    );
+    const text = yield* deps.fs
+      .readFileString(file)
+      .pipe(
+        Effect.catchAll((error) =>
+          Effect.succeed(
+            error._tag === "SystemError" && error.reason === "NotFound"
+              ? undefined
+              : "linux",
+          ),
+        ),
+      );
     if (text !== undefined) {
       return hostFor(text.trim());
     }
@@ -150,11 +147,11 @@ export const makeNamespaceProvider = (deps: {
 
   // The local record of the Deadline, which the detached host-expiry reads.
   const recordDeadline = (file: string, deadline: Date) =>
-    Effect.promise(() =>
-      writeFile(file, String(Math.ceil(deadline.getTime() / 1000)), {
+    deps.fs
+      .writeFileString(file, String(Math.ceil(deadline.getTime() / 1000)), {
         mode: 0o600,
-      }).catch(() => {}),
-    );
+      })
+      .pipe(Effect.ignore);
 
   const checkWritten = (
     ref: SandboxRef,
@@ -276,47 +273,55 @@ export const makeNamespaceProvider = (deps: {
       ),
     );
     const dir = (yield* paths("__probe__")).dir;
-    yield* Effect.promise(async () => {
-      const entries = await readdir(dir).catch((): Array<string> => []);
-      // Only files at least ten minutes old are pruned: an ns-new-* staging
-      // key belongs to a create in flight, and a host registered moments ago
-      // can still be ahead of the ListInstances answer.
-      const stale = async (file: string) => {
-        const info = await stat(join(dir, file)).catch(() => null);
-        return info !== null && Date.now() - info.mtimeMs > 600_000;
-      };
-      await Promise.all(
-        entries
-          .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
-          .filter(
-            (name): name is string =>
-              name !== undefined && !name.startsWith("new-"),
-          )
-          .filter((name) => !alive.has(name))
-          .map(async (name) => {
-            if (!(await stale(`ns-${name}.key`))) return;
-            await Promise.all(
-              [
-                ".key",
-                ".key.pub",
-                ".max-life",
-                ".deadline",
-                ".os",
-                ".ctl",
-                ".sock",
-                ".sshkey",
-                ".sshtarget",
-                ".known-hosts",
-                ".sshd-known-hosts",
-              ].map((suffix) =>
-                rm(join(dir, `ns-${name}${suffix}`), { force: true }).catch(
-                  () => {},
-                ),
-              ),
-            );
-          }),
-      ).then(() => {});
-    });
+    const entries = yield* deps.fs
+      .readDirectory(dir)
+      .pipe(Effect.orElseSucceed(() => []));
+    // Only files at least ten minutes old are pruned: an ns-new-* staging
+    // key belongs to a create in flight, and a host registered moments ago
+    // can still be ahead of the ListInstances answer.
+    const stale = (file: string) =>
+      deps.fs.stat(join(dir, file)).pipe(
+        Effect.map(
+          (info) =>
+            Option.isSome(info.mtime) &&
+            Date.now() - info.mtime.value.getTime() > 600_000,
+        ),
+        Effect.orElseSucceed(() => false),
+      );
+    yield* Effect.forEach(
+      entries
+        .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
+        .filter(
+          (name): name is string =>
+            name !== undefined && !name.startsWith("new-"),
+        )
+        .filter((name) => !alive.has(name)),
+      (name) =>
+        Effect.gen(function* () {
+          if (!(yield* stale(`ns-${name}.key`))) return;
+          yield* Effect.forEach(
+            [
+              ".key",
+              ".key.pub",
+              ".max-life",
+              ".deadline",
+              ".os",
+              ".ctl",
+              ".sock",
+              ".sshkey",
+              ".sshtarget",
+              ".known-hosts",
+              ".sshd-known-hosts",
+            ],
+            (suffix) =>
+              deps.fs
+                .remove(join(dir, `ns-${name}${suffix}`), { force: true })
+                .pipe(Effect.ignore),
+            { concurrency: "unbounded" },
+          );
+        }),
+      { concurrency: "unbounded" },
+    );
     // A host Namespace still makes has no link to read over yet, and one
     // whose Sandbox state was never written reads as never made: both are
     // Unfinished Sandboxes. Any other gone host is dropped.
@@ -391,22 +396,27 @@ export const makeNamespaceProvider = (deps: {
     // keypair and Max-life cap are removed whether or not the host is
     // still listed.
     const dir = yield* refPaths(ref);
-    yield* Effect.promise(() =>
-      Promise.all([
-        rm(dir.key, { force: true }).catch(() => {}),
-        rm(`${dir.key}.pub`, { force: true }).catch(() => {}),
-        rm(dir.maxLife, { force: true }).catch(() => {}),
-        rm(dir.deadline, { force: true }).catch(() => {}),
-        rm(dir.os, { force: true }).catch(() => {}),
-        rm(dir.knownHosts, { force: true }).catch(() => {}),
-        rm(dir.sshdKnownHosts, { force: true }).catch(() => {}),
-        rm(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
-          force: true,
-        }).catch(() => {}),
-        rm(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
-          force: true,
-        }).catch(() => {}),
-      ]).then(() => {}),
+    yield* Effect.all(
+      [
+        deps.fs.remove(dir.key, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(`${dir.key}.pub`, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.maxLife, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.deadline, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.os, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.knownHosts, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(dir.sshdKnownHosts, { force: true }).pipe(Effect.ignore),
+        deps.fs
+          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
+            force: true,
+          })
+          .pipe(Effect.ignore),
+        deps.fs
+          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
+            force: true,
+          })
+          .pipe(Effect.ignore),
+      ],
+      { concurrency: "unbounded" },
     );
     return present ? ("deleted" as const) : ("gone" as const);
   });
@@ -451,22 +461,30 @@ export const makeNamespaceProvider = (deps: {
     let hostRef: SandboxRef | undefined;
     let deadlineAt = 0;
     const cleanup = Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        Promise.all([
-          rm(keyBase, { force: true }).catch(() => {}),
-          rm(`${keyBase}.pub`, { force: true }).catch(() => {}),
-        ]).then(() => {}),
+      yield* Effect.all(
+        [
+          deps.fs.remove(keyBase, { force: true }).pipe(Effect.ignore),
+          deps.fs.remove(`${keyBase}.pub`, { force: true }).pipe(Effect.ignore),
+        ],
+        { concurrency: "unbounded" },
       );
       if (hostRef !== undefined) {
         const hostPaths = yield* refPaths(hostRef);
-        yield* Effect.promise(() =>
-          Promise.all([
-            rm(hostPaths.key, { force: true }).catch(() => {}),
-            rm(`${hostPaths.key}.pub`, { force: true }).catch(() => {}),
-            rm(hostPaths.maxLife, { force: true }).catch(() => {}),
-            rm(hostPaths.os, { force: true }).catch(() => {}),
-            rm(hostPaths.sshdKnownHosts, { force: true }).catch(() => {}),
-          ]).then(() => {}),
+        yield* Effect.all(
+          [
+            deps.fs.remove(hostPaths.key, { force: true }).pipe(Effect.ignore),
+            deps.fs
+              .remove(`${hostPaths.key}.pub`, { force: true })
+              .pipe(Effect.ignore),
+            deps.fs
+              .remove(hostPaths.maxLife, { force: true })
+              .pipe(Effect.ignore),
+            deps.fs.remove(hostPaths.os, { force: true }).pipe(Effect.ignore),
+            deps.fs
+              .remove(hostPaths.sshdKnownHosts, { force: true })
+              .pipe(Effect.ignore),
+          ],
+          { concurrency: "unbounded" },
         );
         yield* api
           .destroy(hostRef.region ?? "", hostRef.name)
@@ -512,11 +530,13 @@ export const makeNamespaceProvider = (deps: {
       const maxLifeSeconds = Math.floor(
         (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
       );
-      const sshKey = (yield* Effect.tryPromise({
-        try: () => readFile(`${keyBase}.pub`, "utf8"),
-        catch: (cause) =>
-          fail(`could not read the host key: ${describe(cause)}`),
-      })).trim();
+      const sshKey = (yield* deps.fs
+        .readFileString(`${keyBase}.pub`)
+        .pipe(
+          Effect.mapError((error) =>
+            fail(`could not read the host key: ${platformReason(error)}`),
+          ),
+        )).trim();
       const spanText = yield* createTimeout.pipe(
         Effect.mapError((error) => fail(error.message)),
       );
@@ -623,21 +643,23 @@ export const makeNamespaceProvider = (deps: {
         );
       }
       const hostPaths = yield* refPaths(ref);
-      yield* Effect.tryPromise({
-        try: async () => {
-          await rename(keyBase, hostPaths.key);
-          await rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
-          await writeFile(hostPaths.maxLife, String(maxLifeSeconds), {
-            mode: 0o600,
-          });
-          await writeFile(hostPaths.deadline, String(deadlineAt), {
-            mode: 0o600,
-          });
-          await writeFile(hostPaths.os, req.os, { mode: 0o600 });
-        },
-        catch: (cause) =>
-          fail(`could not store the host key: ${describe(cause)}`),
-      });
+      yield* Effect.gen(function* () {
+        yield* deps.fs.rename(keyBase, hostPaths.key);
+        yield* deps.fs.rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
+        yield* deps.fs.writeFileString(
+          hostPaths.maxLife,
+          String(maxLifeSeconds),
+          { mode: 0o600 },
+        );
+        yield* deps.fs.writeFileString(hostPaths.deadline, String(deadlineAt), {
+          mode: 0o600,
+        });
+        yield* deps.fs.writeFileString(hostPaths.os, req.os, { mode: 0o600 });
+      }).pipe(
+        Effect.mapError((error) =>
+          fail(`could not store the host key: ${platformReason(error)}`),
+        ),
+      );
       // The host's own Deadline starts when Namespace finishes creating it, so
       // it can sit later than the Max life; a detached process destroys
       // the host at the absolute Max life.
@@ -658,11 +680,11 @@ export const makeNamespaceProvider = (deps: {
             if (left > 0) {
               const pushedAt =
                 Math.floor(Date.now() / 1000) + Math.min(durationSeconds, left);
-              yield* Effect.promise(() =>
-                writeFile(hostPaths.deadline, String(pushedAt), {
+              yield* deps.fs
+                .writeFileString(hostPaths.deadline, String(pushedAt), {
                   mode: 0o600,
-                }).catch(() => {}),
-              );
+                })
+                .pipe(Effect.ignore);
               yield* api
                 .extend(region, instanceId, Math.min(durationSeconds, left))
                 .pipe(Effect.ignore);
