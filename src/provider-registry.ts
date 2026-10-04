@@ -7,11 +7,13 @@ import { spawnDetached } from "./spawn-detached.ts";
 
 // Each Provider's code, and the libraries it needs, loads only when a
 // command first asks for that Provider.
-const importFor = <A>(provider: string, load: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: load,
-    catch: (cause) => new ProviderError({ provider, reason: String(cause) }),
-  });
+const importFor = Effect.fn("providerRegistry.importFor")(
+  <A>(provider: string, load: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: load,
+      catch: (cause) => new ProviderError({ provider, reason: String(cause) }),
+    }),
+);
 
 export const ProvidersLive = Layer.effect(
   Providers,

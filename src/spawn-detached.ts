@@ -3,21 +3,19 @@ import { Effect } from "effect";
 import { entryPath } from "./entry.ts";
 import { ProviderError } from "./errors.ts";
 
-export const spawnDetached = (
-  provider: string,
-  rel: string,
-  args: ReadonlyArray<string>,
-) =>
-  Effect.try({
-    try: () => {
-      spawn(process.execPath, [entryPath(rel), ...args], {
-        detached: true,
-        stdio: "ignore",
-      }).unref();
-    },
-    catch: (cause) =>
-      new ProviderError({
-        provider,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  });
+export const spawnDetached = Effect.fn("spawnDetached.spawnDetached")(
+  (provider: string, rel: string, args: ReadonlyArray<string>) =>
+    Effect.try({
+      try: () => {
+        spawn(process.execPath, [entryPath(rel), ...args], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      },
+      catch: (cause) =>
+        new ProviderError({
+          provider,
+          reason: cause instanceof Error ? cause.message : String(cause),
+        }),
+    }),
+);

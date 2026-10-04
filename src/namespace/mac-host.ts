@@ -70,12 +70,13 @@ interface MacRequest {
   readonly size: Size;
 }
 
-const makeMacFolders = (link: Link) =>
+const makeMacFolders = Effect.fn("macHost.makeMacFolders")((link: Link) =>
   step(
     link,
     "making the proofbox folders",
     `sudo -n mkdir -p ${MAC_STATE_DIR} ${MAC_STATE_DIR}/recordings /opt/proofbox/tools ${MAC_WORK_DIR} && sudo -n touch ${MAC_STATE_DIR}/action-log.jsonl && sudo -n chown -R runner:staff ${MAC_STATE_DIR} /opt/proofbox ${MAC_WORK_DIR}`,
-  );
+  ),
+);
 
 // The labels and the first Deadline, as the Docker Provider writes them for
 // a container, so `sandboxInfoFromLabels` reads both. Written last: until
@@ -293,8 +294,9 @@ const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
   `trap "" HUP; /usr/bin/log stream --style compact --predicate 'sender == "kernel" AND eventMessage BEGINSWITH "memorystatus: killing_"' >> ${MEMORY_KILLS} 2>/dev/null < /dev/null & echo $! > ${MEMORY_WATCH_PID}`,
 ])}`;
 
-const watchMemory = (link: Link) =>
-  step(link, "starting the memory watcher", startMemoryWatcher);
+const watchMemory = Effect.fn("macHost.watchMemory")((link: Link) =>
+  step(link, "starting the memory watcher", startMemoryWatcher),
+);
 
 export const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
   link: Link,
@@ -580,7 +582,9 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
   );
 });
 
-export const writeMacDeadline = (link: Link, seconds: number) =>
-  link.run(
-    `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
-  );
+export const writeMacDeadline = Effect.fn("macHost.writeMacDeadline")(
+  (link: Link, seconds: number) =>
+    link.run(
+      `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
+    ),
+);

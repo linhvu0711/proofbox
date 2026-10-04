@@ -37,16 +37,18 @@ class BadRequestError extends Data.TaggedError("BadRequestError") {
   }
 }
 
-const writeFrame = (socket: Socket, frame: unknown) =>
-  Effect.async<void, SocketWriteError>((resume) => {
-    socket.write(`${JSON.stringify(frame)}\n`, (error) =>
-      resume(
-        error
-          ? Effect.fail(new SocketWriteError({ detail: error.message }))
-          : Effect.void,
-      ),
-    );
-  });
+const writeFrame = Effect.fn("keeper.writeFrame")(
+  (socket: Socket, frame: unknown) =>
+    Effect.async<void, SocketWriteError>((resume) => {
+      socket.write(`${JSON.stringify(frame)}\n`, (error) =>
+        resume(
+          error
+            ? Effect.fail(new SocketWriteError({ detail: error.message }))
+            : Effect.void,
+        ),
+      );
+    }),
+);
 
 const frameOf = (event: ExecEvent) => {
   switch (event._tag) {

@@ -80,8 +80,9 @@ const markCreate = Effect.fn("localSandboxes.markCreate")(function* (
   return path;
 });
 
-const unmarkCreate = (path: string) =>
-  Effect.promise(() => rm(path, { force: true }).catch(() => {}));
+const unmarkCreate = Effect.fn("localSandboxes.unmarkCreate")((path: string) =>
+  Effect.promise(() => rm(path, { force: true }).catch(() => {})),
+);
 
 // The marks of the creates still running for one Provider. A mark whose
 // process is gone, or whose process id now belongs to a process that

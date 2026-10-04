@@ -111,11 +111,13 @@ export const resolvePace = Effect.fn("pixel.resolvePace")(function* (
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
-export const writeOut = (path: string, bytes: Uint8Array) =>
-  Effect.tryPromise({
-    try: () => writeFile(path, bytes),
-    catch: (cause) => new OutFileError({ path, reason: describe(cause) }),
-  });
+export const writeOut = Effect.fn("pixel.writeOut")(
+  (path: string, bytes: Uint8Array) =>
+    Effect.tryPromise({
+      try: () => writeFile(path, bytes),
+      catch: (cause) => new OutFileError({ path, reason: describe(cause) }),
+    }),
+);
 
 export const runPixel = Effect.fn("pixel.runPixel")(function* (
   rawId: string,
