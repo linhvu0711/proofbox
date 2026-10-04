@@ -4,6 +4,7 @@ import { Effect, Option, Schema, Stream } from "effect";
 import { NotGithubRepoError, ProviderError, platformReason } from "./errors.ts";
 
 export const GithubRepo = Schema.Struct({
+  root: Schema.String,
   owner: Schema.String,
   repo: Schema.String,
   remote: Schema.String,
@@ -64,6 +65,8 @@ export const readGithubRepo = Effect.fn("githubRepo.readGithubRepo")(function* (
   if ((yield* git("rev-parse", "--is-inside-work-tree")).code !== 0) {
     return yield* bad("is not a git folder");
   }
+  const root = (yield* git("rev-parse", "--show-toplevel")).text.trim();
+  folder = root;
   const symbolic = yield* git("symbolic-ref", "-q", "--short", "HEAD");
   const branch =
     symbolic.code === 0
@@ -124,6 +127,7 @@ export const readGithubRepo = Effect.fn("githubRepo.readGithubRepo")(function* (
   );
   const added = yield* git("ls-files", "-z", "--others", "--exclude-standard");
   return GithubRepo.make({
+    root,
     ...parsed.value,
     remote,
     base,

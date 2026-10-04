@@ -134,7 +134,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       options.envFile === undefined
         ? undefined
         : yield* readEnvFile(options.envFile);
-    const folder = options.work ?? (harness === undefined ? undefined : ".");
+    const folder = check?.repo.root ?? options.work;
     const files =
       folder === undefined
         ? undefined
@@ -211,6 +211,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           check.repo,
           check.githubToken,
           [harness.home, ...harness.homeEntries],
+          reused,
         );
       }
       if (folder !== undefined && files !== undefined) {
@@ -219,7 +220,9 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           resolve(folder),
           files,
           workLimit,
-          check === undefined ? undefined : { dirty: check.repo.dirty },
+          check === undefined || reused
+            ? undefined
+            : { dirty: check.repo.dirty },
         );
       }
       if (reused) {

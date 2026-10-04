@@ -204,6 +204,52 @@ it("a Snapshot saved by create --harness holds no login and no profile file", as
   }).toEqual({ code: 0, saved: true, count: 1, leaked: false, profile: false });
 });
 
+it("a reused Snapshot keeps what the Setup script wrote to a tracked file", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub({ "a.txt": "original\n" });
+  fakeLogins(env);
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshots-"));
+  trackTempDir(dir);
+  const script = join(env.env.HOME ?? "", "setup.sh");
+  writeFileSync(script, "#!/bin/sh\nprintf 'setup changed\\n' > a.txt\n");
+  const args = [...createArgs(folder, "fake"), "--setup", script];
+  const options = {
+    set: {
+      PROOFBOX_GITHUB_URL: `file://${github}`,
+      PROOFBOX_FAKE_SNAPSHOTS: dir,
+    },
+  };
+  // When
+  const first = await runCli(env, args, options);
+  const second = await runCli(env, args, options);
+  const id = second.stdout.trim();
+  const file = await runCli(env, ["exec", id, "--", "cat", "a.txt"]);
+  const log = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "log",
+    "-1",
+    "--format=%s",
+  ]);
+  // Then
+  expect({
+    first: first.exitCode,
+    second: second.exitCode,
+    reused: second.stderr.includes("proofbox: Snapshot reused, Fingerprint "),
+    file: file.stdout,
+    log: log.stdout,
+  }).toEqual({
+    first: 0,
+    second: 0,
+    reused: true,
+    file: "setup changed\n",
+    log: "init\n",
+  });
+});
+
 it("a command after create --harness sees the Harness login and GH_TOKEN", async () => {
   // Given
   const env = makeEnv();
@@ -322,6 +368,37 @@ it("create --harness puts the Caller's uncommitted changes, deletions, and new f
     added: "n\n",
     status: " M a.txt\n D b.txt\n?? n.txt\n",
   });
+});
+
+it("create --harness from a subfolder of the repo uses the whole repo", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub({ "sub/a.txt": "a\n" });
+  writeFileSync(join(folder, "sub", "a.txt"), "a2\n");
+  writeFileSync(join(folder, "sub", "new.txt"), "n\n");
+  fakeLogins(env);
+  // When
+  const created = await runCli(env, createArgs(join(folder, "sub"), "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const changed = await runCli(env, ["exec", id, "--", "cat", "sub/a.txt"]);
+  const added = await runCli(env, ["exec", id, "--", "cat", "sub/new.txt"]);
+  const misplaced = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    "if [ -e new.txt ]; then echo there; else echo none; fi",
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    changed: changed.stdout,
+    added: added.stdout,
+    misplaced: misplaced.stdout,
+  }).toEqual({ code: 0, changed: "a2\n", added: "n\n", misplaced: "none\n" });
 });
 
 it("create --harness puts the Caller's unpushed commit on top of the branch from GitHub", async () => {

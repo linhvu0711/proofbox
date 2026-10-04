@@ -115,14 +115,19 @@ fi
 PROOFBOX_GITHUB_TOKEN=$token GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$PROOFBOX_GITHUB_TOKEN"; }; f' fetch -q "$url" "+refs/heads/$base:refs/remotes/origin/$base"`;
 
 const PLACE = `set -eu
-head=$1; branch=$2; base=$3; url=$4; upstream=$5; bundle=$6
+head=$1; branch=$2; base=$3; url=$4; upstream=$5; bundle=$6; reused=$7
 if [ "$bundle" = yes ]; then
   dir=$(mktemp -d)
   cat > "$dir/commits.bundle"
   git fetch -q "$dir/commits.bundle" HEAD
   rm -rf "$dir"
 fi
-if [ -n "$branch" ]; then git checkout -q -f -B "$branch" "$head"; else git checkout -q -f --detach "$head"; fi
+if [ "$reused" = yes ]; then
+  if [ -n "$branch" ]; then git checkout -q -B "$branch"; else git checkout -q --detach; fi
+  git reset -q "$head"
+else
+  if [ -n "$branch" ]; then git checkout -q -f -B "$branch" "$head"; else git checkout -q -f --detach "$head"; fi
+fi
 git remote add origin "$url" 2>/dev/null || git remote set-url origin "$url"
 if [ -n "$branch" ] && [ "$upstream" = yes ]; then git branch -q --set-upstream-to="origin/$base" "$branch"; fi`;
 
@@ -133,6 +138,7 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
     repo: GithubRepo,
     token: Redacted.Redacted<string>,
     ignore: ReadonlyArray<string>,
+    reused: boolean,
   ) {
     const providers = yield* Providers;
     const id = yield* resolveSandboxId(rawId, providers);
@@ -215,6 +221,7 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
               url,
               repo.upstream ? "yes" : "no",
               bundle === undefined ? "no" : "yes",
+              reused ? "yes" : "no",
             ],
             bundle === undefined ? undefined : Stream.make(bundle),
           );
