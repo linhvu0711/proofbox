@@ -346,8 +346,6 @@ export interface Provider {
     | LoginExpiredError
     | BadLoginsFileError
   >;
-  readonly stateDir: (name: string) => string;
-  readonly secretsDir: (name: string, os: Os) => string;
   readonly sandboxFolders: (name: string, os: Os) => SandboxFolders;
   readonly connect: (
     sandbox: SandboxRef,
