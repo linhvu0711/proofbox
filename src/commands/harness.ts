@@ -90,9 +90,17 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
       );
     const copied: string[] = [];
     const missing: string[] = [];
+    const skipped: string[] = [];
     for (const part of entry.profile.parts) {
       if (yield* fs.exists(join(from, part)).pipe(Effect.mapError(failed))) {
-        yield* copyResolved(entry.name, join(from, part), join(path, part));
+        skipped.push(
+          ...(yield* copyResolved(
+            entry.name,
+            join(from, part),
+            join(path, part),
+            from,
+          )),
+        );
         copied.push(part);
       } else {
         missing.push(part);
@@ -111,6 +119,11 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
           `Not on this laptop, skipped: ${missing.join(", ")}.\n`,
         );
       }
+    }
+    if (skipped.length > 0) {
+      yield* output.err(
+        `Skipped links that lead nowhere or loop: ${skipped.sort().join(", ")}.\n`,
+      );
     }
     yield* output.err(
       `Not copied: ${entry.profile.leftOut}. They can point to programs on this laptop or hold tokens.\n`,

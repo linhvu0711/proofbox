@@ -204,6 +204,32 @@ describe("harness profile init", () => {
     expect(readFileSync(join(profile, "CLAUDE.md"), "utf8")).toBe("# sandbox");
   });
 
+  it("harness profile init claude skips and names links that lead nowhere or loop", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(join(from, "skills", "ok"), { recursive: true });
+    writeFileSync(join(from, "CLAUDE.md"), "# mine");
+    writeFileSync(join(from, "skills", "ok", "SKILL.md"), "ok");
+    symlinkSync("../../gone", join(from, "skills", "old"));
+    symlinkSync(".", join(from, "skills", "loop"));
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+      timeout: 10_000,
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: `${profile}\n`,
+      stderr: `Copied from ${from}: CLAUDE.md, skills/.\nNot on this laptop, skipped: agents/.\nSkipped links that lead nowhere or loop: skills/loop, skills/old.\nNot copied: settings.json, hooks, plugins, and MCP config. They can point to programs on this laptop or hold tokens.\n`,
+      exitCode: 0,
+    });
+    expect(readdirSync(join(profile, "skills"))).toEqual(["ok"]);
+    expect(readlinkSync(join(from, "skills", "old"))).toBe("../../gone");
+  });
+
   it("harness profile init foo names the known Harnesses", async () => {
     // Given
     const env = makeEnv();
