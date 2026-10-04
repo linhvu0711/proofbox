@@ -1,7 +1,7 @@
 import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Chunk,
   Config,
@@ -528,6 +528,7 @@ export type SshForward = (
 export const makeSshForward = (
   api: NamespaceApi,
   executor: CommandExecutor.CommandExecutor,
+  fs: FileSystem.FileSystem,
   sshBin = "ssh",
 ): SshForward => {
   let seq = 0;
@@ -548,7 +549,9 @@ export const makeSshForward = (
         ),
       );
       const target = `${cfg.username}@${cfg.endpoint}`;
-      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name })).dir;
+      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      )).dir;
       const pid = process.pid;
       const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
       const hosts = `${key}.known-hosts`;

@@ -17,6 +17,7 @@ import { keeperPaths } from "../src/keeper/paths.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeOpenLink, makeSshForward } from "../src/namespace/ssh-link.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const PEM = Buffer.from(
   "-----BEGIN OPENSSH PRIVATE KEY-----\nZm9v\n-----END OPENSSH PRIVATE KEY-----\n",
@@ -182,6 +183,7 @@ describe("ssh link", () => {
         const forward = yield* makeSshForward(
           api,
           executor,
+          nodeFs,
           fake.path,
         )({ name: "abc123def4567", region: "us" }, 5900);
         // Then: GetSSHConfig was asked in the id's region for its instance

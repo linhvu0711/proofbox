@@ -55,7 +55,7 @@ export const startKeeper = (id: string, provider: Provider) =>
     const socket = (yield* keeperPaths({
       provider: resolved.prefix,
       name: fileStem(resolved),
-    })).socket;
+    }).pipe(Effect.provide(NodeContext.layer))).socket;
     for (let i = 0; i < 250 && !(yield* keeperAnswers(socket)); i++) {
       yield* TestServices.provideLive(Effect.sleep("20 millis"));
     }

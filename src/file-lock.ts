@@ -1,11 +1,5 @@
-import { mkdir, rm } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { Data, Duration, Effect, Schedule } from "effect";
-
-const hasCode = (cause: unknown, code: string) =>
-  typeof cause === "object" &&
-  cause !== null &&
-  "code" in cause &&
-  cause.code === code;
 
 // A held lock, inside this file only: it tells the retry to try again.
 class LockHeldError extends Data.TaggedError("LockHeldError") {}
@@ -23,21 +17,17 @@ export const withFileLock =
   }) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | LockError, R> => {
-    const take = Effect.tryPromise({
-      try: async () => {
-        try {
-          await mkdir(options.dir);
-          return true;
-        } catch (cause) {
-          if (hasCode(cause, "EEXIST")) {
-            return false;
-          }
-          throw cause;
-        }
-      },
-      catch: (cause) => options.failed(cause),
-    }).pipe(
+  ): Effect.Effect<A, E | LockError, R | FileSystem.FileSystem> => {
+    const take = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.makeDirectory(options.dir),
+    ).pipe(
+      Effect.as(true),
+      Effect.catchTag("SystemError", (error) =>
+        error.reason === "AlreadyExists"
+          ? Effect.succeed(false)
+          : Effect.fail(error),
+      ),
+      Effect.mapError((error) => options.failed(error)),
       Effect.filterOrFail(
         (held) => held,
         () => new LockHeldError(),
@@ -57,8 +47,8 @@ export const withFileLock =
       ),
       () => effect,
       () =>
-        Effect.promise(() =>
-          rm(options.dir, { recursive: true, force: true }).catch(() => {}),
-        ),
+        Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.remove(options.dir, { recursive: true, force: true }),
+        ).pipe(Effect.ignore),
     );
   };

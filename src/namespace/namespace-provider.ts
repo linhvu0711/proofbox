@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Cause,
   Chunk,
@@ -123,6 +123,8 @@ export const makeNamespaceProvider = (deps: {
   readonly login: ProviderLogin;
   readonly openLink: OpenLink;
   readonly forward: SshForward;
+  // File access, handed in when the Provider is built.
+  readonly fs: FileSystem.FileSystem;
   readonly dockerFor: (link: Link) => DockerClient;
   readonly spawnDetached: (
     provider: string,
@@ -148,7 +150,10 @@ export const makeNamespaceProvider = (deps: {
     provider: "namespace",
     id: () => sandboxId(ref),
   });
-  const paths = (name: string) => keeperPaths({ provider: "ns", name });
+  const paths = (name: string) =>
+    keeperPaths({ provider: "ns", name }).pipe(
+      Effect.provideService(FileSystem.FileSystem, deps.fs),
+    );
   const refPaths = (ref: SandboxRef) => paths(fileStem(ref));
   // The container takes the first six characters of the instance id.
   const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
@@ -194,7 +199,11 @@ export const makeNamespaceProvider = (deps: {
       return yield* madeElsewhere(ref);
     }
     if (owner === "keeper") {
-      yield* Effect.forkScoped(pushHostLife(api, ref, 120));
+      yield* Effect.forkScoped(
+        pushHostLife(api, ref, 120).pipe(
+          Effect.provideService(FileSystem.FileSystem, deps.fs),
+        ),
+      );
     } else {
       yield* deps.spawnDetached("namespace", "namespace/extend-main", [
         ref.region ?? "",
@@ -937,7 +946,7 @@ export const makeNamespaceProvider = (deps: {
           idle: req.idle,
           maxLifeAt: new Date(maxLifeSeconds * 1000),
           size,
-        });
+        }).pipe(Effect.provideService(FileSystem.FileSystem, deps.fs));
       }
       const registry = yield* readTenant(link);
       const version = yield* baseImageVersion(
@@ -1057,7 +1066,9 @@ export const makeNamespaceProvider = (deps: {
       yield* recordDeadline(deadlineFile, deadline);
       if (seconds > 0) {
         const pushing = yield* Effect.forkIn(
-          pushHostLife(api, ref, seconds),
+          pushHostLife(api, ref, seconds).pipe(
+            Effect.provideService(FileSystem.FileSystem, deps.fs),
+          ),
           scope,
         );
         const last = yield* Ref.getAndSet(lastHostPush, Option.some(pushing));
@@ -1267,6 +1278,7 @@ export const makeNamespaceProvider = (deps: {
         complete: completeLogin,
         makeToken: (session, request) =>
           tenantTokenFor(session).pipe(
+            Effect.provideService(FileSystem.FileSystem, deps.fs),
             Effect.flatMap((tenant) => api.makeToken(tenant, request)),
           ),
       },

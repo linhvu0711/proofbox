@@ -1,10 +1,11 @@
-import { Command, CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import { SystemError } from "@effect/platform/Error";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { describe, expect } from "vitest";
 import { ownStart, stillRuns } from "../src/keeper/paths.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 // Linux reads a start time from /proc and never runs ps.
 const onLinux = process.platform === "linux";
@@ -65,7 +66,10 @@ describe("Keeper start times", () => {
         const result = yield* stillRuns(
           process.pid,
           "Thu Jan  1 00:00:00 1970",
-        ).pipe(Effect.provideService(CommandExecutor.CommandExecutor, noPs));
+        ).pipe(
+          Effect.provideService(CommandExecutor.CommandExecutor, noPs),
+          Effect.provideService(FileSystem.FileSystem, nodeFs),
+        );
         // Then
         const ps = seen[0];
         expect(

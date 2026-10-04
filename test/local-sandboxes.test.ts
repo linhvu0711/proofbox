@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandExecutor } from "@effect/platform";
+import type { CommandExecutor, FileSystem } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
@@ -98,7 +98,7 @@ const makeMachine = (
       effect: Effect.Effect<
         A,
         E,
-        KeeperClient | CommandExecutor.CommandExecutor
+        KeeperClient | CommandExecutor.CommandExecutor | FileSystem.FileSystem
       >,
     ) =>
       effect.pipe(

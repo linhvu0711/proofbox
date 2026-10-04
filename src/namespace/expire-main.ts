@@ -1,11 +1,12 @@
 import { access, readFile } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { fileStem } from "../sandbox-id.ts";
 import { makeNamespaceApi } from "./namespace-api.ts";
-import { namespaceLogin } from "./namespace-login.ts";
+import { makeNamespaceLogin } from "./namespace-login.ts";
 
 const region = process.argv[2];
 const instanceId = process.argv[3];
@@ -26,7 +27,9 @@ instanceId === undefined ||
 at <= 0
   ? Effect.void
   : Effect.gen(function* () {
-      const api = makeNamespaceApi({ login: namespaceLogin });
+      const api = makeNamespaceApi({
+        login: makeNamespaceLogin(yield* FileSystem.FileSystem),
+      });
       const paths = yield* keeperPaths({
         provider: "ns",
         name: fileStem({ name: instanceId, region }),

@@ -207,7 +207,9 @@ const capturedErr = Effect.gen(function* () {
 // before it reads the request, as a Keeper does when its Sandbox is gone.
 const droppingKeeper = (name: string) =>
   Effect.gen(function* () {
-    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    const { socket } = yield* keeperPaths({ provider: "fake", name }).pipe(
+      Effect.provide(NodeContext.layer),
+    );
     yield* Effect.acquireRelease(
       Effect.async<Server>((resume) => {
         const server = createServer((client) => client.destroy());
@@ -225,7 +227,9 @@ const droppingKeeper = (name: string) =>
 // it shuts down after it read the request.
 const closingKeeper = (name: string, reply?: string) =>
   Effect.gen(function* () {
-    const { socket } = yield* keeperPaths({ provider: "fake", name });
+    const { socket } = yield* keeperPaths({ provider: "fake", name }).pipe(
+      Effect.provide(NodeContext.layer),
+    );
     const requests = { count: 0 };
     yield* Effect.acquireRelease(
       Effect.async<Server>((resume) => {

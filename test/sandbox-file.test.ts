@@ -39,6 +39,7 @@ const api: NamespaceApi = {
 const namespace = () =>
   makeNamespaceProvider({
     executor: nodeExecutor,
+    fs: nodeFs,
     api,
     login: Effect.die("unused"),
     openLink: () => Effect.die("unused"),

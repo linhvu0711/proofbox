@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 // function, and FileSystem has no sync `exists`.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Command, CommandExecutor, type FileSystem } from "@effect/platform";
+import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Clock,
   Duration,
@@ -63,6 +63,7 @@ const fakeChecks = (dir: string): ChecksShell => ({
 });
 
 export const makeFakeProvider = (options: {
+  // File access, handed in when the Provider is built.
   readonly fs: FileSystem.FileSystem;
   readonly root: string;
   readonly watch: "process" | "none";
@@ -298,7 +299,9 @@ export const makeFakeProvider = (options: {
       );
     }
     if (options.marksLocal === true) {
-      const maxLife = (yield* keeperPaths({ provider: "fake", name })).maxLife;
+      const maxLife = (yield* keeperPaths({ provider: "fake", name }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      )).maxLife;
       yield* fs
         .writeFileString(
           maxLife,
@@ -420,8 +423,12 @@ export const makeFakeProvider = (options: {
     // there or already gone, as Namespace drops its runtime files.
     const unmark =
       options.marksLocal === true
-        ? Effect.flatMap(keeperPaths({ provider: "fake", name }), (paths) =>
-            fs.remove(paths.maxLife, { force: true }).pipe(Effect.ignore),
+        ? Effect.flatMap(
+            keeperPaths({ provider: "fake", name }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fs),
+            ),
+            (paths) =>
+              fs.remove(paths.maxLife, { force: true }).pipe(Effect.ignore),
           )
         : Effect.void;
     // An Unfinished Sandbox is there to delete, as its Namespace host is.

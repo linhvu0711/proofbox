@@ -40,6 +40,7 @@ import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 import { nodeExecutor } from "./support/executor.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 type CreateRequest = CreateReq;
 
@@ -151,6 +152,7 @@ const makeMac = (
     });
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
+      fs: nodeFs,
       api,
       login: Effect.succeed({
         token: Redacted.make("token"),
