@@ -18,7 +18,7 @@ import {
   TENANT_2,
   toSnakeKeys,
 } from "./support/fake-namespace-api.ts";
-import { nodeFileSystem } from "./support/node-file-system.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-login-"));
@@ -96,7 +96,7 @@ describe("Namespace login", () => {
           ),
         );
         const api = makeNamespaceApi({
-          login: makeNamespaceLogin(nodeFileSystem),
+          login: makeNamespaceLogin(nodeFs),
         });
         // When
         const made = yield* api
@@ -141,7 +141,7 @@ describe("Namespace login", () => {
       const runtime = tempDir();
       const ns = yield* Effect.promise(() => fakeNamespace(fakeSignin()));
       // When
-      const hand = yield* makeNamespaceLogin(nodeFileSystem).pipe(
+      const hand = yield* makeNamespaceLogin(nodeFs).pipe(
         config(home, runtime, ns),
       );
       // Then
@@ -171,11 +171,11 @@ describe("Namespace login", () => {
         }),
       );
       // When
-      const first = yield* makeNamespaceLogin(nodeFileSystem).pipe(
+      const first = yield* makeNamespaceLogin(nodeFs).pipe(
         config(home, runtime, ns),
       );
       yield* TestClock.adjust("2 minutes");
-      const second = yield* makeNamespaceLogin(nodeFileSystem).pipe(
+      const second = yield* makeNamespaceLogin(nodeFs).pipe(
         config(home, runtime, ns),
       );
       // Then
@@ -209,7 +209,7 @@ describe("Namespace login", () => {
         }),
       );
       // When
-      const error = yield* makeNamespaceLogin(nodeFileSystem).pipe(
+      const error = yield* makeNamespaceLogin(nodeFs).pipe(
         config(home, runtime, ns),
         Effect.flip,
       );

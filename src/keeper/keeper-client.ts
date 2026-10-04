@@ -1,3 +1,4 @@
+import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { runCommand } from "../command-checks.ts";
@@ -178,223 +179,242 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
     effect: Effect.gen(function* () {
       const providers = yield* Providers;
       const output = yield* CliOutput;
+      // File access for the Keeper's files, taken once when the client is
+      // built.
+      const fs = yield* FileSystem.FileSystem;
 
-      const start = Effect.fn("KeeperClient.start")(function* (rawId: string) {
-        yield* startKeeper(yield* resolveSandboxId(rawId, providers));
-      });
+      const start = Effect.fn("KeeperClient.start")(
+        function* (rawId: string) {
+          yield* startKeeper(yield* resolveSandboxId(rawId, providers));
+        },
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
 
-      const exec = Effect.fn("KeeperClient.exec")(function* (
-        rawId: string,
-        argv: ReadonlyArray<string>,
-        options?: KeeperExecOptions,
-      ) {
-        const id = yield* resolveSandboxId(rawId, providers);
-        const provider = id.provider;
-        const socket = yield* reachKeeper(
-          id,
-          options?.stdin === undefined
-            ? { exec: [...argv] }
-            : { exec: [...argv], stdin: true },
-        );
-        if (socket._tag === "None") {
-          yield* output.err(
-            "proofbox: Keeper did not start; running without it\n",
+      const exec = Effect.fn("KeeperClient.exec")(
+        function* (
+          rawId: string,
+          argv: ReadonlyArray<string>,
+          options?: KeeperExecOptions,
+        ) {
+          const id = yield* resolveSandboxId(rawId, providers);
+          const provider = id.provider;
+          const socket = yield* reachKeeper(
+            id,
+            options?.stdin === undefined
+              ? { exec: [...argv] }
+              : { exec: [...argv], stdin: true },
           );
-          return yield* execDirect(provider, id, argv, options);
-        }
-        const feederError = yield* Ref.make<StdinError | undefined>(undefined);
-        if (options?.stdin !== undefined) {
-          const stdin = options.stdin;
-          yield* Effect.forkScoped(
-            Stream.runForEach(stdin, (chunk) =>
-              writeFrame(
-                socket.value,
-                id.provider.name,
-                encodeInput({ in: Buffer.from(chunk).toString("base64") }),
-              ),
-            ).pipe(
-              Effect.zipRight(
+          if (socket._tag === "None") {
+            yield* output.err(
+              "proofbox: Keeper did not start; running without it\n",
+            );
+            return yield* execDirect(provider, id, argv, options);
+          }
+          const feederError = yield* Ref.make<StdinError | undefined>(
+            undefined,
+          );
+          if (options?.stdin !== undefined) {
+            const stdin = options.stdin;
+            yield* Effect.forkScoped(
+              Stream.runForEach(stdin, (chunk) =>
                 writeFrame(
                   socket.value,
                   id.provider.name,
-                  encodeInput({ end: true }),
+                  encodeInput({ in: Buffer.from(chunk).toString("base64") }),
                 ),
-              ),
-              Effect.catchAll((error) =>
+              ).pipe(
                 Effect.zipRight(
-                  Ref.set(feederError, error),
-                  Effect.sync(() => {
-                    socket.value.destroy();
-                  }),
+                  writeFrame(
+                    socket.value,
+                    id.provider.name,
+                    encodeInput({ end: true }),
+                  ),
+                ),
+                Effect.catchAll((error) =>
+                  Effect.zipRight(
+                    Ref.set(feederError, error),
+                    Effect.sync(() => {
+                      socket.value.destroy();
+                    }),
+                  ),
                 ),
               ),
-            ),
-          );
-        }
-        const lostOnCommand = (reason: string) =>
-          Effect.flatMap(readAfterLost(provider, id, reason), () =>
-            Effect.fail(new ProviderError({ provider: provider.name, reason })),
-          );
-        const events: Stream.Stream<ExecEvent, KeeperExecError> = readReplies(
-          socket.value,
-          id.provider.name,
-        ).pipe(
-          Stream.mapEffect(
-            (
-              frame,
-            ): Effect.Effect<ExecEvent, ProviderError | SandboxGoneError> => {
-              if ("out" in frame) {
-                return Effect.succeed({
-                  _tag: "Stdout",
-                  bytes: new Uint8Array(Buffer.from(frame.out, "base64")),
-                });
-              }
-              if ("err" in frame) {
-                return Effect.succeed({
-                  _tag: "Stderr",
-                  bytes: new Uint8Array(Buffer.from(frame.err, "base64")),
-                });
-              }
-              if ("exit" in frame) {
-                return Effect.succeed(
-                  frame.kills === undefined
-                    ? { _tag: "Exit", code: frame.exit }
-                    : {
-                        _tag: "Exit",
-                        code: frame.exit,
-                        kills: {
-                          before: frame.kills[0],
-                          after: frame.kills[1],
-                        },
-                      },
-                );
-              }
-              if ("gone" in frame) {
-                return Effect.fail(new SandboxGoneError({ id: frame.gone }));
-              }
-              return Effect.fail(
-                new ProviderError({
-                  provider: provider.name,
-                  reason:
-                    "fail" in frame
-                      ? frame.fail
-                      : "the Keeper sent Sandbox info for a command",
-                }),
-              );
-            },
-          ),
-          Stream.catchAll((frameError) =>
-            Stream.unwrap(
-              Ref.get(feederError).pipe(
-                Effect.map(
-                  (fed): Stream.Stream<never, KeeperExecError> =>
-                    fed !== undefined
-                      ? Stream.fail(fed)
-                      : frameError instanceof KeeperLostError
-                        ? Stream.fromEffect(
-                            lostOnCommand(
-                              frameError.reason ??
-                                "Keeper closed the connection before the command exited",
-                            ),
-                          )
-                        : Stream.fail(frameError),
-                ),
+            );
+          }
+          const lostOnCommand = (reason: string) =>
+            Effect.flatMap(readAfterLost(provider, id, reason), () =>
+              Effect.fail(
+                new ProviderError({ provider: provider.name, reason }),
               ),
-            ),
-          ),
-        );
-        // The give-up frame leaves before the stream's release destroys
-        // the socket, so the Keeper knows the Caller gave up, not left.
-        return withAnswerLimit(
-          events,
-          options?.limit,
-          writeFrame(
+            );
+          const events: Stream.Stream<ExecEvent, KeeperExecError> = readReplies(
             socket.value,
             id.provider.name,
-            encodeInput({ giveUp: true }),
-          ).pipe(Effect.ignore),
-        );
-      });
+          ).pipe(
+            Stream.mapEffect(
+              (
+                frame,
+              ): Effect.Effect<ExecEvent, ProviderError | SandboxGoneError> => {
+                if ("out" in frame) {
+                  return Effect.succeed({
+                    _tag: "Stdout",
+                    bytes: new Uint8Array(Buffer.from(frame.out, "base64")),
+                  });
+                }
+                if ("err" in frame) {
+                  return Effect.succeed({
+                    _tag: "Stderr",
+                    bytes: new Uint8Array(Buffer.from(frame.err, "base64")),
+                  });
+                }
+                if ("exit" in frame) {
+                  return Effect.succeed(
+                    frame.kills === undefined
+                      ? { _tag: "Exit", code: frame.exit }
+                      : {
+                          _tag: "Exit",
+                          code: frame.exit,
+                          kills: {
+                            before: frame.kills[0],
+                            after: frame.kills[1],
+                          },
+                        },
+                  );
+                }
+                if ("gone" in frame) {
+                  return Effect.fail(new SandboxGoneError({ id: frame.gone }));
+                }
+                return Effect.fail(
+                  new ProviderError({
+                    provider: provider.name,
+                    reason:
+                      "fail" in frame
+                        ? frame.fail
+                        : "the Keeper sent Sandbox info for a command",
+                  }),
+                );
+              },
+            ),
+            Stream.catchAll((frameError) =>
+              Stream.unwrap(
+                Ref.get(feederError).pipe(
+                  Effect.map(
+                    (fed): Stream.Stream<never, KeeperExecError> =>
+                      fed !== undefined
+                        ? Stream.fail(fed)
+                        : frameError instanceof KeeperLostError
+                          ? Stream.fromEffect(
+                              lostOnCommand(
+                                frameError.reason ??
+                                  "Keeper closed the connection before the command exited",
+                              ),
+                            )
+                          : Stream.fail(frameError),
+                  ),
+                ),
+              ),
+            ),
+          );
+          // The give-up frame leaves before the stream's release destroys
+          // the socket, so the Keeper knows the Caller gave up, not left.
+          return withAnswerLimit(
+            events,
+            options?.limit,
+            writeFrame(
+              socket.value,
+              id.provider.name,
+              encodeInput({ giveUp: true }),
+            ).pipe(Effect.ignore),
+          );
+        },
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
 
-      const stop = Effect.fn("KeeperClient.stop")(function* (rawId: string) {
-        yield* stopKeeper(yield* resolveSandboxId(rawId, providers));
-      });
+      const stop = Effect.fn("KeeperClient.stop")(
+        function* (rawId: string) {
+          yield* stopKeeper(yield* resolveSandboxId(rawId, providers));
+        },
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
 
       // The Sandbox as the warm Keeper read it at connect, with no remote
       // call. With no Keeper up, the Provider reads it, as before the
       // Keeper did the checks; the command after starts the Keeper.
-      const info = Effect.fn("KeeperClient.info")(function* (rawId: string) {
-        const id = yield* resolveSandboxId(rawId, providers);
-        const paths = yield* keeperPaths({
-          provider: id.prefix,
-          name: fileStem(id),
-        });
-        // No Keeper took the request: none answers, or one left before it
-        // read it.
-        const socket = yield* connectKeeper(
-          paths.socket,
-          id.provider.name,
-        ).pipe(
-          Effect.option,
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.succeedNone,
-              onSome: (socket) =>
-                writeFrame(
-                  socket,
-                  id.provider.name,
-                  encodeRequest({ info: true }),
-                ).pipe(
-                  Effect.as(Option.some(socket)),
-                  Effect.catchIf(
-                    (error) => keeperAway(error),
-                    () => Effect.succeedNone,
+      const info = Effect.fn("KeeperClient.info")(
+        function* (rawId: string) {
+          const id = yield* resolveSandboxId(rawId, providers);
+          const paths = yield* keeperPaths({
+            provider: id.prefix,
+            name: fileStem(id),
+          });
+          // No Keeper took the request: none answers, or one left before it
+          // read it.
+          const socket = yield* connectKeeper(
+            paths.socket,
+            id.provider.name,
+          ).pipe(
+            Effect.option,
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeedNone,
+                onSome: (socket) =>
+                  writeFrame(
+                    socket,
+                    id.provider.name,
+                    encodeRequest({ info: true }),
+                  ).pipe(
+                    Effect.as(Option.some(socket)),
+                    Effect.catchIf(
+                      (error) => keeperAway(error),
+                      () => Effect.succeedNone,
+                    ),
                   ),
-                ),
-            }),
-          ),
-        );
-        if (Option.isNone(socket)) {
-          return yield* id.provider.get(id);
-        }
-        // The reader never ends before a last frame, so an empty reply
-        // counts as a close.
-        const reply = yield* readReplies(socket.value, id.provider.name).pipe(
-          Stream.runHead,
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new KeeperLostError({})),
-              onSome: (frame) => Effect.succeed(frame),
-            }),
-          ),
-          Effect.catchTag("KeeperLostError", (lost) =>
-            Effect.map(
-              readAfterLost(
-                id.provider,
-                id,
-                lost.reason ??
-                  "Keeper closed the connection before it answered",
-              ),
-              (info) => ({ info }),
+              }),
             ),
-          ),
-        );
-        if ("info" in reply) {
-          return reply.info;
-        }
-        // A Keeper from an older build cannot read the request and would
-        // run commands with no Deadline push: stop it, so the next command
-        // starts a new one.
-        if ("fail" in reply && reply.fail === "bad request") {
-          yield* stopKeeper(id);
-          return yield* id.provider.get(id);
-        }
-        return yield* new ProviderError({
-          provider: id.provider.name,
-          reason:
-            "fail" in reply ? reply.fail : "the Keeper sent no Sandbox info",
-        });
-      });
+          );
+          if (Option.isNone(socket)) {
+            return yield* id.provider.get(id);
+          }
+          // The reader never ends before a last frame, so an empty reply
+          // counts as a close.
+          const reply = yield* readReplies(socket.value, id.provider.name).pipe(
+            Stream.runHead,
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(new KeeperLostError({})),
+                onSome: (frame) => Effect.succeed(frame),
+              }),
+            ),
+            Effect.catchTag("KeeperLostError", (lost) =>
+              Effect.map(
+                readAfterLost(
+                  id.provider,
+                  id,
+                  lost.reason ??
+                    "Keeper closed the connection before it answered",
+                ),
+                (info) => ({ info }),
+              ),
+            ),
+          );
+          if ("info" in reply) {
+            return reply.info;
+          }
+          // A Keeper from an older build cannot read the request and would
+          // run commands with no Deadline push: stop it, so the next command
+          // starts a new one.
+          if ("fail" in reply && reply.fail === "bad request") {
+            yield* stopKeeper(id);
+            return yield* id.provider.get(id);
+          }
+          return yield* new ProviderError({
+            provider: id.provider.name,
+            reason:
+              "fail" in reply ? reply.fail : "the Keeper sent no Sandbox info",
+          });
+        },
+        Effect.provideService(FileSystem.FileSystem, fs),
+      );
 
       return { start, exec, info, stop };
     }),

@@ -1,6 +1,7 @@
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
   ConfigProvider,
@@ -44,6 +45,7 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 // The Compute API, faked: each call lands in `calls` as
 // `<method> <region> <instanceId?>`; `create` answers the id below.
@@ -315,6 +317,7 @@ const makeProvider = (
 ) =>
   makeNamespaceProvider({
     executor: nodeExecutor,
+    fs: nodeFs,
     api: fakeApi(calls, options),
     login: Effect.succeed({
       token: Redacted.make("token"),
@@ -445,7 +448,7 @@ describe("Namespace Provider", () => {
       const paths = yield* keeperPaths({
         provider: "ns",
         name: "us:abc123def4567",
-      });
+      }).pipe(Effect.provide(NodeContext.layer));
       writeFileSync(paths.os, "linux\n");
       // When
       const info = yield* provider.get({ name: "abc123def4567", region: "us" });
@@ -463,7 +466,7 @@ describe("Namespace Provider", () => {
       const paths = yield* keeperPaths({
         provider: "ns",
         name: "us:abc123def4567",
-      });
+      }).pipe(Effect.provide(NodeContext.layer));
       writeFileSync(paths.os, "macos\n");
       // When
       const error = yield* provider
@@ -497,6 +500,7 @@ describe("Namespace Provider", () => {
         >([]);
         const provider = makeNamespaceProvider({
           executor: nodeExecutor,
+          fs: nodeFs,
           api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
           login: Effect.die("unused"),
           openLink: () => Effect.succeed(link),
@@ -1217,7 +1221,7 @@ describe("Namespace Provider", () => {
       const paths = yield* keeperPaths({
         provider: "ns",
         name: "us:mac000000000a",
-      });
+      }).pipe(Effect.provide(NodeContext.layer));
       writeFileSync(
         paths.sshdKnownHosts,
         "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
@@ -1463,6 +1467,7 @@ const warmNamespace = (
     };
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
+      fs: nodeFs,
       api: {
         ...api,
         extend: (region, instanceId, seconds) =>
@@ -1511,7 +1516,7 @@ const warmNamespace = (
     const paths = yield* keeperPaths({
       provider: "ns",
       name: "us:abc123def4567",
-    });
+    }).pipe(Effect.provide(NodeContext.layer));
     writeFileSync(paths.maxLife, "4102444800\n");
     const layers = yield* startKeeper(NS_ID, provider);
     counts.run = 0;

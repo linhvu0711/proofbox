@@ -1,7 +1,14 @@
+import type { PlatformError } from "@effect/platform/Error";
 import { Data, type Duration } from "effect";
 import { formatWait } from "./format-time.ts";
 import type { Os } from "./provider.ts";
 import { formatMb } from "./upload/max-size.ts";
+
+// The text of a file failure for a ProviderError reason: the Node message,
+// as it read before file access went through `FileSystem`, whose own
+// message puts the reason, module, method, and path in front of it.
+export const platformReason = (error: PlatformError) =>
+  error.description ?? error.message;
 
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;

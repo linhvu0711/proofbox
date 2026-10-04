@@ -1,10 +1,9 @@
-import { chmod, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Command, type CommandExecutor } from "@effect/platform";
+import { Command, FileSystem } from "@effect/platform";
 import { Config, Effect } from "effect";
 import { captureCommand } from "../command-events.ts";
-import { ProviderError } from "../errors.ts";
+import { ProviderError, platformReason } from "../errors.ts";
 
 export interface KeeperPaths {
   readonly dir: string;
@@ -40,19 +39,19 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
         }),
     ),
   );
-  yield* Effect.tryPromise({
-    try: async () => {
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      // mkdir's mode only applies to a new dir; the socket must stay
-      // unreachable by other local users even for a preexisting dir.
-      await chmod(dir, 0o700);
-    },
-    catch: (cause) =>
-      new ProviderError({
-        provider: id.provider,
-        reason: cause instanceof Error ? cause.message : String(cause),
-      }),
-  });
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 }).pipe(
+    // mkdir's mode only applies to a new dir; the socket must stay
+    // unreachable by other local users even for a preexisting dir.
+    Effect.zipRight(fs.chmod(dir, 0o700)),
+    Effect.mapError(
+      (error) =>
+        new ProviderError({
+          provider: id.provider,
+          reason: platformReason(error),
+        }),
+    ),
+  );
   const stem = `${id.provider}-${id.name}`;
   return {
     dir,
@@ -78,50 +77,42 @@ type ProcessStart =
   | { readonly _tag: "Gone" }
   | { readonly _tag: "Unknown" };
 
-const hasErrorCode = (cause: unknown, code: string) =>
-  typeof cause === "object" &&
-  cause !== null &&
-  "code" in cause &&
-  cause.code === code;
-
-const startOf = Effect.fn("paths.startOf")(
-  (
-    pid: number,
-  ): Effect.Effect<ProcessStart, never, CommandExecutor.CommandExecutor> =>
-    process.platform === "linux"
-      ? Effect.promise(() =>
-          readFile(`/proc/${pid}/stat`, "utf8").then(
-            (stat): ProcessStart => {
-              // Field 22, counted past the parenthesized name, which may
-              // hold spaces.
-              const at = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-              return at === undefined
-                ? { _tag: "Unknown" }
-                : { _tag: "Started", at };
-            },
-            (cause): ProcessStart =>
-              hasErrorCode(cause, "ENOENT")
-                ? { _tag: "Gone" }
-                : { _tag: "Unknown" },
-          ),
-        )
-      : captureCommand(
-          // The C locale keeps the text the same in every process.
-          Command.make("/bin/ps", "-o", "lstart=", "-p", String(pid)).pipe(
-            Command.env({ LC_ALL: "C" }, { extendEnv: false }),
-          ),
-        ).pipe(
-          Effect.map(({ exitCode, stdout }): ProcessStart => {
-            const at = stdout.trim();
-            return at !== ""
-              ? { _tag: "Started", at }
-              : exitCode !== 0
-                ? { _tag: "Gone" }
-                : { _tag: "Unknown" };
-          }),
-          Effect.orElseSucceed((): ProcessStart => ({ _tag: "Unknown" })),
+const startOf = Effect.fn("paths.startOf")(function* (pid: number) {
+  if (process.platform === "linux") {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs.readFileString(`/proc/${pid}/stat`).pipe(
+      Effect.map((stat): ProcessStart => {
+        // Field 22, counted past the parenthesized name, which may
+        // hold spaces.
+        const at = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+        return at === undefined ? { _tag: "Unknown" } : { _tag: "Started", at };
+      }),
+      Effect.catchAll((error) =>
+        Effect.succeed<ProcessStart>(
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? { _tag: "Gone" }
+            : { _tag: "Unknown" },
         ),
-);
+      ),
+    );
+  }
+  return yield* captureCommand(
+    // The C locale keeps the text the same in every process.
+    Command.make("/bin/ps", "-o", "lstart=", "-p", String(pid)).pipe(
+      Command.env({ LC_ALL: "C" }, { extendEnv: false }),
+    ),
+  ).pipe(
+    Effect.map(({ exitCode, stdout }): ProcessStart => {
+      const at = stdout.trim();
+      return at !== ""
+        ? { _tag: "Started", at }
+        : exitCode !== 0
+          ? { _tag: "Gone" }
+          : { _tag: "Unknown" };
+    }),
+    Effect.orElseSucceed((): ProcessStart => ({ _tag: "Unknown" })),
+  );
+});
 
 // Whether this user runs a process with this id. A create mark sits in
 // this user's runtime dir, so its create ran as this user: EPERM is some

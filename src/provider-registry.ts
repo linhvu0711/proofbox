@@ -52,7 +52,8 @@ export const ProvidersLive = Layer.effect(
             executor,
             login: namespaceLogin,
             openLink: link.makeOpenLink(namespaceApi, executor),
-            forward: link.makeSshForward(namespaceApi, executor),
+            forward: link.makeSshForward(namespaceApi, executor, fs),
+            fs,
             dockerFor: (sandbox) =>
               client.makeDockerClient(executor, { ssh: sandbox.ssh }),
             spawnDetached,
