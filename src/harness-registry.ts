@@ -1,11 +1,19 @@
-import { Duration, Effect, Layer, Option } from "effect";
+import { Config, Duration, Effect, Layer, Option } from "effect";
 import { HarnessError } from "./errors.ts";
 import { type HarnessEntry, Harnesses } from "./harness.ts";
 
+const importFor = Effect.fn("harnessRegistry.importFor")(
+  <A>(harness: string, load: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: load,
+      catch: (cause) => new HarnessError({ harness, reason: String(cause) }),
+    }),
+);
+
 export const HarnessesLive = Layer.effect(
   Harnesses,
-  Effect.sync(() => {
-    return new Map<string, HarnessEntry>([
+  Effect.gen(function* () {
+    const harnesses = new Map<string, HarnessEntry>([
       [
         "claude",
         {
@@ -47,5 +55,25 @@ export const HarnessesLive = Layer.effect(
         },
       ],
     ]);
+    const fakeRoot = yield* Config.option(Config.string("PROOFBOX_FAKE_ROOT"));
+    if (Option.isSome(fakeRoot)) {
+      const fake = yield* Effect.cached(
+        importFor("fake", () => import("./fake/fake-harness.ts")).pipe(
+          Effect.map((module) => module.makeFakeHarness()),
+        ),
+      );
+      harnesses.set("fake", {
+        name: "fake",
+        login: {
+          envName: "PROOFBOX_FAKE_HARNESS_TOKEN",
+          what: "token",
+          placeholder: "<token>",
+          howToMake: "Make one with `fake-harness token`",
+          lifetime: Option.none(),
+        },
+        load: fake,
+      });
+    }
+    return harnesses;
   }),
 );

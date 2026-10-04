@@ -42,6 +42,46 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("harness login fake and auth status run through the CLI in tests", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const login = await runCli(env, ["harness", "login", "fake"], {
+      input: "f4ke\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    const status = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(login.stderr).toBe(
+      "Saved Harness login for fake with token …f4ke.\n",
+    );
+    expect(login.exitCode).toBe(0);
+    expect(status.stdout).toBe(
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness fake  token …f4ke, saved login\n",
+    );
+    expect(status.exitCode).toBe(0);
+  });
+
+  it("harness login foo in tests names the fake Harness too", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "foo"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      'No Harness named "foo". Harnesses: claude, codex, fake.\n',
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("auth status shows one line per saved Harness login", async () => {
     // Given
     const env = makeEnv();
