@@ -103,12 +103,23 @@ export const checkHarnessCreate = Effect.fn(
 
 const FETCH = `set -eu
 IFS= read -r token
-url=$1; base=$2; shift 2
+url=$1; base=$2; keep=$3; shift 3
 if [ ! -d .git ]; then
   entries=$(ls -A)
   git init -q
   {
-    if [ -n "$entries" ]; then printf '%s\n' "$entries" | sed 's|^|/|'; fi
+    if [ -n "$entries" ]; then
+      printf '%s\n' "$entries" | while IFS= read -r entry; do
+        kept=no; left=$keep
+        for name in "$@"; do
+          if [ "$left" -eq 0 ]; then break; fi
+          if [ "$entry" = "$name" ]; then kept=yes; break; fi
+          left=$((left - 1))
+        done
+        if [ "$kept" = no ]; then printf '/%s\n' "$entry"; fi
+      done
+    fi
+    shift "$keep"
     for entry in "$@"; do printf '/%s\n' "$entry"; done
   } >> .git/info/exclude
 fi
@@ -123,6 +134,7 @@ if [ "$bundle" = yes ]; then
   rm -rf "$dir"
 fi
 if [ "$reused" = yes ]; then
+  if ! git rev-parse -q --verify HEAD >/dev/null 2>&1; then git reset -q "$head"; fi
   if [ -n "$branch" ]; then git checkout -q -B "$branch"; else git checkout -q --detach; fi
   git reset -q "$head"
 else
@@ -139,6 +151,7 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
     token: Redacted.Redacted<string>,
     ignore: ReadonlyArray<string>,
     reused: boolean,
+    keep: ReadonlyArray<string>,
   ) {
     const providers = yield* Providers;
     const id = yield* resolveSandboxId(rawId, providers);
@@ -160,7 +173,17 @@ export const cloneWorkFolder = Effect.fn("harnessSandbox.cloneWorkFolder")(
         Effect.gen(function* () {
           const fetched = yield* runKeepingTail(
             rawId,
-            ["sh", "-c", FETCH, "sh", url, repo.base, ...ignore],
+            [
+              "sh",
+              "-c",
+              FETCH,
+              "sh",
+              url,
+              repo.base,
+              keep.length.toString(),
+              ...keep,
+              ...ignore,
+            ],
             Stream.make(new TextEncoder().encode(`${Redacted.value(token)}\n`)),
           );
           if (fetched.code !== 0) {

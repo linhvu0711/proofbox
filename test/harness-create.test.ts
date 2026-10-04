@@ -370,6 +370,80 @@ it("create --harness puts the Caller's uncommitted changes, deletions, and new f
   });
 });
 
+it.each(["branch", "detached HEAD"])(
+  "a Harness create that reuses a Snapshot from a plain create puts the branch on top and hides no repo folder (%s)",
+  async (head) => {
+    // Given
+    const env = makeEnv();
+    const { folder, github } = makeGithub({ "src/a.txt": "a\n" });
+    if (head === "detached HEAD") git(folder, "checkout", "-q", "--detach");
+    fakeLogins(env);
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshots-"));
+    trackTempDir(dir);
+    const script = join(env.env.HOME ?? "", "setup.sh");
+    writeFileSync(script, "#!/bin/sh\necho ran > ran.txt\n");
+    const options = {
+      set: {
+        PROOFBOX_GITHUB_URL: `file://${github}`,
+        PROOFBOX_FAKE_SNAPSHOTS: dir,
+      },
+    };
+    // When
+    const first = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      options,
+    );
+    const second = await runCli(
+      env,
+      [...createArgs(folder, "fake"), "--setup", script],
+      options,
+    );
+    const id = second.stdout.trim();
+    const log = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "git",
+      "log",
+      "-1",
+      "--format=%s",
+    ]);
+    const status = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "echo n > src/new.txt && git status --porcelain",
+    ]);
+    // Then
+    expect({
+      first: first.exitCode,
+      second: second.exitCode,
+      reused: second.stderr.includes("proofbox: Snapshot reused, Fingerprint "),
+      log: log.stdout,
+      status: status.stdout,
+    }).toEqual({
+      first: 0,
+      second: 0,
+      reused: true,
+      log: "init\n",
+      status: "?? src/new.txt\n",
+    });
+  },
+);
+
 it("create --harness from a subfolder of the repo uses the whole repo", async () => {
   // Given
   const env = makeEnv();

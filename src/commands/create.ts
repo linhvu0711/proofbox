@@ -203,7 +203,8 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       if (
         harness !== undefined &&
         check !== undefined &&
-        folder !== undefined
+        folder !== undefined &&
+        files !== undefined
       ) {
         yield* cloneWorkFolder(
           id,
@@ -212,6 +213,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           check.githubToken,
           [harness.home, ...harness.homeEntries],
           reused,
+          [...new Set(files.map((file) => file.path.split("/", 1).join("")))],
         );
       }
       if (folder !== undefined && files !== undefined) {
