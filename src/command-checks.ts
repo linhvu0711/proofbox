@@ -47,6 +47,10 @@ export interface Transport {
   >;
   readonly gone: () => SandboxGoneError;
   readonly fail: (reason: string) => ProviderError;
+  // The host side of each Deadline push, for a Provider whose Sandbox lives
+  // on a host with a life of its own. The command run gives it the pushed
+  // Deadline before the command and at its Exit.
+  readonly pushHost?: (deadline: Date) => Effect.Effect<void>;
 }
 
 export const pushFailedTrailer = (detail: string) =>
@@ -261,10 +265,19 @@ export const runCommand = (
     return withRunningPush(connection)(connection.exec(argv, options));
   }
   const transport = connection.transport;
+  const push = transport.pushHost;
+  const pushHost =
+    push === undefined
+      ? Effect.void
+      : Effect.flatMap(pushedDeadline(connection.info), (deadline) =>
+          push(deadline),
+        );
   return withRunningPush(connection)(
     Stream.unwrap(
-      Effect.map(Clock.currentTimeMillis, (nowMillis) =>
-        splitChecks(
+      Effect.gen(function* () {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        yield* pushHost;
+        return splitChecks(
           transport.call(
             checksArgv(
               checksScript(transport.shell),
@@ -279,8 +292,12 @@ export const runCommand = (
             pushFailed: (detail) =>
               transport.fail(`could not write the Deadline: ${detail}`),
           },
-        ),
-      ),
+        ).pipe(
+          Stream.tap((event) =>
+            event._tag === "Exit" ? pushHost : Effect.void,
+          ),
+        );
+      }),
     ),
   );
 };
