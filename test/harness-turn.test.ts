@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
@@ -57,8 +57,10 @@ it("a second prompt resumes the Harness session", async () => {
   await runCli(env, ["harness", "prompt", id, "recall"]);
   const result = await runCli(env, ["harness", "wait", id]);
   // Then
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toBe("done\nremembers: make hello.txt\n");
+  expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
+    code: 0,
+    stdout: "done\nremembers: make hello.txt\n",
+  });
 });
 
 it("two harness waits on one ended Turn print the same result", async () => {
@@ -79,8 +81,68 @@ it("two harness waits on one ended Turn print the same result", async () => {
     { code: 0, stdout: "done\ndid: make hello.txt\n" },
     { code: 0, stdout: "done\ndid: make hello.txt\n" },
   ]);
-  const saved = join(env.root, id.slice(5), "state", "turn", "result");
-  expect(readFileSync(saved, "utf8")).toBe("0\ndone\ndid: make hello.txt\n");
+});
+
+it("an empty prompt is refused before the Sandbox is read", async () => {
+  // Given
+  const env = makeEnv();
+  // When
+  const result = await runCli(env, ["harness", "prompt", "fake:nope00", "   "]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr: "The prompt is empty; nothing was started.\n",
+  });
+});
+
+it("harness prompt on a Sandbox made without --harness is refused", async () => {
+  // Given
+  const env = makeEnv();
+  const created = await runCli(env, [
+    "create",
+    "--os",
+    "linux",
+    "--provider",
+    "fake",
+  ]);
+  const id = created.stdout.trim();
+  // When
+  const result = await runCli(env, ["harness", "prompt", id, "hi"]);
+  // Then
+  expect(result.exitCode).toBe(125);
+  expect(result.stderr).toBe(
+    `Sandbox ${id} was made without --harness; make one with proofbox create --harness claude.\n`,
+  );
+  expect(existsSync(join(env.root, id.slice(5), "state", "turn"))).toBe(false);
+});
+
+it("harness wait before any prompt says no turn has run yet", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr: `no turn has run yet; run proofbox harness prompt ${id} "<prompt>"\n`,
+  });
+});
+
+it("a prompt while a Turn runs is refused", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 20"]);
+  // When
+  const result = await runCli(env, ["harness", "prompt", id, "hi"]);
+  // Then
+  expect(result.exitCode).toBe(125);
+  expect(result.stderr).toBe(
+    "a turn is running; run proofbox harness wait or proofbox harness stop\n",
+  );
 });
 
 it("harness wait moves the Deadline while it runs and not after it is killed", async () => {

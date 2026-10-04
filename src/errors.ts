@@ -48,6 +48,36 @@ export class HarnessProfileExistsError extends Data.TaggedError(
   }
 }
 
+export class EmptyPromptError extends Data.TaggedError("EmptyPromptError") {
+  override get message() {
+    return "The prompt is empty; nothing was started.";
+  }
+}
+
+export class NotHarnessSandboxError extends Data.TaggedError(
+  "NotHarnessSandboxError",
+)<{
+  readonly id: string;
+}> {
+  override get message() {
+    return `Sandbox ${this.id} was made without --harness; make one with proofbox create --harness claude.`;
+  }
+}
+
+export class NoTurnYetError extends Data.TaggedError("NoTurnYetError")<{
+  readonly id: string;
+}> {
+  override get message() {
+    return `no turn has run yet; run proofbox harness prompt ${this.id} "<prompt>"`;
+  }
+}
+
+export class TurnRunningError extends Data.TaggedError("TurnRunningError") {
+  override get message() {
+    return "a turn is running; run proofbox harness wait or proofbox harness stop";
+  }
+}
+
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
 )<{

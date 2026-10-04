@@ -3,11 +3,15 @@ import { FileSystem } from "@effect/platform";
 import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
+  EmptyPromptError,
   HarnessError,
   HarnessProfileExistsError,
   NoHarnessTokenError,
   NoSuchHarnessError,
+  NoTurnYetError,
+  NotHarnessSandboxError,
   platformReason,
+  TurnRunningError,
 } from "../errors.ts";
 import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
@@ -74,12 +78,11 @@ export const promptHarness = Effect.fn("harness.promptHarness")(function* (
   prompt: string,
   model: Option.Option<string>,
 ) {
+  if (prompt.trim() === "") return yield* new EmptyPromptError();
   const turn = yield* readTurn(rawId, 0);
   if (Option.isNone(turn.harness))
-    return yield* new HarnessError({
-      harness: rawId,
-      reason: "no Harness in this Sandbox",
-    });
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (turn.state._tag === "Running") return yield* new TurnRunningError();
   const entry = yield* harnessEntryFor(turn.harness.value);
   const harness = yield* entry.load;
   let session = turn.session;
@@ -102,10 +105,7 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
   while (true) {
     const turn = yield* readTurn(rawId, 5);
     if (Option.isNone(turn.harness))
-      return yield* new HarnessError({
-        harness: rawId,
-        reason: "no Harness in this Sandbox",
-      });
+      return yield* new NotHarnessSandboxError({ id: rawId });
     if (turn.state._tag === "Running") continue;
     if (turn.state._tag === "Saved") {
       yield* output.out(turn.state.text);
@@ -113,10 +113,7 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       return;
     }
     if (turn.state._tag !== "Ended")
-      return yield* new HarnessError({
-        harness: turn.harness.value,
-        reason: "no Turn has run yet",
-      });
+      return yield* new NoTurnYetError({ id: rawId });
     const entry = yield* harnessEntryFor(turn.harness.value);
     const harness = yield* entry.load;
     const result = yield* settleTurn(rawId, turn.files, harness, turn.state);
