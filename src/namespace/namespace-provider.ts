@@ -24,8 +24,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { checksArgv, checksScript, splitChecks } from "../command-checks.ts";
-import { parseSpan, pushedDeadline } from "../deadline.ts";
+import { parseSpan } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -33,7 +32,7 @@ import {
 } from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
 import {
-  LINUX_SCRIPT,
+  LINUX_CHECKS,
   makeDockerProvider,
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
@@ -113,8 +112,6 @@ const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
 const exec = promisify(execFile);
-
-const MAC_SCRIPT = checksScript(macChecks());
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
 // container at its Deadline (`--rm`) while the host lives on a while, so
@@ -1065,7 +1062,6 @@ export const makeNamespaceProvider = (deps: {
     // no extend-main, every 2 s.
     const read = mac ? readMac(link, ref) : getWith(link, ref);
     const info = yield* read;
-    const script = mac ? MAC_SCRIPT : LINUX_SCRIPT;
     // A Mac runs the script over the link itself; Linux in its container.
     const call = mac
       ? (argv: ReadonlyArray<string>, options?: ExecOptions) =>
@@ -1076,7 +1072,6 @@ export const makeNamespaceProvider = (deps: {
           return (argv: ReadonlyArray<string>, options?: ExecOptions) =>
             docker.execStream(container, argv, options, "root");
         })();
-    const pushNow = Effect.flatMap(pushedDeadline(info), pushHost);
     return {
       info,
       get: read,
@@ -1091,28 +1086,16 @@ export const makeNamespaceProvider = (deps: {
             : writeLinuxDeadline(link, ref, seconds),
         );
       }),
-      // One call over the link per command: the script pushes the
-      // Sandbox's Deadline and counts kills around it (ADR 0015). The
-      // host side of each push stays here.
-      exec: (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const nowMillis = yield* Clock.currentTimeMillis;
-            yield* pushNow;
-            return splitChecks(
-              call(checksArgv(script, info, nowMillis, argv), options),
-              {
-                gone: () => gone(ref),
-                pushFailed: (detail) =>
-                  fail(`could not write the Deadline: ${detail}`),
-              },
-            ).pipe(
-              Stream.tap((event) =>
-                event._tag === "Exit" ? pushNow : Effect.void,
-              ),
-            );
-          }),
-        ),
+      // One call over the link per command: the command run's script
+      // pushes the Sandbox's Deadline and counts kills around it (ADR
+      // 0015). The host side of each push stays here, as `pushHost`.
+      transport: {
+        shell: mac ? macChecks() : LINUX_CHECKS,
+        call,
+        gone: () => gone(ref),
+        fail: (reason: string) => fail(reason),
+        pushHost: (deadline: Date) => Effect.asVoid(pushHost(deadline)),
+      },
     };
   });
 

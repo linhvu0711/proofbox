@@ -38,10 +38,6 @@ afterEach(() => {
 });
 
 const bytes = (text: string) => new TextEncoder().encode(text);
-const out = (text: string): ExecEvent => ({
-  _tag: "Stdout",
-  bytes: bytes(text),
-});
 const err = (text: string): ExecEvent => ({
   _tag: "Stderr",
   bytes: bytes(text),
@@ -443,28 +439,44 @@ describe("command run", () => {
     }),
   );
 
-  it.effect("a connection that runs its own checks keeps its events", () =>
-    Effect.gen(function* () {
-      // Given: the Namespace stand-in shape, with its own exec
-      const info = infoWith(new Date(10_800_000));
-      const done: ExecEvent = {
-        _tag: "Exit",
-        code: 0,
-        kills: { before: 1, after: 1 },
-      };
-      const connection: Connection = {
-        info,
-        get: Effect.succeed(info),
-        extend: () => Effect.void,
-        exec: () => Stream.make(out("hi\n"), done),
-      };
-      // When
-      const events = yield* collect(runCommand(connection, ["true"]));
-      // Then
-      expect(events).toEqual([
-        { _tag: "Stdout", text: "hi\n" },
-        { _tag: "Exit", code: 0, kills: { before: 1, after: 1 } },
-      ]);
-    }),
+  it.effect(
+    "a command pushes the host's life before it and after its exit",
+    () =>
+      Effect.gen(function* () {
+        // Given: a transport that logs each host push and the command itself
+        const log: Array<string> = [];
+        const info = infoWith(new Date(10_800_000));
+        const connection: Connection = {
+          info,
+          get: Effect.succeed(info),
+          extend: () => Effect.void,
+          transport: {
+            shell: { push: ":", kills: "echo 0", run: '"$@"' },
+            call: () =>
+              Stream.concat(
+                Stream.execute(Effect.sync(() => log.push("command"))),
+                Stream.make(
+                  err(CHECKS_START),
+                  err(checksTrailer(0, 0)),
+                  exit(0),
+                ),
+              ),
+            gone: () => gone(),
+            fail: (reason) => fail(reason),
+            pushHost: (deadline) =>
+              Effect.sync(() => {
+                log.push(`host ${deadline.toISOString()}`);
+              }),
+          },
+        };
+        // When
+        yield* Stream.runDrain(runCommand(connection, ["true"]));
+        // Then
+        expect(log).toEqual([
+          "host 1970-01-01T00:15:00.000Z",
+          "command",
+          "host 1970-01-01T00:15:00.000Z",
+        ]);
+      }),
   );
 });

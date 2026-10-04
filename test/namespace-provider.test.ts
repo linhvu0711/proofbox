@@ -1427,10 +1427,13 @@ const stderrEvent = (text: string): ExecEvent => ({
 // A Linux Namespace Sandbox (idle 15m) with its Keeper in this process.
 // The link and its Docker count each call; `execStream` answers a command
 // with the checks' start mark, a trailer, and exit 0, unless the test
-// gives its own answer. Each API call lands in `calls`, an `extend` with
-// its seconds, and each detached spawn in `spawned`.
+// gives its own answer, which can read the API calls so far. Each API call
+// lands in `calls`, an `extend` with its seconds, and each detached spawn
+// in `spawned`.
 const warmNamespace = (
-  answer: () => Stream.Stream<ExecEvent, ProviderUnavailableError> = () =>
+  answer: (
+    calls: Ref.Ref<ReadonlyArray<string>>,
+  ) => Stream.Stream<ExecEvent, ProviderUnavailableError> = () =>
     Stream.fromIterable<ExecEvent>([
       stderrEvent(CHECKS_START),
       stderrEvent(checksTrailer(0, 0)),
@@ -1448,7 +1451,7 @@ const warmNamespace = (
       ...base,
       execStream: () => {
         counts.execStream += 1;
-        return answer();
+        return answer(calls);
       },
       execText: (container, user, argv) => {
         counts.execText += 1;
@@ -1540,6 +1543,43 @@ describe("Namespace Provider through the Keeper", () => {
       yield* eventually(pushed);
       expect(yield* pushed).toBe(true);
     }).pipe(runtimeConfig()),
+  );
+
+  it.scoped(
+    "a command through the Keeper pushes the host's life once before and once after it",
+    () =>
+      Effect.gen(function* () {
+        // Given: the command ends only once the push before it has landed;
+        // a newer push cancels one that has not
+        const pushes = (calls: Ref.Ref<ReadonlyArray<string>>) =>
+          Effect.map(Ref.get(calls), (all) =>
+            all.filter((line) => line === "extend us abc123def4567 900"),
+          );
+        const ns = yield* warmNamespace((calls) =>
+          Stream.concat(
+            Stream.execute(
+              eventually(
+                Effect.map(pushes(calls), (lines) => lines.length >= 1),
+              ),
+            ),
+            Stream.fromIterable<ExecEvent>([
+              stderrEvent(CHECKS_START),
+              stderrEvent(checksTrailer(0, 0)),
+              { _tag: "Exit", code: 0 },
+            ]),
+          ),
+        );
+        // When
+        yield* execInSandbox(NS_ID, ["true"]).pipe(Effect.provide(ns.layers));
+        yield* eventually(
+          Effect.map(pushes(ns.calls), (lines) => lines.length >= 2),
+        );
+        // Then
+        expect(yield* pushes(ns.calls)).toEqual([
+          "extend us abc123def4567 900",
+          "extend us abc123def4567 900",
+        ]);
+      }).pipe(runtimeConfig()),
   );
 
   it.scoped("the Keeper and its gone-watch start no extend-main", () =>
