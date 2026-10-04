@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -6,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -228,6 +230,129 @@ describe("harness profile init", () => {
     });
     expect(readdirSync(join(profile, "skills"))).toEqual(["ok"]);
     expect(readlinkSync(join(from, "skills", "old"))).toBe("../../gone");
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "harness profile init claude fails on an unreadable folder instead of skipping it",
+    async () => {
+      // Given
+      const env = makeEnv();
+      const home = makeHome();
+      const locked = join(home, ".claude", "skills", "locked");
+      mkdirSync(locked, { recursive: true });
+      writeFileSync(join(home, ".claude", "CLAUDE.md"), "# mine");
+      chmodSync(locked, 0o000);
+      try {
+        // When
+        const result = await runCli(
+          env,
+          ["harness", "profile", "init", "claude"],
+          {
+            set: { HOME: home },
+          },
+        );
+        // Then
+        expect(result.stderr).toMatch(/^Harness claude failed: /);
+        expect(result.stderr).not.toContain("Skipped links");
+        expect(result.exitCode).toBe(125);
+      } finally {
+        chmodSync(locked, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    "harness profile init claude fails when a link target is inaccessible",
+    async () => {
+      // Given
+      const env = makeEnv();
+      const home = makeHome();
+      const from = join(home, ".claude");
+      const locked = join(home, "locked");
+      mkdirSync(join(from, "skills"), { recursive: true });
+      mkdirSync(locked);
+      writeFileSync(join(from, "CLAUDE.md"), "# mine");
+      writeFileSync(join(locked, "target"), "private");
+      symlinkSync("../../locked/target", join(from, "skills", "private"));
+      chmodSync(locked, 0o000);
+      try {
+        // When
+        const result = await runCli(
+          env,
+          ["harness", "profile", "init", "claude"],
+          {
+            set: { HOME: home },
+          },
+        );
+        // Then
+        expect(result.stderr).toMatch(/^Harness claude failed: EACCES:/);
+        expect(result.stderr).not.toContain("Skipped links");
+        expect(result.exitCode).toBe(125);
+      } finally {
+        chmodSync(locked, 0o700);
+      }
+    },
+  );
+
+  it("harness profile init claude names a top-level link that leads nowhere", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(from);
+    writeFileSync(join(from, "CLAUDE.md"), "# mine");
+    symlinkSync("../gone", join(from, "skills"));
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: `${profile}\n`,
+      stderr: `Copied from ${from}: CLAUDE.md.\nNot on this laptop, skipped: agents/.\nSkipped links that lead nowhere or loop: skills.\nNot copied: settings.json, hooks, plugins, and MCP config. They can point to programs on this laptop or hold tokens.\n`,
+      exitCode: 0,
+    });
+  });
+
+  it("harness profile init claude names a top-level link that loops", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(from);
+    writeFileSync(join(from, "CLAUDE.md"), "# mine");
+    symlinkSync("skills", join(from, "skills"));
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: `${profile}\n`,
+      stderr: `Copied from ${from}: CLAUDE.md.\nNot on this laptop, skipped: agents/.\nSkipped links that lead nowhere or loop: skills.\nNot copied: settings.json, hooks, plugins, and MCP config. They can point to programs on this laptop or hold tokens.\n`,
+      exitCode: 0,
+    });
+  });
+
+  it("harness profile init claude keeps the profile owner-only", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(join(from, "agents"), { recursive: true });
+    writeFileSync(join(from, "CLAUDE.md"), "# mine");
+    chmodSync(join(from, "agents"), 0o700);
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(statSync(profile).mode & 0o777).toBe(0o700);
+    expect(statSync(join(profile, "agents")).mode & 0o777).toBe(0o700);
+    expect(result.exitCode).toBe(0);
   });
 
   it("harness profile init foo names the known Harnesses", async () => {

@@ -1,6 +1,6 @@
 import { join, relative } from "node:path";
 import { FileSystem } from "@effect/platform";
-import { Config, Effect, Option } from "effect";
+import { Config, Effect, Either, Option } from "effect";
 import { HarnessError, platformReason } from "./errors.ts";
 
 export const harnessProfilePath = Effect.fn(
@@ -25,17 +25,29 @@ export const copyResolved = Effect.fn("harnessProfile.copyResolved")(function* (
   const fs = yield* FileSystem.FileSystem;
   const failed = (error: Parameters<typeof platformReason>[0]) =>
     new HarnessError({ harness, reason: platformReason(error) });
-  const real = yield* fs.realPath(from).pipe(Effect.option);
-  if (Option.isNone(real)) {
-    return [relative(home, from)];
+  const link = yield* fs.readLink(from).pipe(Effect.option);
+  const real = yield* fs.realPath(from).pipe(Effect.either);
+  if (Either.isLeft(real)) {
+    const error = real.left;
+    if (
+      error._tag === "SystemError" &&
+      ((Option.isSome(link) && error.reason === "NotFound") ||
+        (typeof error.cause === "object" &&
+          error.cause !== null &&
+          "code" in error.cause &&
+          error.cause.code === "ELOOP"))
+    ) {
+      return [relative(home, from)];
+    }
+    return yield* Effect.fail(failed(error));
   }
   const info = yield* fs.stat(from).pipe(Effect.mapError(failed));
   if (info.type === "Directory") {
-    if (ancestors.has(real.value)) {
+    if (ancestors.has(real.right)) {
       return [relative(home, from)];
     }
-    const inside = new Set([...ancestors, real.value]);
-    yield* fs.makeDirectory(to).pipe(Effect.mapError(failed));
+    const inside = new Set([...ancestors, real.right]);
+    yield* fs.makeDirectory(to, { mode: 0o700 }).pipe(Effect.mapError(failed));
     const names = yield* fs.readDirectory(from).pipe(Effect.mapError(failed));
     const skipped: string[] = [];
     for (const name of names) {
@@ -49,6 +61,7 @@ export const copyResolved = Effect.fn("harnessProfile.copyResolved")(function* (
         )),
       );
     }
+    yield* fs.chmod(to, info.mode & 0o777).pipe(Effect.mapError(failed));
     return skipped;
   }
   yield* fs.copyFile(from, to).pipe(Effect.mapError(failed));

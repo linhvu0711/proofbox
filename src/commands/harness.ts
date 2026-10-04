@@ -80,7 +80,7 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
       .makeDirectory(dirname(path), { recursive: true })
       .pipe(Effect.mapError(failed));
     yield* fs
-      .makeDirectory(path)
+      .makeDirectory(path, { mode: 0o700 })
       .pipe(
         Effect.mapError((error) =>
           error._tag === "SystemError" && error.reason === "AlreadyExists"
@@ -92,16 +92,23 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
     const missing: string[] = [];
     const skipped: string[] = [];
     for (const part of entry.profile.parts) {
-      if (yield* fs.exists(join(from, part)).pipe(Effect.mapError(failed))) {
-        skipped.push(
-          ...(yield* copyResolved(
-            entry.name,
-            join(from, part),
-            join(path, part),
-            from,
-          )),
+      const partName = part.replace(/\/$/, "");
+      const source = join(from, partName);
+      const link = yield* fs.readLink(source).pipe(Effect.option);
+      if (
+        Option.isSome(link) ||
+        (yield* fs.exists(source).pipe(Effect.mapError(failed)))
+      ) {
+        const skippedPart = yield* copyResolved(
+          entry.name,
+          source,
+          join(path, partName),
+          from,
         );
-        copied.push(part);
+        skipped.push(...skippedPart);
+        if (!skippedPart.includes(partName)) {
+          copied.push(part);
+        }
       } else {
         missing.push(part);
       }
@@ -114,11 +121,11 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
       );
     } else {
       yield* output.err(`Copied from ${from}: ${copied.join(", ")}.\n`);
-      if (missing.length > 0) {
-        yield* output.err(
-          `Not on this laptop, skipped: ${missing.join(", ")}.\n`,
-        );
-      }
+    }
+    if (missing.length > 0 && (copied.length > 0 || skipped.length > 0)) {
+      yield* output.err(
+        `Not on this laptop, skipped: ${missing.join(", ")}.\n`,
+      );
     }
     if (skipped.length > 0) {
       yield* output.err(
