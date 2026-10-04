@@ -847,6 +847,38 @@ describe("Keeper", () => {
     },
   );
 
+  it("a command through the Keeper never pushes the Deadline past Max life", async () => {
+    // Given: a Sandbox whose Max life comes before its idle time
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--idle",
+      "15m",
+      "--max-life",
+      "5m",
+    ]);
+    const name = created.stdout.trim().slice("fake:".length);
+    // When
+    const result = await runCli(env, ["exec", `fake:${name}`, "--", "true"]);
+    // Then: the pushed Deadline is Max life, within the Sandbox clock's
+    // whole second
+    const dir = join(env.root, name);
+    const maxLife = Math.floor(
+      new Date(
+        JSON.parse(readFileSync(join(dir, "sandbox.json"), "utf8")).maxLifeAt,
+      ).getTime() / 1000,
+    );
+    const deadline = Number(readFileSync(join(dir, "deadline"), "utf8"));
+    expect({
+      exitCode: result.exitCode,
+      atMaxLife: deadline <= maxLife && deadline >= maxLife - 2,
+    }).toEqual({ exitCode: 0, atMaxLife: true });
+  });
+
   it.scoped(
     "a Sandbox gone under a warm Keeper fails with the same message",
     () => {
