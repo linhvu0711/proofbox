@@ -38,7 +38,7 @@ export const MAC_STATE_DIR = "/var/lib/proofbox";
 export const MAC_WORK_DIR = "/Users/runner/work";
 // The Secrets folder is an hfs volume on RAM: a Secret never lands on the
 // Mac's disk.
-export const MAC_SECRETS_DIR = "/var/run/proofbox-secrets";
+const MAC_SECRETS_DIR = "/var/run/proofbox-secrets";
 const LABELS = `${MAC_STATE_DIR}/labels.json`;
 const DEADLINE = `${MAC_STATE_DIR}/deadline`;
 // Root's folder, not MAC_STATE_DIR: runner owns that one and could swap
@@ -730,5 +730,6 @@ export const makeMacHost = (deps: {
       })),
     },
     make,
+    folders: { state: MAC_STATE_DIR, secrets: MAC_SECRETS_DIR },
   };
 };

@@ -12,6 +12,7 @@ import type {
   OsOffer,
   Provider,
   SandboxCallError,
+  SandboxFolders,
   SandboxInfo,
   SandboxRef,
 } from "../provider.ts";
@@ -77,6 +78,8 @@ export interface NamespaceHost {
     CreateError | SandboxGoneError,
     Progress | Scope.Scope
   >;
+  // Where proofbox keeps its own files in the Sandbox.
+  readonly folders: SandboxFolders;
 }
 
 // What create hands a host once Namespace has made it.

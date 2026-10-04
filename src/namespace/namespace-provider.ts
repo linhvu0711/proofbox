@@ -41,7 +41,6 @@ import { fileStem, makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import { pushHostLife } from "./host-life.ts";
 import type { LinuxHost } from "./linux-host.ts";
-import { MAC_SECRETS_DIR } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
 import { describe, fail, gone, type NamespaceHost } from "./namespace-host.ts";
@@ -807,10 +806,7 @@ export const makeNamespaceProvider = (deps: {
     list,
     delete: del,
     extend,
-    sandboxFolders: (_name, os) => ({
-      state: "/var/lib/proofbox",
-      secrets: os === "macos" ? MAC_SECRETS_DIR : "/run/proofbox/secrets",
-    }),
+    sandboxFolders: (_name, os) => hostFor(os).folders,
     connect,
   };
 };

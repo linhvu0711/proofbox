@@ -438,6 +438,7 @@ export const makeLinuxHost = (deps: {
     defaultSize: DEFAULT_SIZE,
     machine: { arch: "amd64", selectors: [] },
     make,
+    folders: { state: "/var/lib/proofbox", secrets: "/run/proofbox/secrets" },
     baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE),
     saveSnapshot,
   };
