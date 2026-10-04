@@ -47,6 +47,7 @@ import {
   keeperClientLayers,
   startKeeper,
 } from "./support/keeper.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -96,7 +97,11 @@ const countedSandbox = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const fake = makeFakeProvider({ root: env.root, watch: "none" });
+    const fake = makeFakeProvider({
+      fs: nodeFs,
+      root: env.root,
+      watch: "none",
+    });
     const info = yield* fake
       .create({
         os: "linux",
@@ -518,7 +523,11 @@ describe("Keeper", () => {
       Effect.gen(function* () {
         // Given: a Sandbox, and a folder where the Keeper's pid file goes
         const env = makeEnv();
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -556,7 +565,11 @@ describe("Keeper", () => {
       Effect.gen(function* () {
         // Given: a Sandbox, and a folder where the Keeper's pid file goes
         const env = makeEnv();
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -592,7 +605,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -626,7 +643,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox, and the start lock of a Keeper killed mid-start
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -661,7 +682,11 @@ describe("Keeper", () => {
       const env = makeEnv();
       return Effect.gen(function* () {
         // Given: a Sandbox, and the start lock of a Keeper killed mid-start
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -697,7 +722,11 @@ describe("Keeper", () => {
       return Effect.gen(function* () {
         // Given: a Sandbox, and a start lock whose pid is this process,
         // which started at another time than the owner did
-        const fake = makeFakeProvider({ root: env.root, watch: "none" });
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
         const info = yield* fake
           .create({
             os: "linux",
@@ -735,7 +764,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Sandbox, and the start lock of a Keeper that still runs
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -766,7 +799,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Sandbox and its Keeper starting in this process
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -1402,7 +1439,11 @@ describe("Keeper", () => {
     const env = makeEnv();
     return Effect.gen(function* () {
       // Given: a Provider whose exec fails with the command line in its text
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",
@@ -1469,7 +1510,11 @@ describe("Keeper", () => {
     events: ReadonlyArray<ExecEvent | "pause">,
   ) =>
     Effect.gen(function* () {
-      const fake = makeFakeProvider({ root: env.root, watch: "none" });
+      const fake = makeFakeProvider({
+        fs: nodeFs,
+        root: env.root,
+        watch: "none",
+      });
       const info = yield* fake
         .create({
           os: "linux",

@@ -19,6 +19,7 @@ import {
   SandboxInfo,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempRoots: string[] = [];
 
@@ -27,7 +28,7 @@ const tempRoots: string[] = [];
 const layers = (os: "linux" | "macos" = "macos") => {
   const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
   tempRoots.push(root);
-  const base = makeFakeProvider({ root, watch: "none" });
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const size = os === "macos" ? { cpu: 4, ramGb: 7 } : { cpu: 4, ramGb: 8 };
   const provider: Provider = {
     ...base,

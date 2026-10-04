@@ -41,6 +41,7 @@ import {
 } from "../src/provider.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -59,7 +60,7 @@ type Answer = (argv: ReadonlyArray<string>) => Stream.Stream<ExecEvent>;
 // A fake Sandbox that reports itself as a Mac with a desktop, whose exec
 // gives each helper call the answer `answer` returns, and counts the calls.
 const stubMac = (root: string, answer: Answer) => {
-  const base = makeFakeProvider({ root, watch: "none" });
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const calls = { exec: 0 };
   const mac: Provider = {
     ...base,

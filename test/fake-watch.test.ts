@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Option, Schema } from "effect";
 import { afterEach, describe, expect } from "vitest";
@@ -89,7 +90,7 @@ describe("fake watcher", () => {
           done: Exit.isSuccess(exit),
           gone: !existsSync(dir),
         }).toEqual({ early: true, stillThere: true, done: true, gone: true });
-      }),
+      }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.live("the watcher tries a failed delete again after 1 s", () => {
@@ -120,6 +121,7 @@ describe("fake watcher", () => {
           if (existsSync(locked)) chmodSync(locked, 0o700);
         }),
       ),
+      Effect.provide(NodeContext.layer),
     );
   });
 });

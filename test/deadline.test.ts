@@ -17,6 +17,7 @@ import {
   providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempRoots: string[] = [];
 const makeProviders = () => {
@@ -25,7 +26,10 @@ const makeProviders = () => {
   return Layer.succeed(
     Providers,
     new Map<string, ProviderEntry>([
-      ["fake", providerEntry(makeFakeProvider({ root, watch: "none" }))],
+      [
+        "fake",
+        providerEntry(makeFakeProvider({ fs: nodeFs, root, watch: "none" })),
+      ],
     ]),
   );
 };

@@ -14,6 +14,7 @@ import { afterEach, describe, expect } from "vitest";
 import { runCommand } from "../src/command-checks.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { Progress } from "../src/progress.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const tempRoots: string[] = [];
 const makeRoot = () => {
@@ -38,7 +39,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       // When
       const error = yield* fake
         .create({
@@ -56,11 +57,23 @@ describe("fake Provider", () => {
     }),
   );
 
+  it.effect("list of a root that does not exist gives no Sandboxes", () =>
+    Effect.gen(function* () {
+      // Given: a root no create has made yet
+      const root = makeRoot();
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+      // When
+      const result = yield* fake.list;
+      // Then
+      expect(result).toEqual({ infos: [], unreached: [], unfinished: [] });
+    }),
+  );
+
   it.effect("get reads a whole Sandbox while an extend rewrites it", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -97,7 +110,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -122,7 +135,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -164,7 +177,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given: a fake Sandbox whose Deadline is one minute away
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -198,7 +211,7 @@ describe("fake Provider", () => {
     Effect.gen(function* () {
       // Given: a fake Sandbox
       const root = makeRoot();
-      const fake = makeFakeProvider({ root, watch: "none" });
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
       const sandbox = yield* fake
         .create({
           os: "linux",
@@ -241,7 +254,7 @@ describe("fake Provider", () => {
       Effect.gen(function* () {
         // Given: a fake Sandbox whose home folder is gone
         const root = makeRoot();
-        const fake = makeFakeProvider({ root, watch: "none" });
+        const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
         const sandbox = yield* fake
           .create({
             os: "linux",

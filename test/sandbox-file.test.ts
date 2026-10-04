@@ -6,6 +6,7 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import { sandboxFiles } from "../src/sandbox-file.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 // Building a Provider calls none of these; only its folders are asked.
 const client: DockerClient = {
@@ -86,7 +87,11 @@ describe("Sandbox files", () => {
 
   it("a fake Sandbox keeps each file under its root", () => {
     // Given: building the fake touches no disk
-    const provider = makeFakeProvider({ root: "/tmp/pb-fake", watch: "none" });
+    const provider = makeFakeProvider({
+      fs: nodeFs,
+      root: "/tmp/pb-fake",
+      watch: "none",
+    });
     // When
     const files = sandboxFiles(provider, "abc123", "linux");
     // Then

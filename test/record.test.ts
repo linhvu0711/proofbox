@@ -29,6 +29,7 @@ import {
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -40,7 +41,7 @@ const tempRoots: string[] = [];
 // `/opt/proofbox/record stop` with a blocked-capture report and `fetch`
 // with one PNG header.
 const blockedMac = (root: string, blocked: string): Provider => {
-  const base = makeFakeProvider({ root, watch: "none" });
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const answer = (argv: ReadonlyArray<string>) => {
     const [, action, remote] = argv;
     if (action === "stop") {
@@ -87,7 +88,7 @@ const stoppingMac = (
   root: string,
   probe: Stream.Stream<ExecEvent>,
 ): Provider => {
-  const base = makeFakeProvider({ root, watch: "none" });
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
     const [, action] = argv;
     if (action === "stop") {
