@@ -98,7 +98,7 @@ export const makeFakeProvider = (options: {
   const gone = (name: string, unfinished?: true) =>
     new SandboxGoneError({ id: `fake:${name}`, unfinished });
   const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
-  // Any error reads as "not there", as `existsSync` gives.
+  // Any error reads as "not there", as `existsSync` does.
   const exists = (path: string) =>
     fs.exists(path).pipe(Effect.orElseSucceed(() => false));
 

@@ -49,7 +49,7 @@ export const watchSandbox = Effect.fn("watch.watchSandbox")(function* (
   name: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  // Any error reads as "not there", as `existsSync` gave.
+  // Any error reads as "not there", as `existsSync` does.
   while (
     yield* fs.exists(join(root, name)).pipe(Effect.orElseSucceed(() => false))
   ) {
