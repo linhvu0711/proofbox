@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Schedule } from "effect";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
@@ -18,14 +18,16 @@ export const pushHostLife = Effect.fn("hostLife.pushHostLife")(function* (
   ref: SandboxRef,
   seconds: number,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const capFile = (yield* keeperPaths({
     provider: "ns",
     name: fileStem(ref),
   })).maxLife;
   yield* Effect.gen(function* () {
-    const cap = yield* Effect.tryPromise(() =>
-      readFile(capFile, "utf8").then((text) => Number(text.trim())),
-    ).pipe(Effect.orElseSucceed(() => Number.NaN));
+    const cap = yield* fs.readFileString(capFile).pipe(
+      Effect.map((text) => Number(text.trim())),
+      Effect.orElseSucceed(() => Number.NaN),
+    );
     if (!Number.isFinite(cap)) return;
     const left = Math.floor(cap - (yield* Clock.currentTimeMillis) / 1000);
     if (left <= 0) return;
