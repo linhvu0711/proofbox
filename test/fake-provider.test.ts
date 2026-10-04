@@ -57,6 +57,18 @@ describe("fake Provider", () => {
     }),
   );
 
+  it.effect("list of a root that does not exist gives no Sandboxes", () =>
+    Effect.gen(function* () {
+      // Given: a root no create has made yet
+      const root = makeRoot();
+      const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+      // When
+      const result = yield* fake.list;
+      // Then
+      expect(result).toEqual({ infos: [], unreached: [], unfinished: [] });
+    }),
+  );
+
   it.effect("get reads a whole Sandbox while an extend rewrites it", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox

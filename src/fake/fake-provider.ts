@@ -1,20 +1,14 @@
 import { randomUUID } from "node:crypto";
+// The one sync check: `commandEvents` maps a spawn failure with a plain
+// function, and FileSystem has no sync `exists`.
 import { existsSync } from "node:fs";
-import {
-  cp,
-  mkdir,
-  readdir,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor, type FileSystem } from "@effect/platform";
 import {
   Clock,
   Duration,
   Effect,
-  type Option,
+  Option,
   Redacted,
   Schedule,
   Schema,
@@ -57,12 +51,6 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
 
 export const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
-
-const hasCode = (cause: unknown, code: string) =>
-  typeof cause === "object" &&
-  cause !== null &&
-  "code" in cause &&
-  cause.code === code;
 
 // The checks around a command on the Caller's machine (ADR 0015): the
 // Deadline file `get` reads, with no temp file left when the write fails;
@@ -369,18 +357,23 @@ export const makeFakeProvider = (options: {
         reason: options.listDown,
       });
     }
-    const entries = yield* Effect.tryPromise({
-      try: () =>
-        readdir(root, { withFileTypes: true }).catch((cause) =>
-          hasCode(cause, "ENOENT")
-            ? Promise.resolve([])
-            : Promise.reject(cause),
+    const entries = yield* fs
+      .readDirectory(root)
+      .pipe(
+        Effect.catchAll((error) =>
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? Effect.succeed([])
+            : Effect.fail(fail(describe(error))),
         ),
-      catch: (cause) => fail(describe(cause)),
-    });
-    const names = entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+      );
+    // `readDirectory` gives names only; a name whose stat fails is a folder
+    // already gone.
+    const names = yield* Effect.filter(entries, (name) =>
+      fs.stat(join(root, name)).pipe(
+        Effect.map((info) => info.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      ),
+    );
     // The fake has only Linux; a folder's mtime stands in for when the
     // create started, so a test can age it.
     const unfinished: Array<UnfinishedSandbox> = [];
@@ -390,12 +383,9 @@ export const makeFakeProvider = (options: {
         readFileInfo(name).pipe(
           Effect.catchTag("SandboxGoneError", (error) =>
             error.unfinished === true
-              ? Effect.promise(() =>
-                  stat(join(root, name)).then(
-                    (info) => info.mtime,
-                    () => undefined,
-                  ),
-                ).pipe(
+              ? fs.stat(join(root, name)).pipe(
+                  Effect.map((info) => Option.getOrUndefined(info.mtime)),
+                  Effect.orElseSucceed(() => undefined),
                   Effect.map((createdAt) => {
                     unfinished.push({ name, os: "linux", createdAt });
                     return undefined;
@@ -431,9 +421,7 @@ export const makeFakeProvider = (options: {
     const unmark =
       options.marksLocal === true
         ? Effect.flatMap(keeperPaths({ provider: "fake", name }), (paths) =>
-            Effect.promise(() =>
-              rm(paths.maxLife, { force: true }).catch(() => {}),
-            ),
+            fs.remove(paths.maxLife, { force: true }).pipe(Effect.ignore),
           )
         : Effect.void;
     // An Unfinished Sandbox is there to delete, as its Namespace host is.
@@ -447,10 +435,9 @@ export const makeFakeProvider = (options: {
       yield* unmark;
       return "gone" as const;
     }
-    yield* Effect.tryPromise({
-      try: () => rm(join(root, name), { recursive: true, force: true }),
-      catch: (cause) => fail(describe(cause)),
-    });
+    yield* fs
+      .remove(join(root, name), { recursive: true, force: true })
+      .pipe(Effect.mapError((error) => fail(describe(error))));
     yield* unmark;
     return "deleted" as const;
   });
@@ -481,23 +468,20 @@ export const makeFakeProvider = (options: {
     const dir = join(root, name);
     const entry = join(snapshots.root, fingerprint);
     const temp = join(snapshots.root, `.new-${fingerprint}`);
-    yield* Effect.tryPromise({
-      try: async () => {
-        await rm(temp, { recursive: true, force: true });
-        await mkdir(temp, { recursive: true });
-        await cp(join(dir, "home"), join(temp, "home"), { recursive: true });
-        await cp(join(dir, "state"), join(temp, "state"), {
-          recursive: true,
-        });
-        await rm(entry, { recursive: true, force: true });
-        await rename(temp, entry);
-      },
-      catch: (cause) => fail(describe(cause)),
-    }).pipe(
+    yield* Effect.all(
+      [
+        fs.remove(temp, { recursive: true, force: true }),
+        fs.makeDirectory(temp, { recursive: true }),
+        fs.copy(join(dir, "home"), join(temp, "home")),
+        fs.copy(join(dir, "state"), join(temp, "state")),
+        fs.remove(entry, { recursive: true, force: true }),
+        fs.rename(temp, entry),
+      ],
+      { discard: true },
+    ).pipe(
+      Effect.mapError((error) => fail(describe(error))),
       Effect.tapError(() =>
-        Effect.tryPromise(() =>
-          rm(temp, { recursive: true, force: true }),
-        ).pipe(Effect.ignore),
+        fs.remove(temp, { recursive: true, force: true }).pipe(Effect.ignore),
       ),
     );
   });
