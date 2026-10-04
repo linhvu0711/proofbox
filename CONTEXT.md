@@ -1,6 +1,6 @@
 # proofbox
 
-proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It covers verification only; writing code stays wherever the agent already works.
+proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It can also run a Harness in a Sandbox, so code gets written there and the agent checks it there. Not built yet: ADR 0023 records that decision, and until it ships proofbox only checks work, as the README says.
 
 ## Language
 
@@ -56,10 +56,18 @@ _Avoid_: tenant, workspace, proofbox account
 What proofbox keeps on the Caller's machine so it can act for one Provider account: a browser login or a token the Caller gave it. It is never a Secret and never enters a Sandbox.
 _Avoid_: credential, auth, session, API key
 
+**Harness login**:
+The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token` or a Codex API key. It goes into a Sandbox only when a Turn starts, and never into a Snapshot. Not the Caller's own laptop login of that Harness, which proofbox never touches.
+_Avoid_: model key, credential, auth file
+
+**GitHub login**:
+A fine-grained GitHub token for one owner (a user or an org) that the Caller makes and proofbox keeps. It goes into a Sandbox only when a Turn starts, so the Harness can clone, push, and open pull requests.
+_Avoid_: gh token, PAT, GitHub credential
+
 ### Getting the app ready
 
 **Work folder**:
-The caller's folder as uploaded into the Sandbox: tracked files plus new files, minus git-ignored ones.
+The caller's folder as uploaded into the Sandbox: tracked files plus new files, minus git-ignored ones. In a Sandbox with a Harness, it is instead the Caller's branch cloned from GitHub, with the Caller's unpushed commits and uncommitted files put on top.
 _Avoid_: checkout, clone, repo copy
 
 **Setup script**:
@@ -89,8 +97,26 @@ _Avoid_: credential, env var
 ### Driving and watching
 
 **Caller**:
-Whoever runs proofbox commands: a main agent, a helper agent, a script, or a person.
+Whoever runs proofbox commands: a main agent, a helper agent, a script, or a person. A Caller can itself be a coding CLI on a laptop; it is still the Caller, not a Harness.
 _Avoid_: brain, harness, driver, client
+
+### Writing code in a Sandbox
+
+**Harness**:
+A coding CLI, such as Claude Code or Codex, that proofbox installs at its newest version and runs inside a Sandbox with all permissions, so it writes, commits, and pushes code there. Each one fits the same Harness seam, the way each Provider fits the Provider seam. Not built yet (ADR 0023).
+_Avoid_: inner agent, coding agent, worker, bot
+
+**Harness session**:
+The one conversation a Harness keeps in a Sandbox across Turns. A Sandbox has at most one, so the Sandbox id names it.
+_Avoid_: thread, chat, session id
+
+**Turn**:
+One run of the Harness, from a prompt the Caller sends until the Harness ends it: done, failed, or stopped. A Sandbox runs one Turn at a time, and proofbox refuses a prompt while one runs.
+_Avoid_: run, task, job, step
+
+**Harness profile**:
+A folder per Harness that the Caller owns on their machine, shaped like that Harness's home folder (for Claude Code, `~/.claude/`): global instructions, skills, subagents, and MCP servers meant for a Sandbox. proofbox copies it into a Sandbox after any Snapshot is saved. It is not the Caller's laptop config, which proofbox reads only once, to fill a new profile.
+_Avoid_: config, dotfiles, settings
 
 **Pixel action**:
 A screen command that works the way a person does: screenshot, click, type, key, scroll, drag.
