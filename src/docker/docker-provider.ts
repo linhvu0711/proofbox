@@ -1,5 +1,5 @@
 import { Clock, Duration, Effect, Option, Schema } from "effect";
-import { type ChecksShell, checksScript } from "../command-checks.ts";
+import type { ChecksShell } from "../command-checks.ts";
 import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
@@ -53,10 +53,6 @@ export const LINUX_CHECKS: ChecksShell = {
     "{ cat /sys/fs/cgroup/memory.events 2>/dev/null || cat /sys/fs/cgroup/memory/memory.oom_control; } | sed -n 's/^oom_kill //p'",
   run: 'unset PWD OLDPWD; HOME=/home/app setpriv --reuid=app --regid=app --init-groups "$@"',
 };
-
-// The Namespace connection runs this script itself until #160 moves it onto
-// the command run.
-export const LINUX_SCRIPT = checksScript(LINUX_CHECKS);
 
 const DOCKER_BRAND: ProviderBrand = {
   provider: "docker",

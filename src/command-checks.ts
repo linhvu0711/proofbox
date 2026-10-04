@@ -64,7 +64,7 @@ const FAIL_DETAIL_MAX = 200;
 // push ends the script with the fail trailer in place of the counts, as a
 // failed push ended `exec` before the Keeper did it: before the command,
 // the command does not run. A failed count reads as 0.
-export const checksScript = (shell: ChecksShell) =>
+const checksScript = (shell: ChecksShell) =>
   [
     "idle=$1",
     "cap=$(( $(date +%s) + $2 ))",
@@ -82,7 +82,7 @@ export const checksScript = (shell: ChecksShell) =>
     "exit $code",
   ].join("; ");
 
-export const checksArgv = (
+const checksArgv = (
   script: string,
   info: SandboxInfo,
   nowMillis: number,
@@ -148,7 +148,7 @@ const stderr = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stderr", bytes });
 // script never started), a gone container there fails with `gone()`; any
 // other text goes out as it is. After the mark, only a stderr tail that
 // could start the trailer is held back, until the next chunk or the Exit.
-export const splitChecks = <E>(
+const splitChecks = <E>(
   events: Stream.Stream<ExecEvent, E>,
   on: {
     readonly gone: () => SandboxGoneError;
@@ -253,17 +253,12 @@ const withRunningPush =
     );
   };
 
-// Runs one command with its checks around it (ADR 0015). The second branch
-// is the stand-in for the Namespace connection, which runs its own checks
-// until #160 moves it here.
+// Runs one command with its checks around it (ADR 0015).
 export const runCommand = (
   connection: Connection,
   argv: ReadonlyArray<string>,
   options?: ExecOptions,
 ): Stream.Stream<ExecEvent, SandboxCallError> => {
-  if (!("transport" in connection)) {
-    return withRunningPush(connection)(connection.exec(argv, options));
-  }
   const transport = connection.transport;
   const push = transport.pushHost;
   const pushHost =

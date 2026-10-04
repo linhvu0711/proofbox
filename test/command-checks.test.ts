@@ -38,10 +38,6 @@ afterEach(() => {
 });
 
 const bytes = (text: string) => new TextEncoder().encode(text);
-const out = (text: string): ExecEvent => ({
-  _tag: "Stdout",
-  bytes: bytes(text),
-});
 const err = (text: string): ExecEvent => ({
   _tag: "Stderr",
   bytes: bytes(text),
@@ -482,30 +478,5 @@ describe("command run", () => {
           "host 1970-01-01T00:15:00.000Z",
         ]);
       }),
-  );
-
-  it.effect("a connection that runs its own checks keeps its events", () =>
-    Effect.gen(function* () {
-      // Given: the Namespace stand-in shape, with its own exec
-      const info = infoWith(new Date(10_800_000));
-      const done: ExecEvent = {
-        _tag: "Exit",
-        code: 0,
-        kills: { before: 1, after: 1 },
-      };
-      const connection: Connection = {
-        info,
-        get: Effect.succeed(info),
-        extend: () => Effect.void,
-        exec: () => Stream.make(out("hi\n"), done),
-      };
-      // When
-      const events = yield* collect(runCommand(connection, ["true"]));
-      // Then
-      expect(events).toEqual([
-        { _tag: "Stdout", text: "hi\n" },
-        { _tag: "Exit", code: 0, kills: { before: 1, after: 1 } },
-      ]);
-    }),
   );
 });
