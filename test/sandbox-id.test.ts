@@ -15,6 +15,7 @@ describe("Sandbox id", () => {
         name: "namespace",
         idPrefix: "ns",
         login: { _tag: "None" },
+        loginFiles: [],
         regions: { known: ["us", "eu"], fallback: "us" },
         offers: {},
         create: () => Effect.die("unused"),

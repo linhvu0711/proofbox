@@ -205,10 +205,20 @@ export interface SandboxFolders {
   readonly secrets: string;
 }
 
+// Files a saved login leaves in the runtime dir, by name; `what` names
+// them when they cannot be removed.
+export interface LoginFiles {
+  readonly what: string;
+  readonly names: RegExp;
+}
+
 export interface Provider {
   readonly name: string;
   readonly idPrefix: string;
   readonly login: LoginPart;
+  // The files a saved login leaves in the runtime dir; logout removes them
+  // with the login.
+  readonly loginFiles: ReadonlyArray<LoginFiles>;
   // A Provider whose API is regional names the regions it knows and the
   // one new Sandboxes go to when the login has none.
   readonly regions?: {

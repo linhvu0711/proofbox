@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer, type Server } from "node:net";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
@@ -31,12 +31,7 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
-import {
-  keeperPaths,
-  liveCreates,
-  markCreate,
-  unmarkCreate,
-} from "../src/keeper/paths.ts";
+import { keeperPaths } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import {
   type ExecEvent,
@@ -1604,60 +1599,4 @@ describe("Keeper", () => {
       exitCode: 0,
     });
   });
-});
-
-const ownsPid1 = () => {
-  try {
-    process.kill(1, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-describe("Create marks", () => {
-  afterEach(() => {
-    cleanupEnvs();
-  });
-
-  it.effect(
-    "a create mark holds its process start time and counts as live",
-    () => {
-      const env = makeEnv();
-      return Effect.gen(function* () {
-        const path = yield* markCreate("fake");
-        const [pid, started] = readFileSync(path, "utf8").split("\n");
-        expect(pid).toBe(String(process.pid));
-        expect(started).not.toBe("");
-        expect(yield* liveCreates("fake")).toEqual([basename(path)]);
-        yield* unmarkCreate(path);
-        expect(yield* liveCreates("fake")).toEqual([]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  it.effect(
-    "a create mark with no start time counts while its process runs",
-    () => {
-      const env = makeEnv();
-      const name = `fake-creating-${process.pid}-0123abcd`;
-      writeFileSync(join(env.runtime, name), `${process.pid}\n\n`);
-      return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([name]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  // Where process 1 is this user's (root, or some containers), the case
-  // cannot happen.
-  it.effect.skipIf(ownsPid1())(
-    "a create mark whose process id belongs to another user is not live",
-    () => {
-      const env = makeEnv();
-      writeFileSync(join(env.runtime, "fake-creating-1-0123abcd"), "1\n\n");
-      return Effect.gen(function* () {
-        expect(yield* liveCreates("fake")).toEqual([]);
-      }).pipe(runtimeConfig(env));
-    },
-  );
 });

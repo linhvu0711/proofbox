@@ -526,6 +526,7 @@ export const makeFakeProvider = (options: {
   return {
     name: "fake",
     idPrefix: "fake",
+    loginFiles: [],
     login: {
       _tag: "Ways",
       checkToken,
