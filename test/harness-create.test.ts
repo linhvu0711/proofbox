@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -15,7 +21,7 @@ import {
 const git = (folder: string, ...args: string[]) =>
   execFileSync("git", args, { cwd: folder, encoding: "utf8" });
 
-const makeGithub = (committed = { "a.txt": "a\n" }) => {
+const makeGithub = (committed: Record<string, string> = { "a.txt": "a\n" }) => {
   const source = makeGitFolder({ committed });
   const github = mkdtempSync(join(tmpdir(), "proofbox-github-"));
   trackTempDir(github);
@@ -54,6 +60,55 @@ const fakeLogins = (env: CliEnv) => {
   loginFile(env, "harness", { fake: { token: "fake-tok-1" } });
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
 };
+
+it("create --harness puts the Caller's uncommitted changes, deletions, and new files on top", async () => {
+  // Given
+  const env = makeEnv();
+  const { folder, github } = makeGithub({ "a.txt": "a\n", "b.txt": "b\n" });
+  writeFileSync(join(folder, "a.txt"), "a2\n");
+  rmSync(join(folder, "b.txt"));
+  writeFileSync(join(folder, "n.txt"), "n\n");
+  fakeLogins(env);
+  // When
+  const created = await runCli(env, createArgs(folder, "fake"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const changed = await runCli(env, ["exec", id, "--", "cat", "a.txt"]);
+  const deleted = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    "if [ -e b.txt ]; then echo there; else echo gone; fi",
+  ]);
+  const added = await runCli(env, ["exec", id, "--", "cat", "n.txt"]);
+  const status = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "status",
+    "--porcelain",
+  ]);
+  // Then
+  expect({
+    code: created.exitCode,
+    sent: created.stderr.includes("proofbox: sent 2 files, removed 1 file\n"),
+    changed: changed.stdout,
+    deleted: deleted.stdout,
+    added: added.stdout,
+    status: status.stdout,
+  }).toEqual({
+    code: 0,
+    sent: true,
+    changed: "a2\n",
+    deleted: "gone\n",
+    added: "n\n",
+    status: " M a.txt\n D b.txt\n?? n.txt\n",
+  });
+});
 
 it("create --harness puts the Caller's unpushed commit on top of the branch from GitHub", async () => {
   // Given

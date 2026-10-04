@@ -209,7 +209,13 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         );
       }
       if (folder !== undefined && files !== undefined) {
-        yield* sendWorkFolder(id, resolve(folder), files, workLimit);
+        yield* sendWorkFolder(
+          id,
+          resolve(folder),
+          files,
+          workLimit,
+          check === undefined ? undefined : { dirty: check.repo.dirty },
+        );
       }
       if (reused) {
         yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);
