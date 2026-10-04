@@ -1,5 +1,4 @@
 import {
-  access,
   readdir,
   readFile,
   rename,
@@ -131,11 +130,6 @@ export const makeNamespaceProvider = (deps: {
 }): Provider => {
   const api = deps.api;
   const forward = deps.forward;
-  const madeElsewhere = (ref: SandboxRef) =>
-    new ProviderUnavailableError({
-      provider: "namespace",
-      reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
-    });
   const paths = (name: string) =>
     keeperPaths({ provider: "ns", name }).pipe(
       Effect.provideService(FileSystem.FileSystem, deps.fs),
@@ -177,16 +171,7 @@ export const makeNamespaceProvider = (deps: {
   ) {
     const host = knownHost ?? (yield* hostOf(ref));
     const hostPaths = yield* refPaths(ref);
-    if (
-      host.os === "macos" &&
-      !(yield* Effect.promise(() =>
-        access(hostPaths.sshdKnownHosts)
-          .then(() => true)
-          .catch(() => false),
-      ))
-    ) {
-      return yield* madeElsewhere(ref);
-    }
+    yield* host.reach(ref, hostPaths);
     if (owner === "keeper") {
       yield* Effect.forkScoped(
         pushHostLife(api, ref, 120).pipe(
@@ -200,12 +185,7 @@ export const makeNamespaceProvider = (deps: {
         "120",
       ]);
     }
-    return yield* deps.openLink(
-      ref,
-      hostPaths,
-      owner,
-      host.os === "macos" ? "sshd" : "gateway",
-    );
+    return yield* deps.openLink(ref, hostPaths, owner, host.via);
   });
 
   // Every `run` or Docker call needs the ssh link; open a cli-owned one per
@@ -493,20 +473,15 @@ export const makeNamespaceProvider = (deps: {
             return undefined;
           }
           const ref = { name: instance.id, region };
-          if (host.os === "macos") {
-            const hostPaths = yield* refPaths(ref);
-            const pinned = yield* Effect.promise(() =>
-              access(hostPaths.sshdKnownHosts)
-                .then(() => true)
-                .catch(() => false),
-            );
-            if (!pinned) {
-              unreached.push({
-                where: `Namespace region ${region}`,
-                reason: madeElsewhere(ref).message,
-              });
-              return undefined;
-            }
+          const reached = yield* host
+            .reach(ref, yield* refPaths(ref))
+            .pipe(Effect.either);
+          if (Either.isLeft(reached)) {
+            unreached.push({
+              where: `Namespace region ${region}`,
+              reason: reached.left.message,
+            });
+            return undefined;
           }
           return yield* getAs(host, ref).pipe(
             Effect.catchTag("SandboxGoneError", (error) =>

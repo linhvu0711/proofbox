@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
@@ -6,6 +6,7 @@ import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
@@ -585,4 +586,24 @@ export const writeMacDeadline = Effect.fn("macHost.writeMacDeadline")(
 // over the Mac's own sshd.
 export const makeMacHost = (_deps: {
   readonly openLink: OpenLink;
-}): NamespaceHost => ({ os: "macos", read: readMac });
+}): NamespaceHost => {
+  // Only the machine that made the Mac pinned its sshd host key.
+  const reach = Effect.fn("macHost.reach")(function* (
+    ref: SandboxRef,
+    paths: KeeperPaths,
+  ) {
+    const pinned = yield* Effect.promise(() =>
+      access(paths.sshdKnownHosts)
+        .then(() => true)
+        .catch(() => false),
+    );
+    if (!pinned) {
+      return yield* new ProviderUnavailableError({
+        provider: "namespace",
+        reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
+      });
+    }
+  });
+
+  return { os: "macos", via: "sshd", reach, read: readMac };
+};

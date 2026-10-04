@@ -1,5 +1,10 @@
 import type { Effect } from "effect";
-import { ProviderError, SandboxGoneError } from "../errors.ts";
+import {
+  ProviderError,
+  type ProviderUnavailableError,
+  SandboxGoneError,
+} from "../errors.ts";
+import type { KeeperPaths } from "../keeper/paths.ts";
 import type {
   Os,
   SandboxCallError,
@@ -7,13 +12,20 @@ import type {
   SandboxRef,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
-import type { Link } from "./ssh-link.ts";
+import type { Link, LinkVia } from "./ssh-link.ts";
 
 // What the Namespace Provider asks of one host's OS. The Provider keeps the
 // Namespace API calls, list, and the create flow once; a Linux host and a
 // Mac host each do the steps that differ by OS.
 export interface NamespaceHost {
   readonly os: Os;
+  // The route every link after create takes to the host.
+  readonly via: LinkVia;
+  // Fails when this machine cannot reach the host over `via`.
+  readonly reach: (
+    ref: SandboxRef,
+    paths: KeeperPaths,
+  ) => Effect.Effect<void, ProviderUnavailableError>;
   // Reads the Sandbox over the host's link.
   readonly read: (
     link: Link,

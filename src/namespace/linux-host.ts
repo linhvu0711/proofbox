@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { DockerClient } from "../docker/docker-client.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
+import type { KeeperPaths } from "../keeper/paths.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
 import {
@@ -93,5 +94,11 @@ export const makeLinuxHost = (_deps: {
     });
   });
 
-  return { os: "linux", read };
+  // The SSH gateway reaches every Linux host.
+  const reach = Effect.fn("linuxHost.reach")(function* (
+    _ref: SandboxRef,
+    _paths: KeeperPaths,
+  ) {});
+
+  return { os: "linux", via: "gateway", reach, read };
 };
