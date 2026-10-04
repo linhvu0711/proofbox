@@ -180,6 +180,30 @@ describe("harness profile init", () => {
     expect(existsSync(from)).toBe(false);
   });
 
+  it("harness profile init claude leaves an existing profile alone and exits 125", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const from = join(home, ".claude");
+    const profile = join(home, ".config", "proofbox", "harness", "claude");
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(profile, "CLAUDE.md"), "# sandbox");
+    mkdirSync(from);
+    writeFileSync(join(from, "CLAUDE.md"), "# laptop");
+    // When
+    const result = await runCli(env, ["harness", "profile", "init", "claude"], {
+      set: { HOME: home },
+    });
+    // Then
+    expect(result).toEqual({
+      stdout: "",
+      stderr: `Harness profile claude already exists at ${profile}. Edit it there, or delete it and run proofbox harness profile init claude again.\n`,
+      exitCode: 125,
+    });
+    expect(readdirSync(profile)).toEqual(["CLAUDE.md"]);
+    expect(readFileSync(join(profile, "CLAUDE.md"), "utf8")).toBe("# sandbox");
+  });
+
   it("harness profile init foo names the known Harnesses", async () => {
     // Given
     const env = makeEnv();

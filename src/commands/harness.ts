@@ -4,6 +4,7 @@ import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   HarnessError,
+  HarnessProfileExistsError,
   NoHarnessTokenError,
   NoSuchHarnessError,
   platformReason,
@@ -78,7 +79,15 @@ export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
     yield* fs
       .makeDirectory(dirname(path), { recursive: true })
       .pipe(Effect.mapError(failed));
-    yield* fs.makeDirectory(path).pipe(Effect.mapError(failed));
+    yield* fs
+      .makeDirectory(path)
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "SystemError" && error.reason === "AlreadyExists"
+            ? new HarnessProfileExistsError({ harness: entry.name, path })
+            : failed(error),
+        ),
+      );
     const copied: string[] = [];
     const missing: string[] = [];
     for (const part of entry.profile.parts) {
