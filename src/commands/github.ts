@@ -1,6 +1,9 @@
 import { Effect, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { NotFineGrainedTokenError } from "../errors.ts";
+import {
+  InvalidGithubOwnerError,
+  NotFineGrainedTokenError,
+} from "../errors.ts";
 import { saveGithubLogin } from "../login/github-logins.ts";
 import { readStdin } from "../login/stdin.ts";
 
@@ -8,6 +11,11 @@ export const loginToGithub = Effect.fn("github.loginToGithub")(function* (
   owner: string,
 ) {
   owner = owner.toLowerCase();
+  if (
+    owner.match(/^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/)?.[0] !== owner
+  ) {
+    return yield* new InvalidGithubOwnerError({ owner });
+  }
   const token = (yield* readStdin()).trim();
   if (token === "" || !token.startsWith("github_pat_")) {
     return yield* new NotFineGrainedTokenError({ owner });

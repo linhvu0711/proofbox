@@ -153,3 +153,30 @@ test("auth status shows one line per saved GitHub owner", async () => {
     exitCode: 0,
   });
 });
+
+test.each([
+  { owner: "acme ", args: ["github", "login", "acme "] },
+  { owner: "-acme", args: ["github", "login", "--", "-acme"] },
+  { owner: "a--b", args: ["github", "login", "a--b"] },
+])(
+  "github login refuses invalid owner $owner and saves nothing",
+  async ({ owner, args }) => {
+    const env = makeEnv();
+    const home = makeHome();
+    const result = await runCli(env, args, {
+      input: "github_pat_11AAAA1111\n",
+      set: { HOME: home },
+    });
+    expect({
+      ...result,
+      saved: existsSync(
+        join(home, ".config", "proofbox", "github-logins.json"),
+      ),
+    }).toEqual({
+      stderr: `Not a GitHub owner name: ${JSON.stringify(owner)}. Use letters, digits, and single hyphens, 39 characters at most, then run: echo <token> | proofbox github login <owner>\n`,
+      stdout: "",
+      exitCode: 125,
+      saved: false,
+    });
+  },
+);
