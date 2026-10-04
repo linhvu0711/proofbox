@@ -128,3 +128,28 @@ test("github login refuses a classic token and keeps the saved one", async () =>
     file: { acme: { token: "github_pat_11AAAA1111" } },
   });
 });
+
+test("auth status shows one line per saved GitHub owner", async () => {
+  const env = makeEnv();
+  const home = makeHome();
+  await runCli(env, ["github", "login", "beta"], {
+    input: "github_pat_22BBBB2222\n",
+    set: { HOME: home },
+    unset: ["PROOFBOX_FAKE_TOKEN"],
+  });
+  await runCli(env, ["github", "login", "acme"], {
+    input: "github_pat_11AAAA1111\n",
+    set: { HOME: home },
+    unset: ["PROOFBOX_FAKE_TOKEN"],
+  });
+  const result = await runCli(env, ["auth", "status"], {
+    set: { HOME: home },
+    unset: ["PROOFBOX_FAKE_TOKEN"],
+  });
+  expect(result).toEqual({
+    stdout:
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\ngithub:acme  logged in with token …1111, expiry not known, saved login\ngithub:beta  logged in with token …2222, expiry not known, saved login\n",
+    stderr: "",
+    exitCode: 0,
+  });
+});

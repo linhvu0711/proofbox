@@ -18,6 +18,10 @@ import {
 import { formatTime } from "../format-time.ts";
 import { type LogoutFailure, logOut } from "../local-sandboxes.ts";
 import {
+  type GithubLoginsFile,
+  readGithubLogins,
+} from "../login/github-logins.ts";
+import {
   changeLogins,
   readLogins,
   type SavedLogin,
@@ -288,6 +292,16 @@ export const showAuthStatus = Effect.gen(function* () {
       }
     }
     yield* output.out(`${provider.name}  ${line}\n`);
+  }
+  const githubLogins = yield* readGithubLogins.pipe(
+    Effect.catchAll(() => Effect.succeed<GithubLoginsFile>({})),
+  );
+  for (const [owner, login] of Object.entries(githubLogins).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    yield* output.out(
+      `github:${owner}  logged in with token …${Redacted.value(login.token).slice(-4)}, expiry not known, saved login\n`,
+    );
   }
 });
 
