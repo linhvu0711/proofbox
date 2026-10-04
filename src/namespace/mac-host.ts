@@ -1,12 +1,13 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { Chunk, Clock, Duration, Effect, Stream } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
-  ProviderError,
+  ProviderUnavailableError,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
@@ -14,11 +15,18 @@ import {
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
-import { formatSandboxId } from "../sandbox-id.ts";
+import { makeSandboxName } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import { TOOL_BUNDLE } from "../tool-bundle.ts";
-import type { Link } from "./ssh-link.ts";
+import {
+  brandFor,
+  fail,
+  type MakeRequest,
+  type NamespaceHost,
+  sandboxId,
+} from "./namespace-host.ts";
+import type { Link, OpenLink } from "./ssh-link.ts";
 
 // proofbox's own Mac files: the input helper and the Pixel script.
 export const MACOS_DIR = packagePath("images/macos/");
@@ -30,23 +38,12 @@ export const MAC_STATE_DIR = "/var/lib/proofbox";
 export const MAC_WORK_DIR = "/Users/runner/work";
 // The Secrets folder is an hfs volume on RAM: a Secret never lands on the
 // Mac's disk.
-export const MAC_SECRETS_DIR = "/var/run/proofbox-secrets";
+const MAC_SECRETS_DIR = "/var/run/proofbox-secrets";
 const LABELS = `${MAC_STATE_DIR}/labels.json`;
 const DEADLINE = `${MAC_STATE_DIR}/deadline`;
 // Root's folder, not MAC_STATE_DIR: runner owns that one and could swap
 // the log for one with made-up kills.
 const MEMORY_KILLS = "/var/log/proofbox-memory-kills.log";
-
-const fail = (reason: string) =>
-  new ProviderError({ provider: "namespace", reason });
-
-const sandboxId = (ref: SandboxRef) =>
-  formatSandboxId({ provider: "ns", region: ref.region, name: ref.name });
-
-const brandFor = (ref: SandboxRef) => ({
-  provider: "namespace",
-  id: () => sandboxId(ref),
-});
 
 // Runs one host step; a non-zero exit fails with the step's words.
 const step = Effect.fn("macHost.step")(function* (
@@ -298,7 +295,7 @@ const watchMemory = Effect.fn("macHost.watchMemory")((link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher),
 );
 
-export const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
+const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
   link: Link,
   ref: SandboxRef,
   paths: KeeperPaths,
@@ -382,7 +379,7 @@ export const macKillCount = (log: string) =>
 // stopped, so the command is watched; and the command in the `runner`
 // desktop session, through a login shell so PATH is the one ssh gives, in
 // the Work folder.
-export const macChecks = (): ChecksShell => ({
+const macChecks = (): ChecksShell => ({
   push: `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${DEADLINE}`,
   kills: `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; ${macKillCount(MEMORY_KILLS)}`,
   run: `sudo -n launchctl asuser 501 sudo -n -u runner -H /bin/zsh -lc ${shellJoin([`cd ${MAC_WORK_DIR} && exec "$@"`])} zsh "$@"`,
@@ -506,7 +503,7 @@ const checkAppleEvents = Effect.fn("macHost.checkAppleEvents")(function* (
 });
 
 // Everything a Mac needs before user code arrives, in order.
-export const prepareMac = Effect.fn("macHost.prepareMac")(function* (
+const prepareMac = Effect.fn("macHost.prepareMac")(function* (
   link: Link,
   req: MacRequest,
 ) {
@@ -582,9 +579,157 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
   );
 });
 
-export const writeMacDeadline = Effect.fn("macHost.writeMacDeadline")(
-  (link: Link, seconds: number) =>
-    link.run(
-      `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
-    ),
-);
+const writeMacDeadline = Effect.fn("macHost.writeDeadline")(function* (
+  link: Link,
+  _ref: SandboxRef,
+  seconds: number,
+) {
+  return yield* link.run(
+    `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + ${seconds} ))" > "$tmp" && mv "$tmp" ${DEADLINE}`,
+  );
+});
+
+const MACOS_SIZES: ReadonlyArray<Size> = [
+  { cpu: 4, ramGb: 7 },
+  { cpu: 6, ramGb: 14 },
+];
+const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
+// Every Known line about the Mac was proved on macOS 26; with no selector
+// Namespace gives 15.
+const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
+
+// A Mac host is the Sandbox itself: no container, and every command runs
+// over the Mac's own sshd.
+export const makeMacHost = (deps: {
+  readonly openLink: OpenLink;
+  // File access, handed in when the host is built.
+  readonly fs: FileSystem.FileSystem;
+}): NamespaceHost => {
+  // Only the machine that made the Mac pinned its sshd host key.
+  const reach = Effect.fn("macHost.reach")(function* (
+    ref: SandboxRef,
+    paths: KeeperPaths,
+  ) {
+    const pinned = yield* Effect.promise(() =>
+      access(paths.sshdKnownHosts)
+        .then(() => true)
+        .catch(() => false),
+    );
+    if (!pinned) {
+      return yield* new ProviderUnavailableError({
+        provider: "namespace",
+        reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
+      });
+    }
+  });
+
+  // The VNC password one Live view uses; its finalizer turns VNC off once
+  // the last view closes.
+  const livePassword = Effect.fn("macHost.livePassword")(function* (
+    link: Link,
+    _ref: SandboxRef,
+  ) {
+    // The candidate goes on stdin, never the command line. As on
+    // Linux, a lock serializes live-view starts, the stored password
+    // is reused when set — one password per Mac — and each viewer
+    // drops a session marker the finalizer counts. The printed line
+    // is the settled password. macOS has no flock, so the lock is a
+    // mkdir'ed dir that a waiter steals once its pid is gone, or once
+    // it has sat over two seconds with no pid at all — a holder that
+    // died before writing it.
+    const candidate = makeSandboxName(8);
+    const events = yield* link
+      .stream(
+        `sudo -n sh -c ${shellJoin([
+          'umask 077; L=/var/db/proofbox-live; mkdir -p "$L"; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then exit 1; fi; sleep 0.2; done; printf "%s\\n" $$ > "$L/.lock/pid"; trap \'rm -rf "$L/.lock"\' EXIT; f=$L/.password; if [ -s "$f" ]; then pw=$(cat "$f"); else IFS= read -r pw || exit 1; K=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart; "$K" -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$pw" >/dev/null && defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true && "$K" -restart -agent >/dev/null || exit 1; printf "%s\\n" "$pw" > "$f"; fi; touch "$L/$0"; printf "%s" "$pw"',
+        ])} ${candidate}`,
+        {
+          stdin: Stream.make(new TextEncoder().encode(`${candidate}\n`)),
+        },
+      )
+      .pipe(Stream.runCollect);
+    let exitCode = 1;
+    let stdout = "";
+    let stderr = "";
+    for (const event of Chunk.toReadonlyArray(events)) {
+      if (event._tag === "Exit") {
+        exitCode = event.code;
+      } else if (event._tag === "Stdout") {
+        stdout += Buffer.from(event.bytes).toString("utf8");
+      } else if (event._tag === "Stderr") {
+        stderr += Buffer.from(event.bytes).toString("utf8");
+      }
+    }
+    const password = stdout.trim();
+    if (exitCode !== 0 || password === "") {
+      return yield* fail(
+        `the Live view could not set the VNC password: ${stderr.trim()}`,
+      );
+    }
+    yield* Effect.addFinalizer(() =>
+      link
+        .run(
+          `sudo -n sh -c ${shellJoin([
+            'L=/var/db/proofbox-live; i=0; while ! mkdir "$L/.lock" 2>/dev/null; do lp=$(cat "$L/.lock/pid" 2>/dev/null); if [ -n "$lp" ]; then if ! kill -0 "$lp" 2>/dev/null; then rm -rf "$L/.lock"; fi; elif [ $(( $(date +%s) - $(stat -f %m "$L/.lock" 2>/dev/null || echo 0) )) -gt 2 ]; then rm -rf "$L/.lock"; fi; i=$((i + 1)); if [ $i -gt 50 ]; then rm -f "$L/$1"; exit 0; fi; sleep 0.2; done; rm -f "$L/$1"; if [ -z "$(ls -A "$L" 2>/dev/null | grep -vxF .password | grep -vxF .lock)" ]; then rm -f "$L/.password"; /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate >/dev/null 2>&1; fi; rm -rf "$L/.lock"; true',
+            "sh",
+            candidate,
+          ])}`,
+        )
+        .pipe(Effect.ignore),
+    );
+    return password;
+  });
+
+  // Turns on the Mac's own sshd over the gateway, then prepares the Mac
+  // over sshd (ADR 0022).
+  const make = Effect.fn("macHost.make")(function* (
+    link: Link,
+    made: MakeRequest,
+  ) {
+    const { ref } = made;
+    const progress = yield* Progress;
+    yield* progress.step("turning on sshd", turnOnSshd(link, ref, made.paths));
+    const sshd = yield* deps.openLink(ref, made.paths, "cli", "sshd").pipe(
+      Effect.catchTag("ProviderUnavailableError", () =>
+        Effect.fail(
+          new MacPrepareError({
+            id: sandboxId(ref),
+            what: "sshd cannot be reached",
+          }),
+        ),
+      ),
+    );
+    return yield* prepareMac(sshd, {
+      ref,
+      idle: made.req.idle,
+      maxLifeAt: made.maxLifeAt,
+      size: made.size,
+    }).pipe(Effect.provideService(FileSystem.FileSystem, deps.fs));
+  });
+
+  return {
+    os: "macos",
+    via: "sshd",
+    reach,
+    read: readMac,
+    writeDeadline: writeMacDeadline,
+    checks: macChecks(),
+    // The script runs over the link itself: the Mac is the Sandbox.
+    call: (link) => (argv, options) => link.stream(shellJoin(argv), options),
+    livePassword,
+    offer: {
+      sizes: MACOS_SIZES,
+      features: new Set(["desktop", "recording", "secrets", "live-view"]),
+    },
+    defaultSize: DEFAULT_MACOS_SIZE,
+    machine: {
+      arch: "arm64",
+      selectors: Object.entries(MACOS_SELECTORS).map(([name, value]) => ({
+        name,
+        value,
+      })),
+    },
+    make,
+    folders: { state: MAC_STATE_DIR, secrets: MAC_SECRETS_DIR },
+  };
+};

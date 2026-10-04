@@ -30,6 +30,7 @@ import {
   TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
+import { makeLinuxHost } from "../src/namespace/linux-host.ts";
 import type {
   ApiError,
   ApiLoginError,
@@ -37,7 +38,7 @@ import type {
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
-import type { Link } from "../src/namespace/ssh-link.ts";
+import type { Link, SshForward } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
@@ -45,6 +46,7 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
+import { unusedHost } from "./support/namespace-hosts.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 // The Compute API, faked: each call lands in `calls` as
@@ -122,6 +124,10 @@ const fakeDocker = (options: {
   // Collect the tag of every pull and every push.
   readonly pulls?: Array<string>;
   readonly pushed?: Array<string>;
+  // What every `execStream` sends, such as the Live view's x11vnc start.
+  readonly liveEvents?: ReadonlyArray<ExecEvent>;
+  // Collects the argv of every `execText`, joined by spaces.
+  readonly execs?: Array<string>;
 }): DockerClient => {
   let labels: Record<string, string> = {};
   const ok = (stdout = "") =>
@@ -155,6 +161,7 @@ const fakeDocker = (options: {
       }),
     execText: (_container, _user, argv) => {
       const line = argv.join(" ");
+      options.execs?.push(line);
       if (argv[0] === "sha256sum") {
         const file = TOOL_BUNDLE.find((tool) => tool.path === argv[1]);
         return ok(`${file?.linux?.amd64.sha256 ?? ""}  ${argv[1]}\n`);
@@ -181,7 +188,10 @@ const fakeDocker = (options: {
       }
       return ok();
     },
-    execStream: () => Stream.empty,
+    execStream: () =>
+      options.liveEvents === undefined
+        ? Stream.empty
+        : Stream.fromIterable(options.liveEvents),
     inspect: () =>
       Effect.succeed(Option.some({ labels: { ...labels }, running: true })),
     listNames: Effect.succeed([]),
@@ -313,76 +323,35 @@ const makeProvider = (
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly region?: string;
+    readonly forward?: SshForward;
   },
-) =>
-  makeNamespaceProvider({
+) => {
+  const api = fakeApi(calls, options);
+  const openLink = () =>
+    Effect.succeed<Link>({
+      ssh: [],
+      stream: () => Stream.empty,
+      run,
+    });
+  return makeNamespaceProvider({
     executor: nodeExecutor,
     fs: nodeFs,
-    api: fakeApi(calls, options),
+    api,
     login: Effect.succeed({
       token: Redacted.make("token"),
       region: Option.fromNullable(options?.region),
     }),
-    openLink: () =>
-      Effect.succeed<Link>({
-        ssh: [],
-        stream: () => Stream.empty,
-        run,
-      }),
-    forward: () => Effect.die("unused"),
-    dockerFor: () => docker,
+    openLink,
+    forward: options?.forward ?? (() => Effect.die("unused")),
     spawnDetached: () => Effect.void,
+    hosts: {
+      linux: makeLinuxHost({ api, dockerFor: () => docker }),
+      macos: unusedHost("macos"),
+    },
   });
+};
 
 describe("Namespace Provider", () => {
-  it("exec on a Mac from another machine exits 125 without opening the gateway", async () => {
-    // Given: the API labels the Mac, but this machine has no local files.
-    const ns = await startFakeNamespace((call) =>
-      call.method === "ListInstances"
-        ? {
-            json: {
-              instances: [
-                {
-                  instanceId: "abc123def4567",
-                  labels: [{ name: "proofbox.os", value: "macos" }],
-                },
-              ],
-            },
-          }
-        : { json: {} },
-    );
-    const env = makeEnv();
-    try {
-      // When
-      const result = await runCli(
-        env,
-        ["exec", "ns:us:abc123def4567", "--", "true"],
-        {
-          set: {
-            PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
-            PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
-          },
-        },
-      );
-      // Then
-      expect(result).toEqual({
-        stdout: "",
-        stderr:
-          "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567\n",
-        exitCode: 125,
-      });
-      expect(ns.calls.some((call) => call.method === "ListInstances")).toBe(
-        true,
-      );
-      expect(ns.calls.some((call) => call.method === "GetSSHConfig")).toBe(
-        false,
-      );
-    } finally {
-      cleanupEnvs();
-      await ns.close();
-    }
-  });
-
   it("exec with no local OS file fails before opening a link when lookup fails", async () => {
     // Given: this machine has no local files and Namespace cannot list hosts.
     const ns = await startFakeNamespace((call) =>
@@ -458,29 +427,6 @@ describe("Namespace Provider", () => {
     }).pipe(runtimeConfig()),
   );
 
-  it.effect("a local Mac OS file needs no API lookup", () =>
-    Effect.gen(function* () {
-      // Given: this machine knows it is a Mac but has no sshd pin.
-      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}));
-      const paths = yield* keeperPaths({
-        provider: "ns",
-        name: "us:abc123def4567",
-      }).pipe(Effect.provide(NodeContext.layer));
-      writeFileSync(paths.os, "macos\n");
-      // When
-      const error = yield* provider
-        .get({ name: "abc123def4567", region: "us" })
-        .pipe(Effect.flip);
-      // Then
-      expect(error).toBeInstanceOf(ProviderUnavailableError);
-      expect(error.message).toContain(
-        "was made by an older proofbox, or on another machine",
-      );
-      expect(yield* Ref.get(calls)).toEqual([]);
-    }).pipe(runtimeConfig()),
-  );
-
   it.effect(
     "extend writes the Deadline and starts nsc extend for the seconds left",
     () =>
@@ -498,21 +444,27 @@ describe("Namespace Provider", () => {
         const spawned = yield* Ref.make<
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
+        const api = fakeApi(yield* Ref.make<ReadonlyArray<string>>([]));
+        const dockerFor = () => {
+          throw new Error("unused");
+        };
+        const openLink = () => Effect.succeed(link);
         const provider = makeNamespaceProvider({
           executor: nodeExecutor,
           fs: nodeFs,
-          api: fakeApi(yield* Ref.make<ReadonlyArray<string>>([])),
+          api,
           login: Effect.die("unused"),
-          openLink: () => Effect.succeed(link),
+          openLink,
           forward: () => Effect.die("unused"),
-          dockerFor: () => {
-            throw new Error("unused");
-          },
           spawnDetached: (provider, rel, args) =>
             Ref.update(spawned, (all) => [
               ...all,
               [provider, rel, args] as const,
             ]),
+          hosts: {
+            linux: makeLinuxHost({ api, dockerFor }),
+            macos: unusedHost("macos"),
+          },
         });
         yield* TestClock.setTime(new Date("1970-01-01T00:10:00Z").getTime());
         // When
@@ -538,6 +490,92 @@ describe("Namespace Provider", () => {
           ],
         ]);
       }),
+  );
+
+  it.effect(
+    "a Linux Live view starts x11vnc in the container and forwards port 5900",
+    () =>
+      Effect.gen(function* () {
+        // Given: x11vnc prints the settled password; the forward lands on 50124
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        }).pipe(Effect.provide(NodeContext.layer));
+        writeFileSync(paths.os, "linux\n");
+        const provider = makeProvider(
+          calls,
+          fakeDocker({
+            liveEvents: [
+              {
+                _tag: "Stdout",
+                bytes: new TextEncoder().encode("Pw4xQ9zT"),
+              },
+              { _tag: "Exit", code: 0 },
+            ],
+          }),
+          tenantRun,
+          {
+            forward: (ref, port) =>
+              Ref.update(calls, (all) => [
+                ...all,
+                `portForward ${ref.region}:${ref.name} ${port}`,
+              ]).pipe(Effect.as({ port: 50124, gone: Effect.never })),
+          },
+        );
+        const liveView = provider.liveView;
+        // When
+        const view = yield* liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView({ name: "abc123def4567", region: "us" });
+        // Then
+        expect({
+          address: view.address,
+          password: view.password,
+          forwarded: (yield* Ref.get(calls)).includes(
+            "portForward us:abc123def4567 5900",
+          ),
+        }).toEqual({
+          address: "127.0.0.1:50124",
+          password: "Pw4xQ9zT",
+          forwarded: true,
+        });
+      }).pipe(Effect.scoped, runtimeConfig()),
+  );
+
+  it.effect("closing the last Linux Live view stops x11vnc", () =>
+    Effect.gen(function* () {
+      // Given: x11vnc prints the settled password; each docker exec is kept
+      const execs: Array<string> = [];
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:abc123def4567",
+      }).pipe(Effect.provide(NodeContext.layer));
+      writeFileSync(paths.os, "linux\n");
+      const provider = makeProvider(
+        yield* Ref.make<ReadonlyArray<string>>([]),
+        fakeDocker({
+          liveEvents: [
+            { _tag: "Stdout", bytes: new TextEncoder().encode("Pw4xQ9zT") },
+            { _tag: "Exit", code: 0 },
+          ],
+          execs,
+        }),
+        tenantRun,
+        {
+          forward: () => Effect.succeed({ port: 50124, gone: Effect.never }),
+        },
+      );
+      const liveView = provider.liveView;
+      // When: a Live view opens and its scope closes
+      yield* (
+        liveView === undefined
+          ? Effect.die("no liveView")
+          : liveView({ name: "abc123def4567", region: "us" })
+      ).pipe(Effect.scoped);
+      // Then
+      expect(execs.at(-1)).toContain("pkill -x x11vnc");
+    }).pipe(runtimeConfig()),
   );
 
   it.effect(
@@ -1215,81 +1253,6 @@ describe("Namespace Provider", () => {
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
-  it.effect("list names a Mac host with no Sandbox state as unfinished", () =>
-    Effect.gen(function* () {
-      // Given: a Mac host whose state file was never written
-      const paths = yield* keeperPaths({
-        provider: "ns",
-        name: "us:mac000000000a",
-      }).pipe(Effect.provide(NodeContext.layer));
-      writeFileSync(
-        paths.sshdKnownHosts,
-        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
-      );
-      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(
-        calls,
-        fakeDocker({}),
-        () =>
-          Effect.succeed({
-            exitCode: 1,
-            stdout: "",
-            stderr: "cat: /var/proofbox/labels.json: No such file or directory",
-          }),
-        { instances: [UNFINISHED_MAC] },
-      );
-      // When
-      const listed = yield* provider.list;
-      // Then
-      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
-        infos: [],
-        unfinished: [
-          {
-            name: "mac000000000a",
-            region: "us",
-            os: "macos",
-            createdAt: new Date("2026-10-01T07:49:00Z"),
-          },
-        ],
-      });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
-  );
-
-  it.effect("list names a Mac with no pinned sshd host key as unreached", () =>
-    Effect.gen(function* () {
-      // Given
-      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const runs = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(
-        calls,
-        fakeDocker({}),
-        (line) =>
-          Ref.update(runs, (all) => [...all, line]).pipe(
-            Effect.as({ exitCode: 0, stdout: "", stderr: "" }),
-          ),
-        { instances: [UNFINISHED_MAC] },
-      );
-      // When
-      const listed = yield* provider.list;
-      // Then
-      expect({
-        infos: listed.infos,
-        unreached: listed.unreached,
-        runs: yield* Ref.get(runs),
-      }).toEqual({
-        infos: [],
-        unreached: [
-          {
-            where: "Namespace region us",
-            reason:
-              "Sandbox ns:us:mac000000000a was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:mac000000000a",
-          },
-        ],
-        runs: [],
-      });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
-  );
-
   it.effect("list names a Linux host with no container as unfinished", () =>
     Effect.gen(function* () {
       // Given: a Linux host whose Sandbox container was never made
@@ -1374,49 +1337,9 @@ describe("Namespace Provider", () => {
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
-
-  it.effect(
-    "list names a host Namespace is still starting without reading it",
-    () =>
-      Effect.gen(function* () {
-        // Given: Namespace still makes the Mac host; the link counts reads
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        let reads = 0;
-        const provider = makeProvider(
-          calls,
-          fakeDocker({}),
-          () =>
-            Effect.sync(() => {
-              reads += 1;
-              return done();
-            }),
-          { instances: [{ ...UNFINISHED_MAC, starting: true }] },
-        );
-        // When
-        const listed = yield* provider.list;
-        // Then
-        expect({ unfinished: listed.unfinished, reads }).toEqual({
-          unfinished: [
-            {
-              name: "mac000000000a",
-              region: "us",
-              os: "macos",
-              createdAt: new Date("2026-10-01T07:49:00Z"),
-            },
-          ],
-          reads: 0,
-        });
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
-  );
 });
 
-// Hosts a create started and never finished, as ListInstances lists them.
-const UNFINISHED_MAC = {
-  id: "mac000000000a",
-  labels: { "proofbox.os": "macos" },
-  region: "us",
-  createdAt: new Date("2026-10-01T07:49:00Z"),
-};
+// A host a create started and never finished, as ListInstances lists it.
 const UNFINISHED_LINUX = {
   id: "lin000000000a",
   labels: { "proofbox.os": "linux" },
@@ -1465,6 +1388,31 @@ const warmNamespace = (
         return base.execText(container, user, argv);
       },
     };
+    const openLink = () =>
+      Effect.succeed<Link>({
+        ssh: [],
+        stream: () => {
+          counts.stream += 1;
+          return Stream.empty;
+        },
+        run: (commandLine) => {
+          counts.run += 1;
+          runs.push(commandLine);
+          return commandLine.includes("docker inspect")
+            ? Effect.succeed(
+                done(
+                  `${JSON.stringify({
+                    "proofbox.name": "abc123",
+                    "proofbox.os": "linux",
+                    "proofbox.created-at": "1970-01-01T00:00:00Z",
+                    "proofbox.idle-seconds": "900",
+                    "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+                  })}|true\n900\n`,
+                ),
+              )
+            : Effect.succeed(done());
+        },
+      });
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
       fs: nodeFs,
@@ -1480,37 +1428,16 @@ const warmNamespace = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: () =>
-        Effect.succeed<Link>({
-          ssh: [],
-          stream: () => {
-            counts.stream += 1;
-            return Stream.empty;
-          },
-          run: (commandLine) => {
-            counts.run += 1;
-            runs.push(commandLine);
-            return commandLine.includes("docker inspect")
-              ? Effect.succeed(
-                  done(
-                    `${JSON.stringify({
-                      "proofbox.name": "abc123",
-                      "proofbox.os": "linux",
-                      "proofbox.created-at": "1970-01-01T00:00:00Z",
-                      "proofbox.idle-seconds": "900",
-                      "proofbox.max-life-at": "2099-01-01T00:00:00Z",
-                    })}|true\n900\n`,
-                  ),
-                )
-              : Effect.succeed(done());
-          },
-        }),
+      openLink,
       forward: () => Effect.die("unused"),
-      dockerFor: () => docker,
       spawnDetached: (_provider, rel, args) =>
         Effect.sync(() => {
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
+      hosts: {
+        linux: makeLinuxHost({ api, dockerFor: () => docker }),
+        macos: unusedHost("macos"),
+      },
     });
     // The Max-life cap the host push reads, as create writes it.
     const paths = yield* keeperPaths({

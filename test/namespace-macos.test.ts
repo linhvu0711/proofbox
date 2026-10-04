@@ -24,9 +24,11 @@ import {
   runCommand,
 } from "../src/command-checks.ts";
 import { ProviderUnavailableError } from "../src/errors.ts";
-import { macKillCount } from "../src/namespace/mac-host.ts";
+import { keeperPaths } from "../src/keeper/paths.ts";
+import { macKillCount, makeMacHost } from "../src/namespace/mac-host.ts";
 import type {
   CreateReq,
+  InstanceListed,
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
@@ -34,12 +36,16 @@ import type {
   HostResult,
   Link,
   LinkVia,
+  OpenLink,
   SshForward,
 } from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
+import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
+import { unusedHost } from "./support/namespace-hosts.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 type CreateRequest = CreateReq;
@@ -62,6 +68,8 @@ const makeMac = (
   // The ssh forward a Mac Live view asks for; `calls` still notes it.
   portForward: SshForward = () => Effect.die("unused"),
   sshdDown?: true,
+  // The hosts the Compute API lists, each under its labels and region.
+  instances: ReadonlyArray<InstanceListed & { readonly region?: string }> = [],
 ) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -87,7 +95,18 @@ const makeMac = (
         note(calls, `destroy ${region} ${instanceId}`),
       extend: (region, instanceId) =>
         note(calls, `extend ${region} ${instanceId}`),
-      list: (region) => note(calls, `list ${region}`).pipe(Effect.as([])),
+      list: (region, labels) =>
+        note(calls, `list ${region}`).pipe(
+          Effect.as(
+            instances.filter(
+              (instance) =>
+                (instance.region === undefined || instance.region === region) &&
+                labels.every(
+                  (label) => instance.labels[label.name] === label.value,
+                ),
+            ),
+          ),
+        ),
       sshConfig: () => Effect.die("unused"),
       ensureImageExpiry: () => Effect.die("unused"),
       checkToken: () => Effect.die("unused"),
@@ -150,6 +169,20 @@ const makeMac = (
           }),
         ),
     });
+    const openLink: OpenLink = (_ref, _paths, owner, via) =>
+      note(links, `${owner} ${via}`).pipe(
+        Effect.zipRight(
+          via === "sshd" && sshdDown === true
+            ? Effect.fail(
+                new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason:
+                    "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
+                }),
+              )
+            : Effect.succeed(link(via)),
+        ),
+      );
     const provider = makeNamespaceProvider({
       executor: nodeExecutor,
       fs: nodeFs,
@@ -158,29 +191,17 @@ const makeMac = (
         token: Redacted.make("token"),
         region: Option.none(),
       }),
-      openLink: (_ref, _paths, owner, via) =>
-        note(links, `${owner} ${via}`).pipe(
-          Effect.zipRight(
-            via === "sshd" && sshdDown === true
-              ? Effect.fail(
-                  new ProviderUnavailableError({
-                    provider: "namespace",
-                    reason:
-                      "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
-                  }),
-                )
-              : Effect.succeed(link(via)),
-          ),
-        ),
+      openLink,
       forward: (ref, port) =>
         note(calls, `portForward ${ref.region}:${ref.name} ${port}`).pipe(
           Effect.zipRight(portForward(ref, port)),
         ),
-      dockerFor: () => {
-        throw new Error("a Mac has no Docker");
-      },
       spawnDetached: (_provider, rel, args) =>
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
+      hosts: {
+        linux: unusedHost("linux"),
+        macos: makeMacHost({ openLink, fs: nodeFs }),
+      },
     });
     return { provider, calls, requests, commands, detached, links, routed };
   });
@@ -249,6 +270,14 @@ const createMac = (size?: { cpu: number; ramGb: number }) => ({
   maxLife: Duration.hours(3),
   size,
 });
+
+// A Mac host a create started and never finished, as ListInstances lists it.
+const UNFINISHED_MAC = {
+  id: "mac000000000a",
+  labels: { "proofbox.os": "macos" },
+  region: "us",
+  createdAt: new Date("2026-10-01T07:49:00Z"),
+};
 
 describe("Namespace macOS Provider", () => {
   it.effect(
@@ -1265,4 +1294,164 @@ describe("Namespace macOS Provider", () => {
       expect(last).toContain("kickstart -deactivate");
     }).pipe(withRuntime(runtime));
   });
+
+  it("exec on a Mac from another machine exits 125 without opening the gateway", async () => {
+    // Given: the API labels the Mac, but this machine has no local files.
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances"
+        ? {
+            json: {
+              instances: [
+                {
+                  instanceId: "abc123def4567",
+                  labels: [{ name: "proofbox.os", value: "macos" }],
+                },
+              ],
+            },
+          }
+        : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(
+        env,
+        ["exec", "ns:us:abc123def4567", "--", "true"],
+        {
+          set: {
+            PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+            PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          },
+        },
+      );
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567\n",
+        exitCode: 125,
+      });
+      expect(ns.calls.some((call) => call.method === "ListInstances")).toBe(
+        true,
+      );
+      expect(ns.calls.some((call) => call.method === "GetSSHConfig")).toBe(
+        false,
+      );
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
+  it.effect("a local Mac OS file needs no API lookup", () => {
+    const runtime = runtimeDir();
+    return Effect.gen(function* () {
+      // Given: this machine knows it is a Mac but has no sshd pin.
+      const mac = yield* makeMac();
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "macos\n");
+      // When
+      const error = yield* mac.provider
+        .get({ name: "abc123def4567", region: "us" })
+        .pipe(Effect.flip);
+      // Then
+      expect(error).toBeInstanceOf(ProviderUnavailableError);
+      expect(error.message).toContain(
+        "was made by an older proofbox, or on another machine",
+      );
+      expect(yield* Ref.get(mac.calls)).toEqual([]);
+    }).pipe(withRuntime(runtime));
+  });
+
+  it.effect("list names a Mac host with no Sandbox state as unfinished", () =>
+    Effect.gen(function* () {
+      // Given: a Mac host whose state file was never written
+      const paths = yield* keeperPaths({
+        provider: "ns",
+        name: "us:mac000000000a",
+      }).pipe(Effect.provide(NodeContext.layer));
+      writeFileSync(
+        paths.sshdKnownHosts,
+        "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+      );
+      const mac = yield* makeMac(
+        () => ({
+          exitCode: 1,
+          stderr: "cat: /var/proofbox/labels.json: No such file or directory",
+        }),
+        undefined,
+        undefined,
+        undefined,
+        [UNFINISHED_MAC],
+      );
+      // When
+      const listed = yield* mac.provider.list;
+      // Then
+      expect({ infos: listed.infos, unfinished: listed.unfinished }).toEqual({
+        infos: [],
+        unfinished: [
+          {
+            name: "mac000000000a",
+            region: "us",
+            os: "macos",
+            createdAt: new Date("2026-10-01T07:49:00Z"),
+          },
+        ],
+      });
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect("list names a Mac with no pinned sshd host key as unreached", () =>
+    Effect.gen(function* () {
+      // Given
+      const mac = yield* makeMac(undefined, undefined, undefined, undefined, [
+        UNFINISHED_MAC,
+      ]);
+      // When
+      const listed = yield* mac.provider.list;
+      // Then
+      expect({
+        infos: listed.infos,
+        unreached: listed.unreached,
+        commands: yield* Ref.get(mac.commands),
+      }).toEqual({
+        infos: [],
+        unreached: [
+          {
+            where: "Namespace region us",
+            reason:
+              "Sandbox ns:us:mac000000000a was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:mac000000000a",
+          },
+        ],
+        commands: [],
+      });
+    }).pipe(withRuntime(runtimeDir())),
+  );
+
+  it.effect(
+    "list names a host Namespace is still starting without reading it",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace still makes the Mac host; the link notes each read
+        const mac = yield* makeMac(undefined, undefined, undefined, undefined, [
+          { ...UNFINISHED_MAC, starting: true },
+        ]);
+        // When
+        const listed = yield* mac.provider.list;
+        // Then
+        expect({
+          unfinished: listed.unfinished,
+          commands: yield* Ref.get(mac.commands),
+        }).toEqual({
+          unfinished: [
+            {
+              name: "mac000000000a",
+              region: "us",
+              os: "macos",
+              createdAt: new Date("2026-10-01T07:49:00Z"),
+            },
+          ],
+          commands: [],
+        });
+      }).pipe(withRuntime(runtimeDir())),
+  );
 });
