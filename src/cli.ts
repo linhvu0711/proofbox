@@ -12,7 +12,7 @@ import { deleteSandbox } from "./commands/delete.ts";
 import { dragFrom } from "./commands/drag.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { loginToGithub } from "./commands/github.ts";
-import { loginToHarness } from "./commands/harness.ts";
+import { initHarnessProfile, loginToHarness } from "./commands/harness.ts";
 import { pressKey } from "./commands/key.ts";
 import { listSandboxes } from "./commands/list.ts";
 import { openLive } from "./commands/live.ts";
@@ -346,8 +346,18 @@ const harnessLogin = Command.make(
   ({ harness }) => loginToHarness(harness),
 );
 
+const harnessProfileInit = Command.make(
+  "init",
+  { harness: Args.text({ name: "harness" }) },
+  ({ harness }) => initHarnessProfile(harness),
+);
+
+const harnessProfile = Command.make("profile").pipe(
+  Command.withSubcommands([harnessProfileInit]),
+);
+
 const harness = Command.make("harness").pipe(
-  Command.withSubcommands([harnessLogin]),
+  Command.withSubcommands([harnessLogin, harnessProfile]),
 );
 
 const live = Command.make(

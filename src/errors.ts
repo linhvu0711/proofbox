@@ -37,6 +37,17 @@ export class NoSuchHarnessError extends Data.TaggedError("NoSuchHarnessError")<{
   }
 }
 
+export class HarnessProfileExistsError extends Data.TaggedError(
+  "HarnessProfileExistsError",
+)<{
+  readonly harness: string;
+  readonly path: string;
+}> {
+  override get message() {
+    return `Harness profile ${this.harness} already exists at ${this.path}. Edit it there, or delete it and run proofbox harness profile init ${this.harness} again.`;
+  }
+}
+
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
 )<{
