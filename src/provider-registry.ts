@@ -52,7 +52,7 @@ export const ProvidersLive = Layer.effect(
             const namespaceApi = api.makeNamespaceApi({
               login: namespaceLogin,
             });
-            const openLink = link.makeOpenLink(namespaceApi, executor);
+            const openLink = link.makeOpenLink(namespaceApi, executor, fs);
             const dockerFor = (sandbox: {
               readonly ssh: ReadonlyArray<string>;
             }) => client.makeDockerClient(executor, { ssh: sandbox.ssh });
