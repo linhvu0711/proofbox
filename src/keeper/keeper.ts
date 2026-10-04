@@ -1,11 +1,4 @@
-import { randomBytes } from "node:crypto";
-import { rename, rm, writeFile } from "node:fs/promises";
-import {
-  createConnection,
-  createServer,
-  type Server,
-  type Socket,
-} from "node:net";
+import type { Socket } from "node:net";
 import type { CommandExecutor } from "@effect/platform";
 import {
   Clock,
@@ -23,21 +16,9 @@ import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import { programOf, writeKeeperLog } from "./keeper-log.ts";
+import { holdKeeper, keeperAnswers } from "./lifecycle.ts";
 import { keeperPaths } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
-import { withStartLock } from "./start-lock.ts";
-
-const socketAnswers = (path: string) =>
-  Effect.async<boolean>((resume) => {
-    const probe = createConnection({ path }, () => {
-      probe.destroy();
-      resume(Effect.succeed(true));
-    });
-    probe.once("error", () => {
-      probe.destroy();
-      resume(Effect.succeed(false));
-    });
-  });
 
 const writeFrame = (socket: Socket, frame: unknown) =>
   Effect.async<void, Error>((resume) => {
@@ -91,7 +72,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
     provider: id.prefix,
     name: fileStem(id),
   });
-  if (yield* socketAnswers(paths.socket)) {
+  if (yield* keeperAnswers(paths.socket)) {
     return;
   }
 
@@ -385,70 +366,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
           });
         });
       };
-      // Under the lock, check the socket again: a Keeper that waited for
-      // the lock finds the first one's socket answers, and ends.
-      const started = yield* withStartLock(
-        paths.startLock,
-        id.provider.name,
-        Effect.gen(function* () {
-          if (yield* socketAnswers(paths.socket)) {
-            return false;
-          }
-          yield* Effect.promise(() =>
-            rm(paths.socket, { force: true }).catch(() => {}),
-          );
-          // Write a unique temp file and rename it over the pid file, so a
-          // reader never sees it empty.
-          const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-          yield* Effect.acquireRelease(
-            Effect.tryPromise({
-              try: async () => {
-                try {
-                  await writeFile(temp, `${process.pid}\n`);
-                  await rename(temp, paths.pid);
-                } catch (cause) {
-                  await rm(temp, { force: true });
-                  throw cause;
-                }
-              },
-              catch: (cause) =>
-                new ProviderError({
-                  provider: id.provider.name,
-                  reason:
-                    cause instanceof Error ? cause.message : String(cause),
-                }),
-            }),
-            () =>
-              Effect.promise(() =>
-                Promise.all([
-                  rm(paths.socket, { force: true }).catch(() => {}),
-                  rm(paths.pid, { force: true }).catch(() => {}),
-                ]).then(() => {}),
-              ),
-          );
-          yield* Effect.acquireRelease(
-            Effect.async<Server, ProviderError>((resume) => {
-              const server = createServer(handleClient);
-              server.once("error", (error) =>
-                resume(
-                  Effect.fail(
-                    new ProviderError({
-                      provider: id.provider.name,
-                      reason: error.message,
-                    }),
-                  ),
-                ),
-              );
-              server.listen(paths.socket, () => resume(Effect.succeed(server)));
-            }),
-            (server) =>
-              Effect.promise(
-                () => new Promise<void>((done) => server.close(() => done())),
-              ),
-          );
-          return true;
-        }),
-      );
+      const started = yield* holdKeeper(id, handleClient);
       if (!started) {
         return;
       }

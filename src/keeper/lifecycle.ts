@@ -1,9 +1,15 @@
 import { execFile } from "node:child_process";
-import { readFile, rm } from "node:fs/promises";
-import type { Socket } from "node:net";
+import { randomBytes } from "node:crypto";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  createConnection,
+  createServer,
+  type Server,
+  type Socket,
+} from "node:net";
 import { promisify } from "node:util";
 import { Effect, Option, Schedule } from "effect";
-import type { ProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import {
   fileStem,
   formatSandboxId,
@@ -17,6 +23,7 @@ import {
   type RequestFrame,
   writeFrame,
 } from "./protocol.ts";
+import { withStartLock } from "./start-lock.ts";
 
 const RETRY_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
 
@@ -116,4 +123,84 @@ export const stopKeeper = Effect.fn("lifecycle.stopKeeper")(function* (
     }
   }
   yield* removeKeeperFiles(paths);
+});
+
+// Whether a Keeper answers on `socket`.
+export const keeperAnswers = (socket: string) =>
+  Effect.async<boolean>((resume) => {
+    const probe = createConnection({ path: socket }, () => {
+      probe.destroy();
+      resume(Effect.succeed(true));
+    });
+    probe.once("error", () => {
+      probe.destroy();
+      resume(Effect.succeed(false));
+    });
+  });
+
+// Makes this process the Keeper of Sandbox `id`: its pid file and its
+// socket, served by `onClient`, until the scope ends. False when another
+// Keeper already answers.
+export const holdKeeper = Effect.fn("lifecycle.holdKeeper")(function* (
+  id: ResolvedSandboxId,
+  onClient: (socket: Socket) => void,
+) {
+  const paths = yield* pathsOf(id);
+  // Under the lock, check the socket again: a Keeper that waited for
+  // the lock finds the first one's socket answers, and ends.
+  return yield* withStartLock(
+    paths.startLock,
+    id.provider.name,
+    Effect.gen(function* () {
+      if (yield* keeperAnswers(paths.socket)) {
+        return false;
+      }
+      yield* Effect.promise(() =>
+        rm(paths.socket, { force: true }).catch(() => {}),
+      );
+      // Write a unique temp file and rename it over the pid file, so a
+      // reader never sees it empty.
+      const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+      yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: async () => {
+            try {
+              await writeFile(temp, `${process.pid}\n`);
+              await rename(temp, paths.pid);
+            } catch (cause) {
+              await rm(temp, { force: true });
+              throw cause;
+            }
+          },
+          catch: (cause) =>
+            new ProviderError({
+              provider: id.provider.name,
+              reason: cause instanceof Error ? cause.message : String(cause),
+            }),
+        }),
+        () => removeKeeperFiles(paths),
+      );
+      yield* Effect.acquireRelease(
+        Effect.async<Server, ProviderError>((resume) => {
+          const server = createServer(onClient);
+          server.once("error", (error) =>
+            resume(
+              Effect.fail(
+                new ProviderError({
+                  provider: id.provider.name,
+                  reason: error.message,
+                }),
+              ),
+            ),
+          );
+          server.listen(paths.socket, () => resume(Effect.succeed(server)));
+        }),
+        (server) =>
+          Effect.promise(
+            () => new Promise<void>((done) => server.close(() => done())),
+          ),
+      );
+      return true;
+    }),
+  );
 });
