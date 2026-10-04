@@ -7,7 +7,6 @@ import {
   rename,
   rm,
   stat,
-  writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, CommandExecutor, type FileSystem } from "@effect/platform";
@@ -245,24 +244,18 @@ export const makeFakeProvider = (options: {
         ),
       ),
     );
-    yield* Effect.tryPromise({
-      try: () => mkdir(root, { recursive: true }),
-      catch: (cause) => fail(describe(cause)),
-    });
+    yield* fs
+      .makeDirectory(root, { recursive: true })
+      .pipe(Effect.mapError((error) => fail(describe(error))));
     let name: string | undefined;
     for (let i = 0; i < 5 && name === undefined; i++) {
       const candidate = makeSandboxName();
-      const made = yield* Effect.tryPromise({
-        try: async () => {
-          await mkdir(join(root, candidate));
-          return true;
-        },
-        catch: (cause) => cause,
-      }).pipe(
-        Effect.catchAll((cause) =>
-          hasCode(cause, "EEXIST")
+      const made = yield* fs.makeDirectory(join(root, candidate)).pipe(
+        Effect.as(true),
+        Effect.catchAll((error) =>
+          error._tag === "SystemError" && error.reason === "AlreadyExists"
             ? Effect.succeed(false)
-            : Effect.fail(fail(describe(cause))),
+            : Effect.fail(fail(describe(error))),
         ),
       );
       if (made) name = candidate;
@@ -289,7 +282,8 @@ export const makeFakeProvider = (options: {
       req.snapshot === undefined || options.snapshots === undefined || pullFails
         ? undefined
         : join(options.snapshots.root, req.snapshot);
-    const entry = saved !== undefined && existsSync(saved) ? saved : undefined;
+    const entry =
+      saved !== undefined && (yield* exists(saved)) ? saved : undefined;
     const file = new SandboxFile({
       os: req.os,
       createdAt,
@@ -308,7 +302,7 @@ export const makeFakeProvider = (options: {
     yield* writeFileInfo(name, file);
     const hold = options.createHold;
     if (hold !== undefined) {
-      yield* Effect.sync(() => existsSync(hold)).pipe(
+      yield* exists(hold).pipe(
         Effect.repeat({
           schedule: Schedule.spaced(Duration.millis(50)),
           until: (released) => released,
@@ -317,34 +311,30 @@ export const makeFakeProvider = (options: {
     }
     if (options.marksLocal === true) {
       const maxLife = (yield* keeperPaths({ provider: "fake", name })).maxLife;
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(maxLife, String(Math.floor(maxLifeAt.getTime() / 1000)), {
-            mode: 0o600,
-          }),
-        catch: (cause) => fail(describe(cause)),
-      });
+      yield* fs
+        .writeFileString(
+          maxLife,
+          String(Math.floor(maxLifeAt.getTime() / 1000)),
+          { mode: 0o600 },
+        )
+        .pipe(Effect.mapError((error) => fail(describe(error))));
     }
-    yield* Effect.tryPromise({
-      try: async () => {
-        await mkdir(join(dir, "home"));
-        await mkdir(join(dir, "state"));
-        await mkdir(join(dir, "secrets"), { mode: 0o700 });
-      },
-      catch: (cause) => fail(describe(cause)),
-    });
+    yield* Effect.all(
+      [
+        fs.makeDirectory(join(dir, "home")),
+        fs.makeDirectory(join(dir, "state")),
+        fs.makeDirectory(join(dir, "secrets"), { mode: 0o700 }),
+      ],
+      { discard: true },
+    ).pipe(Effect.mapError((error) => fail(describe(error))));
     if (entry !== undefined) {
-      yield* Effect.tryPromise({
-        try: async () => {
-          await cp(join(entry, "home"), join(dir, "home"), {
-            recursive: true,
-          });
-          await cp(join(entry, "state"), join(dir, "state"), {
-            recursive: true,
-          });
-        },
-        catch: (cause) => fail(describe(cause)),
-      });
+      yield* Effect.all(
+        [
+          fs.copy(join(entry, "home"), join(dir, "home")),
+          fs.copy(join(entry, "state"), join(dir, "state")),
+        ],
+        { discard: true },
+      ).pipe(Effect.mapError((error) => fail(describe(error))));
     }
     if (options.watch === "process") {
       yield* spawnDetached("fake", "fake/watch-main", [root, name]);
