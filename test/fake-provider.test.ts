@@ -160,6 +160,40 @@ describe("fake Provider", () => {
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 
+  it.live("a command on the fake pushes the Deadline that get reads", () =>
+    Effect.gen(function* () {
+      // Given: a fake Sandbox whose Deadline is one minute away
+      const root = makeRoot();
+      const fake = makeFakeProvider({ root, watch: "none" });
+      const sandbox = yield* fake
+        .create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        })
+        .pipe(Effect.provideService(Progress, noProgress));
+      const ref = { name: sandbox.name, region: undefined };
+      yield* fake.extend(ref, new Date(Date.now() + 60_000));
+      // When
+      const before = Math.floor(Date.now() / 1000);
+      yield* fake.connect(ref).pipe(
+        Effect.flatMap((connection) =>
+          Stream.runDrain(runCommand(connection, ["true"])),
+        ),
+        Effect.scoped,
+      );
+      const after = Math.floor(Date.now() / 1000);
+      const info = yield* fake.get(ref);
+      // Then: the Deadline is the idle time from when the command ran
+      const seconds = info.deadline.getTime() / 1000;
+      expect(
+        seconds >= before + 900 && seconds <= after + 900
+          ? "pushed"
+          : `Deadline ${seconds} not in ${before + 900}..${after + 900}`,
+      ).toBe("pushed");
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
   it.live("fake exec gives a command with no stdin end of input at once", () =>
     Effect.gen(function* () {
       // Given: a fake Sandbox
