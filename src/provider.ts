@@ -9,6 +9,7 @@ import {
   type Scope,
   type Stream,
 } from "effect";
+import type { Transport } from "./command-checks.ts";
 import {
   type BadLoginsFileError,
   type LoginExpiredError,
@@ -179,24 +180,31 @@ export type SandboxCallError =
   | TokenRejectedError
   | TokenPermissionError;
 
-export interface Connection {
+interface ConnectionBase {
   // The Sandbox as `connect` read it.
   readonly info: SandboxInfo;
   // Reads the Sandbox again over this connection: the Keeper's gone-watch.
   readonly get: Effect.Effect<SandboxInfo, SandboxCallError>;
   // One Deadline push over this connection, with no command.
   readonly extend: (deadline: Date) => Effect.Effect<void, SandboxCallError>;
-  // Runs a command with its checks in the same remote call (ADR 0015): the
-  // Deadline pushed by the idle time before and after it, and the
-  // memory-kill counts around it on the Exit event.
-  readonly exec: (
-    argv: ReadonlyArray<string>,
-    options?: ExecOptions,
-  ) => Stream.Stream<
-    ExecEvent,
-    ProviderError | ProviderUnavailableError | SandboxGoneError
-  >;
 }
+
+// How a connection runs a command: a transport the command run drives, or,
+// until #160 moves it, the Namespace connection's own `exec` that runs the
+// checks itself.
+export type Connection = ConnectionBase &
+  (
+    | { readonly transport: Transport }
+    | {
+        readonly exec: (
+          argv: ReadonlyArray<string>,
+          options?: ExecOptions,
+        ) => Stream.Stream<
+          ExecEvent,
+          ProviderError | ProviderUnavailableError | SandboxGoneError
+        >;
+      }
+  );
 
 // The folders a Provider keeps proofbox's own files in; the file names
 // live in `src/sandbox-file.ts`.

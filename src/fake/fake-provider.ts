@@ -20,10 +20,10 @@ import {
   Redacted,
   Schedule,
   Schema,
-  Stream,
 } from "effect";
+import type { ChecksShell } from "../command-checks.ts";
 import { commandEvents } from "../command-events.ts";
-import { nextDeadline, pushedDeadline } from "../deadline.ts";
+import { nextDeadline } from "../deadline.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
@@ -52,7 +52,6 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   os: Os,
   createdAt: Schema.Date,
   idleSeconds: IdleSeconds,
-  deadline: Schema.Date,
   maxLifeAt: Schema.Date,
   size: Schema.optional(Size),
   snapshot: Schema.optional(Schema.String),
@@ -66,6 +65,16 @@ const hasCode = (cause: unknown, code: string) =>
   cause !== null &&
   "code" in cause &&
   cause.code === code;
+
+// The checks around a command on the Caller's machine (ADR 0015): the
+// Deadline file `get` reads, with no temp file left when the write fails;
+// the memory-kill count a command may raise in `memory-kills`; and the
+// command in the Sandbox's home folder.
+const fakeChecks = (dir: string): ChecksShell => ({
+  push: `tmp=${shellJoin([join(dir, ".deadline")])}.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${shellJoin([join(dir, "deadline")])} || { rm -f "$tmp"; false; }`,
+  kills: `cat ${shellJoin([join(dir, "memory-kills")])}`,
+  run: '"$@"',
+});
 
 export const makeFakeProvider = (options: {
   readonly root: string;
@@ -149,12 +158,19 @@ export const makeFakeProvider = (options: {
     const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
       Effect.mapError((error) => fail(error.message)),
     );
+    const seconds = yield* Effect.tryPromise({
+      try: () => readFile(join(dir, "deadline"), "utf8"),
+      catch: (cause) => (!existsSync(dir) ? gone(name) : fail(describe(cause))),
+    });
+    if (!/^[0-9]+\n?$/.test(seconds)) {
+      return yield* fail(`could not read the Deadline: ${seconds.trim()}`);
+    }
     const info = new SandboxInfo({
       name,
       os: file.os,
       createdAt: file.createdAt,
       idleSeconds: file.idleSeconds,
-      deadline: file.deadline,
+      deadline: new Date(Number(seconds.trim()) * 1000),
       maxLifeAt: file.maxLifeAt,
       size: file.size,
       snapshot: file.snapshot,
@@ -170,20 +186,16 @@ export const makeFakeProvider = (options: {
     return info;
   });
 
-  // Write a temp file and rename it over sandbox.json, so a concurrent read
+  // Write a temp file and rename it over the file, so a concurrent read
   // sees the old file or the new one, never a half-written one.
-  const writeFileInfo = Effect.fn("FakeProvider.writeFileInfo")(function* (
-    name: string,
-    file: SandboxFile,
+  const writeWhole = Effect.fn("FakeProvider.writeWhole")(function* (
+    path: string,
+    text: string,
   ) {
-    const path = join(root, name, "sandbox.json");
     const temp = `${path}.${randomUUID()}.tmp`;
     yield* Effect.tryPromise({
       try: async () => {
-        await writeFile(
-          temp,
-          `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
-        );
+        await writeFile(temp, text);
         await rename(temp, path);
       },
       catch: (cause) => fail(describe(cause)),
@@ -193,6 +205,19 @@ export const makeFakeProvider = (options: {
       ),
     );
   });
+
+  const writeFileInfo = (name: string, file: SandboxFile) =>
+    writeWhole(
+      join(root, name, "sandbox.json"),
+      `${JSON.stringify(Schema.encodeSync(SandboxFile)(file))}\n`,
+    );
+
+  // The Deadline in its own file, in epoch seconds, as Docker keeps it.
+  const writeDeadline = (name: string, deadline: Date) =>
+    writeWhole(
+      join(root, name, "deadline"),
+      `${Math.floor(deadline.getTime() / 1000)}\n`,
+    );
 
   const createWork = Effect.fn("FakeProvider.createWork")(function* (req: {
     readonly os: Os;
@@ -259,15 +284,17 @@ export const makeFakeProvider = (options: {
       os: req.os,
       createdAt,
       idleSeconds,
-      deadline: nextDeadline({
-        now: createdAt,
-        idle: req.idle,
-        maxLifeAt,
-      }),
       maxLifeAt,
       size: req.size,
       snapshot: entry === undefined ? undefined : req.snapshot,
     });
+    const deadline = nextDeadline({
+      now: createdAt,
+      idle: req.idle,
+      maxLifeAt,
+    });
+    // The Deadline file first, so a Sandbox with a sandbox.json has one.
+    yield* writeDeadline(name, deadline);
     yield* writeFileInfo(name, file);
     const hold = options.createHold;
     if (hold !== undefined) {
@@ -312,7 +339,7 @@ export const makeFakeProvider = (options: {
     if (options.watch === "process") {
       yield* spawnDetached("fake", "fake/watch-main", [root, name]);
     }
-    return new SandboxInfo({ name, ...file });
+    return new SandboxInfo({ name, ...file, deadline });
   });
 
   const create = Effect.fn("FakeProvider.create")(function* (req: {
@@ -432,17 +459,8 @@ export const makeFakeProvider = (options: {
     sandbox: SandboxRef,
     deadline: Date,
   ) {
-    const info = yield* readFileInfo(sandbox.name);
-    const file = new SandboxFile({
-      os: info.os,
-      createdAt: info.createdAt,
-      idleSeconds: info.idleSeconds,
-      deadline,
-      maxLifeAt: info.maxLifeAt,
-      size: info.size,
-      snapshot: info.snapshot,
-    });
-    yield* writeFileInfo(sandbox.name, file);
+    yield* readFileInfo(sandbox.name);
+    yield* writeDeadline(sandbox.name, deadline);
   });
 
   // Copy into a temp entry and rename it over the old one, so a create
@@ -488,37 +506,34 @@ export const makeFakeProvider = (options: {
     sandbox: SandboxRef,
   ) {
     const executor = yield* CommandExecutor.CommandExecutor;
-    const home = join(root, sandbox.name, "home");
+    const dir = join(root, sandbox.name);
     const info = yield* get(sandbox);
-    // The fake's commands run on the Caller's machine and its Deadline is
-    // a JSON file, so its checks run in-process. It sees no memory kills, so
-    // its Exit carries no counts.
-    const push = Effect.flatMap(pushedDeadline(info), (deadline) =>
-      extend(sandbox, deadline),
-    );
-    const run = (
-      argv: ReadonlyArray<string>,
-      options: Parameters<Connection["exec"]>[1],
-    ) =>
-      commandEvents(
-        executor,
-        Command.make("sh", "-c", shellJoin(argv)).pipe(
-          Command.workingDirectory(home),
-        ),
-        options,
-        { spawn: (error) => fail(error.message), fail },
-      );
     const connection: Connection = {
       info,
       get: get(sandbox),
       extend: (deadline) => extend(sandbox, deadline),
-      exec: (argv, options) =>
-        Stream.concat(
-          Stream.fromEffect(push).pipe(Stream.drain),
-          run(argv, options).pipe(
-            Stream.tap((event) => (event._tag === "Exit" ? push : Effect.void)),
+      // The fake's Sandbox is a folder on the Caller's machine: the command
+      // run's script runs in a local `sh` in its home folder (ADR 0015).
+      transport: {
+        shell: fakeChecks(dir),
+        call: (argv, options) =>
+          commandEvents(
+            executor,
+            Command.make(argv[0] ?? "sh", ...argv.slice(1)).pipe(
+              Command.workingDirectory(join(dir, "home")),
+            ),
+            options,
+            {
+              // No Sandbox folder means the Sandbox is gone, as Docker's
+              // "No such container" is.
+              spawn: (error) =>
+                existsSync(dir) ? fail(error.message) : gone(sandbox.name),
+              fail: (reason) => fail(reason),
+            },
           ),
-        ),
+        gone: () => gone(sandbox.name),
+        fail: (reason) => fail(reason),
+      },
     };
     return connection;
   });

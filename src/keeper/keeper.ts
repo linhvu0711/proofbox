@@ -10,7 +10,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
-import { withRunningPush } from "../deadline.ts";
+import { runCommand } from "../command-checks.ts";
 import { ProviderError, SandboxGoneError } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
@@ -135,7 +135,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
               });
             });
           return Effect.flatMap(Clock.currentTimeMillis, (start) =>
-            withRunningPush(connection)(connection.exec(argv, options)).pipe(
+            runCommand(connection, argv, options).pipe(
               Stream.runForEach((event) => {
                 if (event._tag !== "Exit") {
                   if (event._tag === "Stdout") {

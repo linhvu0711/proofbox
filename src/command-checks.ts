@@ -1,12 +1,24 @@
-import { Effect, Stream } from "effect";
-import type { ProviderError, SandboxGoneError } from "./errors.ts";
-import type { ExecEvent, SandboxInfo } from "./provider.ts";
+import { Clock, Duration, Effect, Fiber, Stream } from "effect";
+import { pushedDeadline } from "./deadline.ts";
+import type {
+  ProviderError,
+  ProviderUnavailableError,
+  SandboxGoneError,
+} from "./errors.ts";
+import type {
+  Connection,
+  ExecEvent,
+  ExecOptions,
+  SandboxCallError,
+  SandboxInfo,
+} from "./provider.ts";
 
-// One remote call runs a command with its checks around it (ADR 0015): the
-// Deadline pushed by the idle time before and after it, and the
-// memory-kill count read just before and just after it. The script marks
-// the start of its own stderr and ends it with a trailer that holds the
-// two counts; `splitChecks` takes both out again.
+// The command run: each command runs with its checks around it, in one
+// remote call (ADR 0015): the Deadline pushed by the idle time before and
+// after it, and the memory-kill count read just before and just after it.
+// The script marks the start of its own stderr and ends it with a trailer
+// that holds the two counts; `splitChecks` takes both out again. A long
+// command also gets the Deadline pushed while it runs.
 
 export const CHECKS_START = "\x1fproofbox-start\n";
 
@@ -20,6 +32,21 @@ export interface ChecksShell {
   readonly push: string;
   readonly kills: string;
   readonly run: string;
+}
+
+// What a Provider gives the command run: how one argv reaches the Sandbox,
+// the shell its checks are written in, and its own errors.
+export interface Transport {
+  readonly shell: ChecksShell;
+  readonly call: (
+    argv: ReadonlyArray<string>,
+    options?: ExecOptions,
+  ) => Stream.Stream<
+    ExecEvent,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
+  readonly gone: () => SandboxGoneError;
+  readonly fail: (reason: string) => ProviderError;
 }
 
 export const pushFailedTrailer = (detail: string) =>
@@ -193,3 +220,67 @@ export const splitChecks = <E>(
     };
     return events.pipe(Stream.mapEffect(step), Stream.flattenIterables);
   });
+
+// Keeps the Deadline pushed while a command runs, every third of the idle
+// time. The command's own call pushes before and after it, so this only
+// covers a long run; it stops with the command, never on a timer of its
+// own. A failed push ends the run.
+const withRunningPush =
+  (connection: Connection) =>
+  <A, E, R>(
+    events: Stream.Stream<A, E, R>,
+  ): Stream.Stream<A, E | SandboxCallError, R> => {
+    const every = Duration.millis(
+      Duration.toMillis(Duration.seconds(connection.info.idleSeconds)) / 3,
+    );
+    const push = Effect.flatMap(
+      pushedDeadline(connection.info),
+      connection.extend,
+    );
+    // The command's stream stays on the fiber that reads it: a stdin feed
+    // that drains after the command exits depends on that.
+    return Stream.unwrapScoped(
+      Effect.map(
+        Effect.forkScoped(
+          Effect.forever(Effect.zipRight(Effect.sleep(every), push)),
+        ),
+        (pushing) => Stream.interruptWhen(events, Fiber.join(pushing)),
+      ),
+    );
+  };
+
+// Runs one command with its checks around it (ADR 0015). The second branch
+// is the stand-in for the Namespace connection, which runs its own checks
+// until #160 moves it here.
+export const runCommand = (
+  connection: Connection,
+  argv: ReadonlyArray<string>,
+  options?: ExecOptions,
+): Stream.Stream<ExecEvent, SandboxCallError> => {
+  if (!("transport" in connection)) {
+    return withRunningPush(connection)(connection.exec(argv, options));
+  }
+  const transport = connection.transport;
+  return withRunningPush(connection)(
+    Stream.unwrap(
+      Effect.map(Clock.currentTimeMillis, (nowMillis) =>
+        splitChecks(
+          transport.call(
+            checksArgv(
+              checksScript(transport.shell),
+              connection.info,
+              nowMillis,
+              argv,
+            ),
+            options,
+          ),
+          {
+            gone: () => transport.gone(),
+            pushFailed: (detail) =>
+              transport.fail(`could not write the Deadline: ${detail}`),
+          },
+        ),
+      ),
+    ),
+  );
+};

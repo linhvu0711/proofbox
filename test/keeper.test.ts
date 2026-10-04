@@ -41,6 +41,7 @@ import {
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
+import { withCall } from "./support/connection.ts";
 import {
   eventually,
   keeperClientLayers,
@@ -104,7 +105,7 @@ const countedSandbox = (
       })
       .pipe(Effect.provideService(Progress, noProgress));
     const calls = { get: 0, extend: 0 };
-    const watched = { get: 0 };
+    const watched = { get: 0, extend: 0 };
     const linux = fake.offers.linux;
     const counted: Provider = {
       ...fake,
@@ -134,6 +135,11 @@ const countedSandbox = (
             watched.get += 1;
             return connection.get;
           }),
+          extend: (deadline: Date) =>
+            Effect.suspend(() => {
+              watched.extend += 1;
+              return connection.extend(deadline);
+            }),
         })),
     };
     return {
@@ -160,17 +166,12 @@ const warmKeeper = (
     const layers = yield* startKeeper(sandbox.id, sandbox.counted);
     sandbox.calls.get = 0;
     sandbox.calls.extend = 0;
-    const deadline = Effect.map(
-      sandbox.fake.get({ name: sandbox.name, region: undefined }),
-      (read) => read.deadline.toISOString(),
-    );
     return {
       id: sandbox.id,
       name: sandbox.name,
       calls: sandbox.calls,
       watched: sandbox.watched,
       layers,
-      deadline,
     };
   });
 
@@ -389,7 +390,7 @@ describe("Keeper", () => {
     // the Keeper still serves
     await sleep(200);
     expect(writeError).toBeUndefined();
-    expect(replies).toEqual([{ exit: 0 }]);
+    expect(replies).toEqual([{ exit: 0, kills: [0, 0] }]);
     const again = await runCli(env, ["exec", id, "--", "echo", "still"]);
     expect(again.stdout).toBe("still\n");
     expect(again.exitCode).toBe(0);
@@ -495,12 +496,13 @@ describe("Keeper", () => {
     const name = created.stdout.trim().slice("fake:".length);
     const pid = keeperPid(env, name);
     // When: the Deadline passes. Write a temp file and rename it, like the
-    // fake does, so the Keeper never reads a half-written sandbox.json.
-    const sandboxFile = join(env.root, name, "sandbox.json");
-    const meta = JSON.parse(readFileSync(sandboxFile, "utf8"));
-    meta.deadline = new Date(Date.now() - 1000).toISOString();
-    writeFileSync(`${sandboxFile}.tmp`, `${JSON.stringify(meta)}\n`);
-    renameSync(`${sandboxFile}.tmp`, sandboxFile);
+    // fake does, so the Keeper never reads a half-written Deadline file.
+    const deadlineFile = join(env.root, name, "deadline");
+    writeFileSync(
+      `${deadlineFile}.tmp`,
+      `${Math.floor((Date.now() - 1000) / 1000)}\n`,
+    );
+    renameSync(`${deadlineFile}.tmp`, deadlineFile);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await sleep(200);
@@ -824,30 +826,15 @@ describe("Keeper", () => {
     () => {
       const env = makeEnv();
       return Effect.gen(function* () {
-        // Given: a Provider whose every Exit carries memory-kill counts
+        // Given: a Sandbox that has seen 2 memory kills
         const sandbox = yield* countedSandbox(env);
-        const provider: Provider = {
-          ...sandbox.counted,
-          connect: (ref) =>
-            Effect.map(sandbox.counted.connect(ref), (connection) => ({
-              ...connection,
-              exec: (argv, options) =>
-                connection
-                  .exec(argv, options)
-                  .pipe(
-                    Stream.map((event) =>
-                      event._tag === "Exit"
-                        ? { ...event, kills: { before: 2, after: 5 } }
-                        : event,
-                    ),
-                  ),
-            })),
-        };
-        const layers = yield* startKeeper(sandbox.id, provider);
-        // When
+        writeFileSync(join(env.root, sandbox.name, "memory-kills"), "2\n");
+        const layers = yield* startKeeper(sandbox.id, sandbox.counted);
+        // When: 3 more happen while the command runs
         const events = yield* Effect.flatMap(KeeperClient, (client) =>
-          Effect.flatMap(client.exec(sandbox.id, ["true"]), (stream) =>
-            Stream.runCollect(stream),
+          Effect.flatMap(
+            client.exec(sandbox.id, ["sh", "-c", "echo 5 > ../memory-kills"]),
+            (stream) => Stream.runCollect(stream),
           ),
         ).pipe(Effect.provide(layers));
         // Then
@@ -860,39 +847,36 @@ describe("Keeper", () => {
     },
   );
 
-  it.scoped(
-    "a command through the Keeper pushes the Deadline by the idle time",
-    () => {
-      const env = makeEnv();
-      return Effect.gen(function* () {
-        // Given
-        const keeper = yield* warmKeeper(env);
-        yield* TestClock.adjust("10 minutes");
-        // When
-        yield* execInSandbox(keeper.id, ["true"]).pipe(
-          Effect.provide(keeper.layers),
-        );
-        // Then
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
-      }).pipe(runtimeConfig(env));
-    },
-  );
-
-  it.scoped("a command through the Keeper never pushes past Max life", () => {
+  it("a command through the Keeper never pushes the Deadline past Max life", async () => {
+    // Given: a Sandbox whose Max life comes before its idle time
     const env = makeEnv();
-    return Effect.gen(function* () {
-      // Given
-      const keeper = yield* warmKeeper(env, {
-        maxLife: Duration.minutes(20),
-      });
-      yield* TestClock.adjust("10 minutes");
-      // When
-      yield* execInSandbox(keeper.id, ["true"]).pipe(
-        Effect.provide(keeper.layers),
-      );
-      // Then
-      expect(yield* keeper.deadline).toBe("1970-01-01T00:20:00.000Z");
-    }).pipe(runtimeConfig(env));
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--idle",
+      "15m",
+      "--max-life",
+      "5m",
+    ]);
+    const name = created.stdout.trim().slice("fake:".length);
+    // When
+    const result = await runCli(env, ["exec", `fake:${name}`, "--", "true"]);
+    // Then: the pushed Deadline is Max life, within the Sandbox clock's
+    // whole second
+    const dir = join(env.root, name);
+    const maxLife = Math.floor(
+      new Date(
+        JSON.parse(readFileSync(join(dir, "sandbox.json"), "utf8")).maxLifeAt,
+      ).getTime() / 1000,
+    );
+    const deadline = Number(readFileSync(join(dir, "deadline"), "utf8"));
+    expect({
+      exitCode: result.exitCode,
+      atMaxLife: deadline <= maxLife && deadline >= maxLife - 2,
+    }).toEqual({ exitCode: 0, atMaxLife: true });
   });
 
   it.scoped(
@@ -1313,7 +1297,6 @@ describe("Keeper", () => {
         // Then
         expect(result.stdout.toString("utf8")).toBe("clicked\n");
         expect(keeper.calls).toEqual({ get: 0, extend: 0 });
-        expect(yield* keeper.deadline).toBe("1970-01-01T00:25:00.000Z");
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1342,9 +1325,9 @@ describe("Keeper", () => {
         yield* TestClock.adjust("14 minutes");
         // Then
         expect({
-          deadline: yield* keeper.deadline,
+          extends: keeper.watched.extend,
           running: yield* running(`sleep ${nap}`),
-        }).toEqual({ deadline: "1970-01-01T00:25:00.000Z", running: false });
+        }).toEqual({ extends: 0, running: false });
       }).pipe(runtimeConfig(env));
     },
   );
@@ -1430,16 +1413,16 @@ describe("Keeper", () => {
       const failing: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fail(
                 new ProviderError({
                   provider: "fake",
                   reason: "spawn ENOENT (docker exec sh -c echo tok-2718)",
                 }),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, failing);
@@ -1497,9 +1480,8 @@ describe("Keeper", () => {
       const scripted: Provider = {
         ...fake,
         connect: (ref) =>
-          Effect.map(fake.connect(ref), (connection) => ({
-            ...connection,
-            exec: () =>
+          Effect.map(fake.connect(ref), (connection) =>
+            withCall(connection, () =>
               Stream.fromIterable(events).pipe(
                 Stream.flatMap((event) =>
                   event === "pause"
@@ -1507,7 +1489,8 @@ describe("Keeper", () => {
                     : Stream.make(event),
                 ),
               ),
-          })),
+            ),
+          ),
       };
       const id = `fake:${info.name}`;
       const layers = yield* startKeeper(id, scripted);

@@ -18,7 +18,11 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import { CHECKS_START, checksTrailer } from "../src/command-checks.ts";
+import {
+  CHECKS_START,
+  checksTrailer,
+  runCommand,
+} from "../src/command-checks.ts";
 import { ProviderUnavailableError } from "../src/errors.ts";
 import { macKillCount } from "../src/namespace/mac-host.ts";
 import type {
@@ -1181,7 +1185,7 @@ describe("Namespace macOS Provider", () => {
       const before = (yield* Ref.get(mac.commands)).length;
       // When
       const events = yield* Stream.runCollect(
-        connection.exec(["sw_vers", "-productVersion"]),
+        runCommand(connection, ["sw_vers", "-productVersion"]),
       );
       // Then
       expect(
