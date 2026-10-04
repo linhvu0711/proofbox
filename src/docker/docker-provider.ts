@@ -421,6 +421,7 @@ export const makeDockerProvider = (options: {
     name: "docker",
     idPrefix: "docker",
     login: { _tag: "None" },
+    loginFiles: [],
     offers: {
       linux: {
         sizes: "any",

@@ -73,7 +73,7 @@ import {
 } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
-import { tenantTokenFor } from "./namespace-login.ts";
+import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import { registryRefs } from "./registry-refs.ts";
@@ -1266,6 +1266,7 @@ export const makeNamespaceProvider = (deps: {
   return {
     name: "namespace",
     idPrefix: "ns",
+    loginFiles: [NAMESPACE_LOGIN_FILES],
     login: {
       _tag: "Ways",
       browser: {

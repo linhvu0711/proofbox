@@ -6,6 +6,7 @@ import { Clock, Effect, Redacted } from "effect";
 import { ProviderError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { loginFor } from "../login/provider-login.ts";
+import type { LoginFiles } from "../provider.ts";
 import { issueTenantToken } from "./namespace-signin.ts";
 
 // A tenant token lasts about an hour: mint one per session, reuse it
@@ -31,6 +32,14 @@ const lockFor = (path: string) => {
 const alive = (token: string, now: number, margin: number) => {
   const exp = extractClaims(token)?.exp;
   return typeof exp === "number" && exp * 1000 - now > margin;
+};
+
+// Older versions kept a bearer-token file per token, and the session trade
+// keeps a tenant-token file per session, in the runtime dir; those die with
+// the login.
+export const NAMESPACE_LOGIN_FILES: LoginFiles = {
+  what: "the cached Namespace tokens",
+  names: /^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/,
 };
 
 export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(

@@ -317,28 +317,25 @@ export const logOut = Effect.fn("localSandboxes.logOut")(function* (
   if (before.value[provider.name] === undefined) {
     return { _tag: "NoLogin" } as const satisfies LogoutResult;
   }
-  if (provider.name === "namespace") {
-    // Older versions kept a bearer-token file per token, and the session
-    // trade keeps a tenant-token file per session, in the runtime dir;
-    // those die with the login.
-    // A failure here is named like the others; the login is gone already.
+  // A failure here is named like the others; the login is gone already.
+  for (const files of provider.loginFiles) {
     const cleared = yield* Effect.either(
       Effect.gen(function* () {
         const dir = (yield* keeperPaths({
-          provider: "ns",
+          provider: provider.idPrefix,
           name: "__probe__",
         })).dir;
         yield* Effect.tryPromise({
           try: async () => {
             for (const file of await readdir(dir)) {
-              if (/^ns-(?:token|tenant)-[0-9a-f]{16}\.json$/.test(file)) {
+              if (files.names.test(file)) {
                 await rm(join(dir, file), { force: true });
               }
             }
           },
           catch: (cause) =>
             new ProviderError({
-              provider: "namespace",
+              provider: provider.name,
               reason: String(cause),
             }),
         });
@@ -347,7 +344,7 @@ export const logOut = Effect.fn("localSandboxes.logOut")(function* (
     if (Either.isLeft(cleared)) {
       failures.push({
         _tag: "LoginFilesKept",
-        what: "the cached Namespace tokens",
+        what: files.what,
         reason: cleared.left.reason,
       });
     }

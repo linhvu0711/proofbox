@@ -48,16 +48,33 @@ const saveFakeLogin = (home: string) =>
 // A machine with a saved fake login: its HOME, its runtime dir, and the
 // fake Provider.
 const makeMachine = (
-  options: { readonly envToken?: boolean; readonly noLogin?: boolean } = {},
+  options: {
+    readonly envToken?: boolean;
+    readonly noLogin?: boolean;
+    readonly loginFiles?: Provider["loginFiles"];
+    // The runtime dir is a regular file, so nothing in it can be read.
+    readonly runtimeIsFile?: boolean;
+  } = {},
 ) => {
   const home = tempDir("proofbox-home-");
-  const runtime = tempDir("proofbox-runtime-");
+  const runtime =
+    options.runtimeIsFile === true
+      ? join(tempDir("proofbox-file-"), "f")
+      : tempDir("proofbox-runtime-");
+  if (options.runtimeIsFile === true) {
+    writeFileSync(runtime, "x");
+  }
   const root = tempDir("proofbox-fake-");
   mkdirSync(join(home, ".config", "proofbox"), { recursive: true });
   saveFakeLogin(home);
   const fake = makeFakeProvider({ root, watch: "none" });
-  const provider: Provider =
-    options.noLogin === true ? { ...fake, login: { _tag: "None" } } : fake;
+  const provider: Provider = {
+    ...fake,
+    ...(options.noLogin === true ? { login: { _tag: "None" } } : {}),
+    ...(options.loginFiles === undefined
+      ? {}
+      : { loginFiles: options.loginFiles }),
+  };
   const config = new Map([
     ["HOME", home],
     ["PROOFBOX_RUNTIME_DIR", runtime],
@@ -305,6 +322,58 @@ describe("Logout and creates", () => {
         // Then
         expect(result._tag).toBe("LoggedOut");
         expect(yield* Ref.get(calls)).toBe(0);
+      }).pipe(machine.configured);
+    },
+  );
+});
+
+describe("Login files", () => {
+  const fakeTokens = {
+    what: "the cached fake tokens",
+    names: /^fake-token-[0-9]+\.json$/,
+  };
+
+  it.live(
+    "logout removes the files the Provider names as login files and keeps the rest",
+    () => {
+      // Given
+      const machine = makeMachine({ loginFiles: [fakeTokens] });
+      for (const name of [
+        "fake-token-1.json",
+        "fake-token-2.json",
+        "fake-keep.json",
+      ]) {
+        writeFileSync(join(machine.runtime, name), "{}");
+      }
+      return Effect.gen(function* () {
+        // When
+        const result = yield* logOut(machine.provider, () => Effect.void);
+        // Then
+        expect(result).toMatchObject({ _tag: "LoggedOut", failures: [] });
+        expect(readdirSync(machine.runtime).sort()).toEqual(["fake-keep.json"]);
+      }).pipe(machine.configured);
+    },
+  );
+
+  it.live(
+    "logout names the login files it could not remove and still removes the login",
+    () => {
+      // Given
+      const machine = makeMachine({
+        loginFiles: [fakeTokens],
+        runtimeIsFile: true,
+      });
+      return Effect.gen(function* () {
+        // When
+        const result = yield* logOut(machine.provider, () => Effect.void);
+        // Then
+        const failures = result._tag === "LoggedOut" ? result.failures : [];
+        expect(failures.map((failure) => failure._tag)).toEqual([
+          "ScanFailed",
+          "LoginFilesKept",
+        ]);
+        expect(failures[1]).toMatchObject({ what: "the cached fake tokens" });
+        expect(savedLogins(machine.home)).toEqual({});
       }).pipe(machine.configured);
     },
   );
