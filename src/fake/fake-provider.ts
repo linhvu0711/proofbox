@@ -67,10 +67,11 @@ const hasCode = (cause: unknown, code: string) =>
   cause.code === code;
 
 // The checks around a command on the Caller's machine (ADR 0015): the
-// Deadline file `get` reads, the memory-kill count a command may raise in
-// `memory-kills`, and the command in the Sandbox's home folder.
+// Deadline file `get` reads, with no temp file left when the write fails;
+// the memory-kill count a command may raise in `memory-kills`; and the
+// command in the Sandbox's home folder.
 const fakeChecks = (dir: string): ChecksShell => ({
-  push: `tmp=${shellJoin([join(dir, ".deadline")])}.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${shellJoin([join(dir, "deadline")])}`,
+  push: `tmp=${shellJoin([join(dir, ".deadline")])}.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${shellJoin([join(dir, "deadline")])} || { rm -f "$tmp"; false; }`,
   kills: `cat ${shellJoin([join(dir, "memory-kills")])}`,
   run: '"$@"',
 });
