@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +24,13 @@ const nsEnv = (ns: FakeNamespace) => ({
 
 const nsFiles = (runtime: string) =>
   readdirSync(runtime).filter((name) => name.startsWith("ns-"));
+
+// How many SSH masters (`ssh -M -N …`) a fake ssh that logs its argv was
+// asked to start; the `-O check` and `-O exit` calls do not count.
+const masterStarts = (log: string) =>
+  readFileSync(log, "utf8")
+    .split("\n")
+    .filter((line) => line.startsWith("-M ")).length;
 
 describe("Namespace errors", () => {
   const servers: Array<FakeNamespace> = [];
@@ -429,7 +436,6 @@ describe("Namespace errors", () => {
     trackTempDir(binDir);
     const env = makeEnv();
     // When
-    const start = performance.now();
     const result = await runCli(
       env,
       ["exec", "ns:us:abc123def4567", "--", "true"],
@@ -440,13 +446,11 @@ describe("Namespace errors", () => {
         },
       },
     );
-    const millis = performance.now() - start;
     // Then
     expect(result.stderr).toBe(
       "ssh is not installed; install an OpenSSH client\n",
     );
     expect(result.exitCode).toBe(125);
-    expect(millis).toBeLessThan(5000);
   });
 
   it("exec when GetSSHConfig fails names the Sandbox", async () => {
@@ -500,16 +504,16 @@ describe("Namespace errors", () => {
         ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
         : { json: {} };
     });
+    const env = makeEnv();
+    const log = join(env.runtime, "ssh.log");
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
     writeFileSync(
       join(binDir, "ssh"),
-      '#!/bin/sh\necho "ssh: Could not resolve hostname ssh.invalid: Name or service not known" >&2\nexit 255\n',
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\necho "ssh: Could not resolve hostname ssh.invalid: Name or service not known" >&2\nexit 255\n`,
       { mode: 0o755 },
     );
-    const env = makeEnv();
     // When
-    const start = performance.now();
     const result = await runCli(
       env,
       ["exec", "ns:us:abc123def4567", "--", "true"],
@@ -521,13 +525,17 @@ describe("Namespace errors", () => {
         },
       },
     );
-    const millis = performance.now() - start;
-    // Then
-    expect(result.stderr).toBe(
-      "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh: Could not resolve hostname ssh.invalid: Name or service not known). Try again in a minute.\n",
-    );
-    expect(result.exitCode).toBe(125);
-    expect(millis).toBeLessThan(5000);
+    // Then: one try, since a 0s link wait makes the first failure final
+    expect({
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      masterStarts: masterStarts(log),
+    }).toEqual({
+      stderr:
+        "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh: Could not resolve hostname ssh.invalid: Name or service not known). Try again in a minute.\n",
+      exitCode: 125,
+      masterStarts: 1,
+    });
   });
 
   it("exec when the Sandbox host key does not match refuses at once", async () => {
@@ -548,32 +556,38 @@ describe("Namespace errors", () => {
         ? { json: { instances: [{ instanceId: "abc123def4567" }] } }
         : { json: {} };
     });
+    const env = makeEnv();
+    const log = join(env.runtime, "ssh.log");
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
     writeFileSync(
       join(binDir, "ssh"),
-      '#!/bin/sh\necho "Host key verification failed." >&2\nexit 255\n',
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\necho "Host key verification failed." >&2\nexit 255\n`,
       { mode: 0o755 },
     );
-    const env = makeEnv();
-    // When
-    const start = performance.now();
+    // When: the link wait would allow retries, so a retried refusal shows
+    // as more than one master start
     const result = await runCli(
       env,
       ["exec", "ns:us:abc123def4567", "--", "true"],
       {
         set: {
           PATH: binDir,
+          PROOFBOX_NS_LINK_WAIT: "2s",
           ...nsEnv(ns),
         },
       },
     );
-    const millis = performance.now() - start;
     // Then
-    expect(result.stderr).toBe(
-      "Refused to connect to Sandbox ns:us:abc123def4567: its SSH host key does not match the key Namespace gave. Run: proofbox delete ns:us:abc123def4567\n",
-    );
-    expect(result.exitCode).toBe(125);
-    expect(millis).toBeLessThan(5000);
+    expect({
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      masterStarts: masterStarts(log),
+    }).toEqual({
+      stderr:
+        "Refused to connect to Sandbox ns:us:abc123def4567: its SSH host key does not match the key Namespace gave. Run: proofbox delete ns:us:abc123def4567\n",
+      exitCode: 125,
+      masterStarts: 1,
+    });
   });
 });
