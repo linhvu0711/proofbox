@@ -30,7 +30,7 @@ import {
   baseImageVersion,
 } from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
-import { LINUX_CHECKS, makeDockerProvider } from "../docker/docker-provider.ts";
+import { makeDockerProvider } from "../docker/docker-provider.ts";
 import {
   MacPrepareError,
   type ProviderError,
@@ -42,7 +42,6 @@ import {
 import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import {
-  type ExecOptions,
   type ListResult,
   type Provider,
   type ProviderLogin,
@@ -56,12 +55,7 @@ import { formatSize, type Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import { pushHostLife } from "./host-life.ts";
 import { containerOf, MADE_MARK } from "./linux-host.ts";
-import {
-  MAC_SECRETS_DIR,
-  macChecks,
-  prepareMac,
-  turnOnSshd,
-} from "./mac-host.ts";
+import { MAC_SECRETS_DIR, prepareMac, turnOnSshd } from "./mac-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
 import {
@@ -960,21 +954,10 @@ export const makeNamespaceProvider = (deps: {
       return seconds;
     });
     const host = yield* hostOf(ref);
-    const mac = host.os === "macos";
     // The gone-watch reads over the Keeper's own link: no new link, and
     // no extend-main, every 2 s.
     const read = host.read(link, ref);
     const info = yield* read;
-    // A Mac runs the script over the link itself; Linux in its container.
-    const call = mac
-      ? (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-          link.stream(shellJoin(argv), options)
-      : (() => {
-          const docker = deps.dockerFor(link);
-          const container = containerOf(ref);
-          return (argv: ReadonlyArray<string>, options?: ExecOptions) =>
-            docker.execStream(container, argv, options, "root");
-        })();
     return {
       info,
       get: read,
@@ -988,8 +971,8 @@ export const makeNamespaceProvider = (deps: {
       // pushes the Sandbox's Deadline and counts kills around it (ADR
       // 0015). The host side of each push stays here, as `pushHost`.
       transport: {
-        shell: mac ? macChecks() : LINUX_CHECKS,
-        call,
+        shell: host.checks,
+        call: host.call(link, ref),
         gone: () => gone(ref),
         fail: (reason: string) => fail(reason),
         pushHost: (deadline: Date) => Effect.asVoid(pushHost(deadline)),

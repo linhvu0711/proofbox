@@ -1,6 +1,9 @@
 import { Effect } from "effect";
 import type { DockerClient } from "../docker/docker-client.ts";
-import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
+import {
+  LINUX_CHECKS,
+  sandboxInfoFromLabels,
+} from "../docker/docker-provider.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
@@ -24,7 +27,7 @@ export const containerOf = (ref: SandboxRef) =>
   `proofbox-${ref.name.slice(0, 6)}`;
 
 // A Linux host runs the Sandbox in one Docker container.
-export const makeLinuxHost = (_deps: {
+export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
   readonly dockerFor: (link: Link) => DockerClient;
 }): NamespaceHost => {
@@ -111,5 +114,19 @@ export const makeLinuxHost = (_deps: {
     );
   });
 
-  return { os: "linux", via: "gateway", reach, read, writeDeadline };
+  return {
+    os: "linux",
+    via: "gateway",
+    reach,
+    read,
+    writeDeadline,
+    checks: LINUX_CHECKS,
+    // The script runs in the Sandbox's container.
+    call: (link, ref) => {
+      const docker = deps.dockerFor(link);
+      const container = containerOf(ref);
+      return (argv, options) =>
+        docker.execStream(container, argv, options, "root");
+    },
+  };
 };

@@ -376,7 +376,7 @@ export const macKillCount = (log: string) =>
 // stopped, so the command is watched; and the command in the `runner`
 // desktop session, through a login shell so PATH is the one ssh gives, in
 // the Work folder.
-export const macChecks = (): ChecksShell => ({
+const macChecks = (): ChecksShell => ({
   push: `tmp=${MAC_STATE_DIR}/.deadline.$$; printf "%s\\n" "$d" > "$tmp" && mv "$tmp" ${DEADLINE}`,
   kills: `ps -p "$(cat ${MEMORY_WATCH_PID} 2>/dev/null)" >/dev/null 2>&1 || ${startMemoryWatcher}; ${macKillCount(MEMORY_KILLS)}`,
   run: `sudo -n launchctl asuser 501 sudo -n -u runner -H /bin/zsh -lc ${shellJoin([`cd ${MAC_WORK_DIR} && exec "$@"`])} zsh "$@"`,
@@ -615,5 +615,8 @@ export const makeMacHost = (_deps: {
     reach,
     read: readMac,
     writeDeadline: writeMacDeadline,
+    checks: macChecks(),
+    // The script runs over the link itself: the Mac is the Sandbox.
+    call: (link) => (argv, options) => link.stream(shellJoin(argv), options),
   };
 };

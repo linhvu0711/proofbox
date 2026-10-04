@@ -1,4 +1,5 @@
 import type { Effect } from "effect";
+import type { ChecksShell, Transport } from "../command-checks.ts";
 import {
   ProviderError,
   type ProviderUnavailableError,
@@ -37,6 +38,10 @@ export interface NamespaceHost {
     ref: SandboxRef,
     seconds: number,
   ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
+  // The shell the command run's checks are written in (ADR 0015).
+  readonly checks: ChecksShell;
+  // How one argv reaches the Sandbox over the host's link.
+  readonly call: (link: Link, ref: SandboxRef) => Transport["call"];
 }
 
 export const describe = (cause: unknown) =>
