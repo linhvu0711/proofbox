@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { FileSystem } from "@effect/platform";
 import { extractClaims } from "@namespacelabs/sdk/auth";
 import { Clock, Effect, Redacted } from "effect";
 import { ProviderError } from "../errors.ts";
@@ -97,5 +98,12 @@ export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
 );
 
 // The saved Namespace login the Compute calls run on: a browser session
-// traded for a short tenant token.
-export const namespaceLogin = loginFor("namespace", tenantTokenFor);
+// traded for a short tenant token. It reads the logins file with `fs`,
+// handed in when the login is built.
+export const makeNamespaceLogin = Effect.fn(
+  "namespaceLogin.makeNamespaceLogin",
+)(function* (fs: FileSystem.FileSystem) {
+  return yield* loginFor("namespace", tenantTokenFor).pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+  );
+});

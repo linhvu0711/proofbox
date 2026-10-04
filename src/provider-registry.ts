@@ -45,13 +45,12 @@ export const ProvidersLive = Layer.effect(
         ]),
       ).pipe(
         Effect.map(([client, api, login, provider, link]) => {
-          const namespaceApi = api.makeNamespaceApi({
-            login: login.namespaceLogin,
-          });
+          const namespaceLogin = login.makeNamespaceLogin(fs);
+          const namespaceApi = api.makeNamespaceApi({ login: namespaceLogin });
           return provider.makeNamespaceProvider({
             api: namespaceApi,
             executor,
-            login: login.namespaceLogin,
+            login: namespaceLogin,
             openLink: link.makeOpenLink(namespaceApi, executor),
             forward: link.makeSshForward(namespaceApi, executor),
             dockerFor: (sandbox) =>
@@ -92,7 +91,9 @@ export const ProvidersLive = Layer.effect(
               fs,
               root: fakeRoot.value,
               watch: "process",
-              login: loginFor("fake"),
+              login: loginFor("fake").pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+              ),
               marksLocal: true,
               unreached: Option.getOrUndefined(unreached),
               listDown: Option.getOrUndefined(listDown),
