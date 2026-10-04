@@ -1,7 +1,9 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -40,6 +42,90 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("auth status shows one line per saved Harness login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"claude":{"token":"sk-ant-oat01-abcd","expiresAt":"2999-01-01T00:00:00.000Z"},"codex":{"token":"sk-proj-wxyz"}}',
+    );
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness claude  token …abcd, expires 2999-01-01T00:00:00Z, saved login\nharness codex  API key …wxyz, saved login\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status shows an expired Harness login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"claude":{"token":"sk-ant-oat01-abcd","expiresAt":"2000-01-01T00:00:00.000Z"}}',
+    );
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness claude  expired 2000-01-01T00:00:00Z. Run: proofbox harness login claude\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("harness login and auth status leave ~/.claude and ~/.codex alone", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const claude = join(home, ".claude");
+    const codex = join(home, ".codex");
+    mkdirSync(claude);
+    mkdirSync(codex);
+    writeFileSync(join(claude, "settings.json"), '{"a":1}');
+    writeFileSync(join(codex, "auth.json"), '{"b":2}');
+    chmodSync(claude, 0o000);
+    chmodSync(codex, 0o000);
+    try {
+      // When
+      const loginClaude = await runCli(env, ["harness", "login", "claude"], {
+        input: "sk-ant-oat01-abcd\n",
+        set: { HOME: home },
+      });
+      const loginCodex = await runCli(env, ["harness", "login", "codex"], {
+        input: "sk-proj-wxyz\n",
+        set: { HOME: home },
+      });
+      const status = await runCli(env, ["auth", "status"], {
+        set: { HOME: home },
+        unset: ["PROOFBOX_FAKE_TOKEN"],
+      });
+      // Then
+      expect([
+        loginClaude.exitCode,
+        loginCodex.exitCode,
+        status.exitCode,
+      ]).toEqual([0, 0, 0]);
+      expect(status.stdout).toContain("harness claude  token …abcd, expires ");
+      expect(status.stdout).toContain(
+        "harness codex  API key …wxyz, saved login\n",
+      );
+      expect(statSync(claude).mode & 0o777).toBe(0o000);
+      expect(statSync(codex).mode & 0o777).toBe(0o000);
+    } finally {
+      chmodSync(claude, 0o700);
+      chmodSync(codex, 0o700);
+    }
+    expect(readdirSync(claude)).toEqual(["settings.json"]);
+    expect(readFileSync(join(claude, "settings.json"), "utf8")).toBe('{"a":1}');
+    expect(readdirSync(codex)).toEqual(["auth.json"]);
+    expect(readFileSync(join(codex, "auth.json"), "utf8")).toBe('{"b":2}');
+  });
+
   it("harness login claude with only spaces on stdin names claude setup-token and saves nothing", async () => {
     // Given
     const env = makeEnv();
