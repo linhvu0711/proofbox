@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
-import { describe, expect } from "vitest";
+import { afterEach, describe, expect } from "vitest";
 import { withStartLock } from "../src/keeper/start-lock.ts";
-import { trackTempDir } from "./support/cli.ts";
+import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 describe("start-lock", () => {
+  afterEach(cleanupEnvs);
+
   it.live(
     "a start lock that cannot be written gives the write error, not a busy Keeper",
     () => {
