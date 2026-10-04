@@ -1,15 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   createConnection,
   createServer,
   type Server,
   type Socket,
 } from "node:net";
-import { Command } from "@effect/platform";
+import { Command, FileSystem } from "@effect/platform";
 import { Effect, Option, Schedule } from "effect";
 import { captureCommand } from "../command-events.ts";
-import { ProviderError } from "../errors.ts";
+import { ProviderError, platformReason } from "../errors.ts";
 import {
   fileStem,
   formatSandboxId,
@@ -38,15 +37,18 @@ const pathsOf = Effect.fn("lifecycle.pathsOf")((id: ResolvedSandboxId) =>
   keeperPaths({ provider: id.prefix, name: fileStem(id) }),
 );
 
-const removeKeeperFiles = Effect.fn("lifecycle.removeKeeperFiles")(
-  (paths: KeeperPaths) =>
-    Effect.promise(() =>
-      Promise.all([
-        rm(paths.socket, { force: true }).catch(() => {}),
-        rm(paths.pid, { force: true }).catch(() => {}),
-      ]).then(() => {}),
-    ),
-);
+const removeKeeperFiles = Effect.fn("lifecycle.removeKeeperFiles")(function* (
+  paths: KeeperPaths,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* Effect.all(
+    [
+      Effect.ignore(fs.remove(paths.socket, { force: true })),
+      Effect.ignore(fs.remove(paths.pid, { force: true })),
+    ],
+    { concurrency: "unbounded", discard: true },
+  );
+});
 
 // Starts the Keeper of Sandbox `id` and waits until its socket answers.
 export const startKeeper = Effect.fn("lifecycle.startKeeper")(function* (
@@ -102,10 +104,11 @@ export const reachKeeper = Effect.fn("lifecycle.reachKeeper")(function* (
 export const stopKeeper = Effect.fn("lifecycle.stopKeeper")(function* (
   id: ResolvedSandboxId,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const paths = yield* pathsOf(id);
-  const pidText = yield* Effect.promise(() =>
-    readFile(paths.pid, "utf8").catch(() => ""),
-  );
+  const pidText = yield* fs
+    .readFileString(paths.pid)
+    .pipe(Effect.orElseSucceed(() => ""));
   const pid = Number.parseInt(pidText.trim(), 10);
   if (Number.isFinite(pid)) {
     // A stale pid file can name a reused, unrelated pid; only signal a
@@ -154,6 +157,7 @@ export const holdKeeper = Effect.fn("lifecycle.holdKeeper")(function* (
   id: ResolvedSandboxId,
   onClient: (socket: Socket) => void,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const paths = yield* pathsOf(id);
   // Under the lock, check the socket again: a Keeper that waited for
   // the lock finds the first one's socket answers, and ends.
@@ -164,29 +168,24 @@ export const holdKeeper = Effect.fn("lifecycle.holdKeeper")(function* (
       if (yield* keeperAnswers(paths.socket)) {
         return false;
       }
-      yield* Effect.promise(() =>
-        rm(paths.socket, { force: true }).catch(() => {}),
-      );
+      yield* Effect.ignore(fs.remove(paths.socket, { force: true }));
       // Write a unique temp file and rename it over the pid file, so a
       // reader never sees it empty.
       const temp = `${paths.pid}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
       yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: async () => {
-            try {
-              await writeFile(temp, `${process.pid}\n`);
-              await rename(temp, paths.pid);
-            } catch (cause) {
-              await rm(temp, { force: true });
-              throw cause;
-            }
-          },
-          catch: (cause) =>
-            new ProviderError({
-              provider: id.provider.name,
-              reason: cause instanceof Error ? cause.message : String(cause),
-            }),
-        }),
+        fs.writeFileString(temp, `${process.pid}\n`).pipe(
+          Effect.zipRight(fs.rename(temp, paths.pid)),
+          Effect.tapError(() =>
+            Effect.ignore(fs.remove(temp, { force: true })),
+          ),
+          Effect.mapError(
+            (error) =>
+              new ProviderError({
+                provider: id.provider.name,
+                reason: platformReason(error),
+              }),
+          ),
+        ),
         () => removeKeeperFiles(paths),
       );
       yield* Effect.acquireRelease(
