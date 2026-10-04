@@ -40,6 +40,81 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("harness login codex saves the API key, owner-only", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "codex"], {
+      input: "sk-proj-wxyz\n",
+      set: { HOME: home },
+    });
+    // Then
+    expect(result.stderr).toBe(
+      "Saved Harness login for codex with API key …wxyz.\n",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(statSync(loginsFile(home)).mode & 0o777).toBe(0o600);
+    expect(readSaved(home)).toEqual({ codex: { token: "sk-proj-wxyz" } });
+  });
+
+  it("harness login foo names the known Harnesses", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "foo"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_ROOT"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      'No Harness named "foo". Harnesses: claude, codex.\n',
+    );
+    expect(result.exitCode).toBe(125);
+    expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("harness login fake is unknown outside tests", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["harness", "login", "fake"], {
+      input: "f4ke\n",
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_ROOT"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      'No Harness named "fake". Harnesses: claude, codex.\n',
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("two harness logins at once both save", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const results = await Promise.all([
+      runCli(env, ["harness", "login", "claude"], {
+        input: "sk-ant-oat01-abcd\n",
+        set: { HOME: home },
+      }),
+      runCli(env, ["harness", "login", "codex"], {
+        input: "sk-proj-wxyz\n",
+        set: { HOME: home },
+      }),
+    ]);
+    // Then
+    expect(results.map((result) => result.exitCode)).toEqual([0, 0]);
+    expect(readSaved(home)).toMatchObject({
+      claude: { token: "sk-ant-oat01-abcd" },
+      codex: { token: "sk-proj-wxyz" },
+    });
+  });
+
   it("harness login claude saves the token, owner-only", async () => {
     // Given
     const env = makeEnv();

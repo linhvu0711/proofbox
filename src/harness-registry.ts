@@ -26,6 +26,26 @@ export const HarnessesLive = Layer.effect(
           ),
         },
       ],
+      [
+        "codex",
+        {
+          name: "codex",
+          login: {
+            envName: "CODEX_API_KEY",
+            what: "API key",
+            placeholder: "<key>",
+            howToMake: "Make one at https://platform.openai.com/api-keys",
+            lifetime: Option.none(),
+          },
+          // Stand-in replaced by #194.
+          load: Effect.fail(
+            new HarnessError({
+              harness: "codex",
+              reason: "not built yet (#194)",
+            }),
+          ),
+        },
+      ],
     ]);
   }),
 );
