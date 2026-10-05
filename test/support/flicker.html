@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <body style="margin: 0">
+    <script>
+      const draw = () => {
+        const [r, g, b] = [0, 1, 2].map(() => Math.floor(Math.random() * 256));
+        document.body.style.background = `rgb(${r}, ${g}, ${b})`;
+        requestAnimationFrame(draw);
+      };
+      requestAnimationFrame(draw);
+    </script>
+  </body>
+</html>
