@@ -1,4 +1,4 @@
-import { Args, Command, Options } from "@effect/cli";
+import { Args, Command, HelpDoc, Options } from "@effect/cli";
 import { Effect, Option } from "effect";
 import {
   loginToProvider,
@@ -65,11 +65,29 @@ const actionOptions = {
   pace: Options.choice("pace", ["human", "fast"]).pipe(
     Options.withDefault("human" as const),
   ),
-  glide: Options.text("glide").pipe(Options.optional),
-  letter: Options.text("letter").pipe(Options.optional),
-  typeMax: Options.text("type-max").pipe(Options.optional),
-  settle: Options.text("settle").pipe(Options.optional),
 };
+
+const glide = Options.text("glide").pipe(Options.optional);
+const letter = Options.text("letter").pipe(Options.optional);
+const typeMax = Options.text("type-max").pipe(Options.optional);
+const settle = Options.text("settle").pipe(Options.optional);
+
+// @effect/cli gives unknown flags to optional [steps]; use its unknown-argument line.
+const scrollSteps = Args.text({ name: "steps" }).pipe(
+  Args.withDescription("An integer, 3 by default."),
+  Args.mapEffect((value) =>
+    /^-?\d+$/.test(value)
+      ? Effect.succeed(Number(value))
+      : Effect.fail(
+          HelpDoc.p(
+            value.startsWith("-")
+              ? `Received unknown argument: '${value}'`
+              : `'${value}' is not a integer`,
+          ),
+        ),
+  ),
+  Args.withDefault(3),
+);
 
 const click = Command.make(
   "click",
@@ -81,8 +99,10 @@ const click = Command.make(
       Options.withDefault("left"),
     ),
     ...actionOptions,
+    glide,
+    settle,
   },
-  ({ id, x, y, button, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, x, y, button, screenshot, pace, glide, settle }) =>
     clickAt({
       id,
       x,
@@ -91,8 +111,6 @@ const click = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -103,14 +121,16 @@ const type = Command.make(
     id: Args.text({ name: "id" }),
     text: Args.text({ name: "text" }),
     ...actionOptions,
+    letter,
+    typeMax,
+    settle,
   },
-  ({ id, text, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, text, screenshot, pace, letter, typeMax, settle }) =>
     typeText({
       id,
       text,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
-      glide: Option.getOrUndefined(glide),
       letter: Option.getOrUndefined(letter),
       typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
@@ -123,16 +143,14 @@ const key = Command.make(
     id: Args.text({ name: "id" }),
     keys: Args.text({ name: "keys" }),
     ...actionOptions,
+    settle,
   },
-  ({ id, keys, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, keys, screenshot, pace, settle }) =>
     pressKey({
       id,
       keys,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
-      glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -152,22 +170,12 @@ const scroll = Command.make(
       ],
       { name: "direction" },
     ),
-    steps: Args.integer({ name: "steps" }).pipe(Args.withDefault(3)),
+    steps: scrollSteps,
     ...actionOptions,
-  },
-  ({
-    id,
-    x,
-    y,
-    direction,
-    steps,
-    screenshot,
-    pace,
     glide,
-    letter,
-    typeMax,
     settle,
-  }) =>
+  },
+  ({ id, x, y, direction, steps, screenshot, pace, glide, settle }) =>
     scrollAt({
       id,
       x,
@@ -177,8 +185,6 @@ const scroll = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -192,8 +198,10 @@ const drag = Command.make(
     x2: Args.integer({ name: "x2" }),
     y2: Args.integer({ name: "y2" }),
     ...actionOptions,
+    glide,
+    settle,
   },
-  ({ id, x1, y1, x2, y2, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, x1, y1, x2, y2, screenshot, pace, glide, settle }) =>
     dragFrom({
       id,
       x1,
@@ -203,8 +211,6 @@ const drag = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
