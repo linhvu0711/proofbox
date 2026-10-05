@@ -1,4 +1,11 @@
-import { Args, Command, HelpDoc, Options } from "@effect/cli";
+import {
+  Args,
+  Command,
+  type CommandDescriptor,
+  HelpDoc,
+  Options,
+} from "@effect/cli";
+import type { Span } from "@effect/cli/HelpDoc/Span";
 import { Effect, HashMap, Option, Schema } from "effect";
 import {
   loginToProvider,
@@ -610,6 +617,93 @@ export const commandWords = (
     HashMap.has(group, second)
     ? `${first} ${second}`
     : first;
+};
+
+export type Descriptor = CommandDescriptor.Command<unknown> &
+  (
+    | (CommandDescriptor.Command<{ name: string }> & {
+        readonly _tag: "Standard";
+        readonly name: string;
+        readonly description: HelpDoc.HelpDoc;
+      })
+    | { readonly _tag: "Map"; readonly command: Descriptor }
+    | {
+        readonly _tag: "Subcommands";
+        readonly parent: Descriptor;
+        readonly children: ReadonlyArray<Descriptor>;
+      }
+  );
+
+export const spanText = (span: Span): string => {
+  switch (span._tag) {
+    case "Text":
+    case "URI":
+      return span.value;
+    case "Sequence":
+      return spanText(span.left) + spanText(span.right);
+    default:
+      return spanText(span.value);
+  }
+};
+
+// @effect/cli has no hook for the top help page, so proofbox prints its own
+// list: one row per command, in the order the tree holds them.
+export const commandList = <Name extends string, R, E, A>(
+  root: Command.Command<Name, R, E, A>,
+): string => {
+  const standard = (
+    d: Descriptor,
+  ): Extract<Descriptor, { readonly _tag: "Standard" }> => {
+    switch (d._tag) {
+      case "Map":
+        return standard(d.command);
+      case "Subcommands":
+        return standard(d.parent);
+      case "Standard":
+        return d;
+    }
+  };
+  const describe = (d: Descriptor): string => {
+    const { description } = standard(d);
+    return HelpDoc.isParagraph(description) ? spanText(description.value) : "";
+  };
+  const rows: Array<{ readonly name: string; readonly description: string }> =
+    [];
+  const visit = (d: Descriptor, depth: number): void => {
+    if (d._tag === "Map") {
+      visit(d.command, depth);
+      return;
+    }
+    if (d._tag !== "Subcommands") return;
+    for (const child of d.children) {
+      rows.push({
+        name: `${" ".repeat(2 + 2 * depth)}${standard(child).name}`,
+        description: describe(child),
+      });
+      visit(child, depth + 1);
+    }
+  };
+  // @effect/cli types the descriptor as opaque, hiding nested commands.
+  const tree = root.descriptor as Descriptor;
+  visit(tree, 0);
+  const name = standard(tree).name;
+  const width = Math.max(...rows.map((row) => row.name.length));
+  return [
+    "USAGE",
+    "",
+    `$ ${name} <command>`,
+    "",
+    "DESCRIPTION",
+    "",
+    describe(tree),
+    "",
+    "COMMANDS",
+    "",
+    ...rows.map((row) => `${row.name.padEnd(width)}  ${row.description}`),
+    "",
+    `Run ${name} <command> --help for its options. ${name} --version prints the version.`,
+    "",
+  ].join("\n");
 };
 
 export const makeCli = (providers: ReadonlyArray<string>) =>

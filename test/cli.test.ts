@@ -1,5 +1,7 @@
+import { Command } from "@effect/cli";
+import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { commandWords } from "../src/cli.ts";
+import { commandList, commandWords } from "../src/cli.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("CLI", () => {
@@ -21,6 +23,30 @@ describe("CLI", () => {
     ] as const) {
       expect(commandWords(args, providers)).toBe(expected);
     }
+  });
+
+  it("the command list comes from the command tree, groups indented", () => {
+    // Given
+    const demo = Command.make("demo", {}, () => Effect.void).pipe(
+      Command.withDescription("run the demo"),
+    );
+    const child = Command.make("child", {}, () => Effect.void).pipe(
+      Command.withDescription("a child"),
+    );
+    const group = Command.make("group").pipe(
+      Command.withDescription("a group"),
+      Command.withSubcommands([child]),
+    );
+    const root = Command.make("tool").pipe(
+      Command.withDescription("a tool"),
+      Command.withSubcommands([demo, group]),
+    );
+    // When
+    const list = commandList(root);
+    // Then
+    expect(list).toBe(
+      "USAGE\n\n$ tool <command>\n\nDESCRIPTION\n\na tool\n\nCOMMANDS\n\n  demo     run the demo\n  group    a group\n    child  a child\n\nRun tool <command> --help for its options. tool --version prints the version.\n",
+    );
   });
 
   it("with FORCE_COLOR=1 a missing argument prints ✘ and the help to read", async () => {
