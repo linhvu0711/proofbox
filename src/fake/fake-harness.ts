@@ -198,6 +198,8 @@ export const makeFakeFileLogin = (): FileLoginTool => ({
   renewedAt: lastRefreshOf,
   accountOf: (text) =>
     Schema.decodeUnknownOption(
-      Schema.parseJson(Schema.Struct({ account: Schema.String })),
-    )(text).pipe(Option.map((login) => login.account)),
+      Schema.parseJson(
+        Schema.Struct({ account: Schema.optional(Schema.String) }),
+      ),
+    )(text).pipe(Option.map((login) => login.account ?? "fake")),
 });

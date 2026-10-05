@@ -12,7 +12,6 @@ import {
   Option,
   Redacted,
   Stream,
-  String as StringEquivalence,
 } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { runKeepingTail } from "./command-tail.ts";
@@ -193,11 +192,12 @@ export const keepNewerHarnessLoginFile = Effect.fn(
     Effect.gen(function* () {
       const saved = yield* readHarnessLoginFile(name, login.file);
       if (Option.isNone(saved)) return;
+      const savedAccount = tool.accountOf(saved.value);
+      const sandboxAccount = tool.accountOf(text);
       if (
-        !Option.getEquivalence(StringEquivalence.Equivalence)(
-          tool.accountOf(saved.value),
-          tool.accountOf(text),
-        )
+        Option.isNone(savedAccount) ||
+        Option.isNone(sandboxAccount) ||
+        savedAccount.value !== sandboxAccount.value
       )
         return;
       const before = Option.flatMap(saved, (text) => tool.renewedAt(text));

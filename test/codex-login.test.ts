@@ -10,6 +10,20 @@ import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 afterEach(cleanupEnvs);
 
+it("codex accountOf is none without tokens.account_id", () => {
+  const tool = makeCodexLogin("codex");
+  expect(
+    tool.accountOf(
+      '{"auth_mode":"chatgpt","last_refresh":"2026-10-01T10:00:00Z"}',
+    ),
+  ).toEqual(Option.none());
+  expect(
+    tool.accountOf(
+      '{"auth_mode":"chatgpt","last_refresh":"2026-10-01T10:00:00Z","tokens":{"account_id":"acct"}}',
+    ),
+  ).toEqual(Option.some("acct"));
+});
+
 it("Codex reads the account from its saved tokens", () => {
   const tool = makeCodexLogin("codex");
   expect(tool.accountOf('{"tokens":{"account_id":"acct"}}')).toEqual(
