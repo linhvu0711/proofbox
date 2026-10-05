@@ -1,42 +1,43 @@
-import {
-  Args,
-  CliConfig,
-  Command,
-  type CommandDescriptor,
-  HelpDoc,
-  Options,
-} from "@effect/cli";
-import type { Span } from "@effect/cli/HelpDoc/Span";
+import { Args, CliConfig, Command, HelpDoc, Options } from "@effect/cli";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { makeCommand } from "../src/cli.ts";
+import { type Descriptor, makeCommand, spanText } from "../src/cli.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
-type Descriptor = CommandDescriptor.Command<unknown> &
-  (
-    | (CommandDescriptor.Command<{ name: string }> & {
-        readonly _tag: "Standard";
-        readonly name: string;
-      })
-    | { readonly _tag: "Map"; readonly command: Descriptor }
-    | {
-        readonly _tag: "Subcommands";
-        readonly parent: Descriptor;
-        readonly children: ReadonlyArray<Descriptor>;
-      }
-  );
+const shortList = `USAGE
 
-const spanText = (span: Span): string => {
-  switch (span._tag) {
-    case "Text":
-    case "URI":
-      return span.value;
-    case "Sequence":
-      return spanText(span.left) + spanText(span.right);
-    default:
-      return spanText(span.value);
-  }
-};
+$ proofbox <command>
+
+DESCRIPTION
+
+rent a disposable Sandbox, drive its screen, and bring back a Proof video
+
+COMMANDS
+
+  create      create a Sandbox and print its Sandbox id
+  exec        run a command in a Sandbox and pass its exit code through
+  screenshot  save a PNG of the Sandbox screen
+  click       click at a spot on the Sandbox screen
+  type        type text on the Sandbox screen
+  key         press keys on the Sandbox screen
+  scroll      scroll at a spot on the Sandbox screen
+  drag        drag from one spot on the Sandbox screen to another
+  list        list your Sandboxes
+  delete      delete a Sandbox
+  upload      send the Work folder to a Sandbox again; only changed and new files go
+  live        print the address and password of a Sandbox's Live view
+  record      start and stop a Recording of the Sandbox screen
+    start     start a Recording of the Sandbox screen
+    stop      end the Recording and download its Proof video, or discard it
+  mark        set a Step mark, or a Wait mark with --wait, during a Recording
+  auth        log in to Providers and manage their logins
+    login     log in to a Provider
+    status    show each Provider's login
+    logout    delete this machine's Sandboxes on a Provider, then remove its login
+    token     make a token for CI from the browser login and print it once
+
+Run proofbox <command> --help for its options. proofbox --version prints the version.
+`;
 
 const blocks = (doc: HelpDoc.HelpDoc): ReadonlyArray<HelpDoc.HelpDoc> =>
   doc._tag === "Sequence" ? [...blocks(doc.left), ...blocks(doc.right)] : [doc];
@@ -272,21 +273,26 @@ describe("Help text", () => {
   it("help pages no longer list the built-in options", async () => {
     // Given
     const env = makeEnv();
+    const builtIns = ["--completions", "--log-level", "--wizard"];
+    const pages = [
+      // The top list's last line names --help and --version on purpose.
+      { args: ["--help"], hidden: builtIns },
+      {
+        args: ["create", "--help"],
+        hidden: [...builtIns, "--version", "--help"],
+      },
+      { args: ["auth"], hidden: [...builtIns, "--version", "--help"] },
+    ];
     // When
     const results = await Promise.all(
-      [["--help"], ["create", "--help"], ["auth"]].map((args) =>
-        runCli(env, args),
-      ),
+      pages.map(async ({ args, hidden }) => ({
+        hidden,
+        result: await runCli(env, args),
+      })),
     );
     // Then
-    for (const result of results) {
-      for (const option of [
-        "--completions",
-        "--log-level",
-        "--wizard",
-        "--version",
-        "--help",
-      ]) {
+    for (const { hidden, result } of results) {
+      for (const option of hidden) {
         expect(result.stdout).not.toContain(option);
       }
     }
@@ -311,5 +317,43 @@ describe("Help text", () => {
     expect(result.stdout).toContain(
       "rent a disposable Sandbox, drive its screen, and bring back a Proof video",
     );
+  });
+
+  it("proofbox --help prints the short command list", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["--help"]);
+    // Then
+    expect(result.stdout).toBe(shortList);
+  });
+
+  it("no line of proofbox --help is wider than 100 characters", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["--help"]);
+    // Then
+    expect(
+      Math.max(...result.stdout.split("\n").map((line) => line.length)),
+    ).toBe(85);
+  });
+
+  it("proofbox -h prints the short command list", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["-h"]);
+    // Then
+    expect(result.stdout).toBe(shortList);
+  });
+
+  it("proofbox with no arguments prints the short command list", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, []);
+    // Then
+    expect(result.stdout).toBe(shortList);
   });
 });

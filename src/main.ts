@@ -2,7 +2,7 @@
 import { CliConfig, ValidationError } from "@effect/cli";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Console, Effect, Exit, Layer } from "effect";
-import { commandWords, makeCli } from "./cli.ts";
+import { commandList, commandWords, makeCli, makeCommand } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
@@ -23,6 +23,15 @@ const dispatch = Effect.fn("main.dispatch")(function* (
     }
   }
   const providers = yield* Providers;
+  // @effect/cli has no hook for the top help page, so proofbox prints its own.
+  const args = argv.slice(2);
+  if (
+    args.length === 0 ||
+    (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))
+  ) {
+    const output = yield* CliOutput;
+    return yield* output.out(commandList(makeCommand([...providers.keys()])));
+  }
   return yield* makeCli([...providers.keys()])(argv);
 });
 
