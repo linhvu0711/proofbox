@@ -27,6 +27,7 @@ const noProgress = new Progress({
   step: (_label, effect) => effect,
   warn: () => Effect.void,
   note: () => Effect.void,
+  hint: () => Effect.void,
 });
 
 describe("fake Provider", () => {

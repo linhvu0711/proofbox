@@ -145,6 +145,25 @@ describe("list", () => {
     expect(json.stdout).toBe("[]\n");
   });
 
+  it("with FORCE_COLOR=1 list with no Sandbox says how to make one", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["list"], {
+      set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" },
+    });
+    // Then
+    expect({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    }).toEqual({
+      stdout: "",
+      stderr: "No live Sandboxes\n  make one: proofbox create --os linux\n",
+      exitCode: 0,
+    });
+  });
+
   it("list names an Unfinished Sandbox on stderr and keeps it out of stdout", async () => {
     // Given: one full Sandbox and one a create left 12 min 30 s ago
     const env = makeEnv();

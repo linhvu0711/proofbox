@@ -110,6 +110,13 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
           : `proofbox: ${text}\n`,
       ),
     );
-    return { step, warn, note };
+    // A hint: the next command to run. Only a person reads it, so it shows
+    // only with the look.
+    const hint = Effect.fn("Progress.hint")((text: string) =>
+      style.look
+        ? message(`${style.paint("dim", `  ${text}`)}\n`)
+        : Effect.void,
+    );
+    return { step, warn, note, hint };
   }),
 }) {}

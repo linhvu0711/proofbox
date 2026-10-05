@@ -265,6 +265,7 @@ const withRuntime =
               step: (_label, effect) => effect,
               warn: () => Effect.void,
               note: () => Effect.void,
+              hint: () => Effect.void,
             }),
           ),
         ),

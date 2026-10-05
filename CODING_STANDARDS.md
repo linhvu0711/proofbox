@@ -36,7 +36,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 
 ## Logging and output
 
-- The look (✔/✘/! marks, color, a live line per step) shows only when stderr is a terminal (and TERM is not dumb) or FORCE_COLOR is set; NO_COLOR drops the color, not the marks. The Style service in src/style.ts decides it.
+- The look (✔/✘/! marks, color, a live line per step, dim next-step hints) shows only when stderr is a terminal (and TERM is not dumb) or FORCE_COLOR is set; NO_COLOR drops the color, not the marks. The Style service in src/style.ts decides it.
 - stdout is never styled: no marks, no color, no live line.
 - All output goes through the `CliOutput` service. [biome noConsole, in `src/`]
 - stdout carries only the result: an id, a list, or `--json`. Progress and messages go to stderr.

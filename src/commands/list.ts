@@ -1,6 +1,7 @@
 import { Clock, Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { formatTime } from "../format-time.ts";
+import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 
@@ -97,6 +98,8 @@ export const listSandboxes = Effect.fn("list.listSandboxes")(
     }
     if (sandboxes.length === 0) {
       yield* output.err("No live Sandboxes\n");
+      const progress = yield* Progress;
+      yield* progress.hint("make one: proofbox create --os linux");
       return;
     }
     for (const { id, info } of sandboxes) {
