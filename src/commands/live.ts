@@ -1,6 +1,7 @@
 import { Duration, Effect, Schedule } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { deadlinePush } from "../deadline.ts";
+import { Progress } from "../progress.ts";
 import { lacksFeature, Providers } from "../provider.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
 
@@ -35,7 +36,8 @@ export const openLive = Effect.fn("live.openLive")(function* (
       ? `${JSON.stringify({ address: view.address, password: view.password })}\n`
       : `${view.address}\npassword ${view.password}\n`,
   );
-  yield* output.err("proofbox: Live view open; press Ctrl-C to close\n");
+  const progress = yield* Progress;
+  yield* progress.note("Live view open; press Ctrl-C to close");
   // The Live view stays open until Ctrl-C interrupts the loop or the
   // port-forward dies — a dead forward means the address is useless.
   yield* Effect.raceFirst(

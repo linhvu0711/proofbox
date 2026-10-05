@@ -87,6 +87,7 @@ const stubMac = (root: string, answer: Answer) => {
 const noProgress = new Progress({
   step: (_label, effect) => effect,
   warn: () => Effect.void,
+  note: () => Effect.void,
 });
 
 const layers = (mac: Provider) => {
@@ -99,7 +100,7 @@ const layers = (mac: Provider) => {
     CliOutput.Test,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
-    Layer.succeed(Progress, noProgress),
+    Progress.Default.pipe(Layer.provide(CliOutput.Test)),
   );
 };
 

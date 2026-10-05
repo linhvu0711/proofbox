@@ -14,3 +14,11 @@ export const formatWait = (wait: Duration.Duration) => {
   }
   return rest === 0 ? `${minutes} min` : `${minutes} min ${rest} s`;
 };
+
+export const formatElapsed = (elapsed: Duration.Duration) => {
+  const seconds = Math.floor(Duration.toMillis(elapsed) / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes === 0) return `${rest}s`;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+};

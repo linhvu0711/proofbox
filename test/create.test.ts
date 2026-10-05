@@ -48,6 +48,36 @@ const envFile = (content: string, mode = 0o600) => {
 describe("create", () => {
   afterEach(cleanupEnvs);
 
+  it("with FORCE_COLOR=1 a create with no Keeper warns once through Progress", async () => {
+    const env = makeEnv();
+    const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
+    const script = setupScript("echo hi\n");
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { ...keeperCannotStart(env), FORCE_COLOR: "1" } },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
+    expect(
+      result.stderr
+        .split("\n")
+        .filter((line) => line.includes("Keeper did not start")),
+    ).toEqual([
+      "\u001b[33m!\u001b[0m Keeper did not start; commands still work, only slower",
+    ]);
+  });
+
   it("a create with no Keeper prints only its own Keeper line", async () => {
     // Given: a Work folder and Setup script with a Keeper that cannot start
     const env = makeEnv();
@@ -164,6 +194,31 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
+  it("with FORCE_COLOR=1 create --work prints the sent files as a dim line", async () => {
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\ncat a.txt > setup-saw.txt\n");
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✔ running Setup script  <t>\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
   it("create --setup without --work makes nothing", async () => {
     // Given: a Setup script but no --work folder
     const env = makeEnv();
@@ -245,6 +300,38 @@ describe("create", () => {
     expect(result.stderr).toContain("Setup script failed with exit code 3");
     expect(result.stderr.length).toBeLessThan(100_000);
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
+  });
+
+  it("with FORCE_COLOR=1 a failing Setup script marks its step ✘", async () => {
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript(
+      '#!/bin/sh\nfor i in $(seq 1 60); do echo "line $i"; done\nexit 3\n',
+    );
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 11}\n`).join(
+      "",
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✘ running Setup script\n" +
+        lines +
+        "✘ Setup script failed with exit code 3; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.\n",
+    );
+    expect(result.exitCode).toBe(125);
   });
 
   it("create with a missing Setup script makes nothing", async () => {
@@ -581,5 +668,19 @@ describe("create", () => {
         "proofbox: starting Keeper\n" +
         "proofbox: sending 1 Secret\n",
     );
+  });
+
+  it("with FORCE_COLOR=1 an env file other users can read gets a ! warning", async () => {
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake", "--env-file", path],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      `! env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n`,
+    );
+    expect(result.exitCode).toBe(0);
   });
 });

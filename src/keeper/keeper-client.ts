@@ -1,6 +1,5 @@
 import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
-import { CliOutput } from "../cli-output.ts";
 import { runCommand } from "../command-checks.ts";
 import {
   AnswerTimeoutError,
@@ -10,6 +9,7 @@ import {
   type UploadFailedError,
   type WorkFileGrewError,
 } from "../errors.ts";
+import { Progress } from "../progress.ts";
 import {
   type ExecEvent,
   type ExecOptions,
@@ -178,7 +178,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
   {
     effect: Effect.gen(function* () {
       const providers = yield* Providers;
-      const output = yield* CliOutput;
+      const progress = yield* Progress;
       // File access for the Keeper's files, taken once when the client is
       // built.
       const fs = yield* FileSystem.FileSystem;
@@ -186,9 +186,9 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
 
       // One Keeper line per run, the first caller's.
       const warnNotStarted = Effect.fn("KeeperClient.warnNotStarted")(
-        function* (line: string) {
+        function* (text: string) {
           if (!(yield* Ref.getAndSet(warned, true))) {
-            yield* output.err(line);
+            yield* progress.warn(text);
           }
         },
       );
@@ -215,9 +215,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               : { exec: [...argv], stdin: true },
           );
           if (socket._tag === "None") {
-            yield* warnNotStarted(
-              "proofbox: Keeper did not start; running without it\n",
-            );
+            yield* warnNotStarted("Keeper did not start; running without it");
             return yield* execDirect(provider, id, argv, options);
           }
           const feederError = yield* Ref.make<StdinError | undefined>(

@@ -78,6 +78,7 @@ const layers = (os: "linux" | "macos" = "macos") => {
       new Progress({
         step: (_label, effect) => effect,
         warn: () => Effect.void,
+        note: () => Effect.void,
       }),
     ),
   );

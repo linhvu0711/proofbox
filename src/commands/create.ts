@@ -161,7 +161,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       .pipe(
         Effect.catchAll(() =>
           keeper.warnNotStarted(
-            "proofbox: Keeper did not start; commands still work, only slower\n",
+            "Keeper did not start; commands still work, only slower",
           ),
         ),
       );
@@ -173,7 +173,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         yield* sendWorkFolder(id, options.work, files, workLimit);
       }
       if (reused) {
-        yield* output.err(`proofbox: Snapshot reused, Fingerprint ${fp}\n`);
+        yield* progress.note(`Snapshot reused, Fingerprint ${fp}`);
       } else if (script !== undefined) {
         yield* runSetupScript(id, script);
       }
@@ -191,12 +191,10 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             )(snapshots.save(sandbox, fp)),
           )
           .pipe(
-            Effect.zipRight(
-              output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`),
-            ),
+            Effect.zipRight(progress.note(`Snapshot saved, Fingerprint ${fp}`)),
             Effect.catchAll((error) =>
-              output.err(
-                `proofbox: could not save the Snapshot (${error.message}); the next create runs the Setup script again\n`,
+              progress.warn(
+                `could not save the Snapshot (${error.message}); the next create runs the Setup script again`,
               ),
             ),
           );

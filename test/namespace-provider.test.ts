@@ -206,6 +206,7 @@ const liveLayers = (warnings?: Array<string>) =>
     Layer.succeed(
       Progress,
       new Progress({
+        note: () => Effect.void,
         step: (_label, effect) => effect,
         warn: (text) =>
           Effect.sync(() => {

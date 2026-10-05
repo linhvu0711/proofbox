@@ -1,5 +1,5 @@
 import { Args, Command, HelpDoc, Options } from "@effect/cli";
-import { Effect, Option, Schema } from "effect";
+import { Effect, HashMap, Option, Schema } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -33,7 +33,7 @@ const workMaxSize = Options.text("max-size").pipe(
   Options.optional,
 );
 
-export const makeCommand = (providers: ReadonlyArray<string>) => {
+const makeCommands = (providers: ReadonlyArray<string>) => {
   const providerArg = Args.choice(
     providers.map((name): [string, string] => [name, name]),
     { name: "provider" },
@@ -167,7 +167,7 @@ export const makeCommand = (providers: ReadonlyArray<string>) => {
     Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
   );
 
-  return Command.make("proofbox").pipe(
+  const command = Command.make("proofbox").pipe(
     Command.withDescription(
       "rent a disposable Sandbox, drive its screen, and bring back a Proof video",
     ),
@@ -189,7 +189,11 @@ export const makeCommand = (providers: ReadonlyArray<string>) => {
       auth,
     ]),
   );
+  return { command, auth };
 };
+
+export const makeCommand = (providers: ReadonlyArray<string>) =>
+  makeCommands(providers).command;
 
 const exec = Command.make(
   "exec",
@@ -583,6 +587,30 @@ const live = Command.make(
     "print the address and password of a Sandbox's Live view",
   ),
 );
+
+export const commandWords = (
+  args: ReadonlyArray<string>,
+  providers: ReadonlyArray<string>,
+): string => {
+  const { command, auth } = makeCommands(providers);
+  const first = args[0];
+  if (
+    first === undefined ||
+    !HashMap.has(Command.getSubcommands(command), first)
+  )
+    return "";
+  const groups = new Map([
+    ["auth", Command.getSubcommands(auth)],
+    ["record", Command.getSubcommands(record)],
+  ]);
+  const group = groups.get(first);
+  const second = args[1];
+  return group !== undefined &&
+    second !== undefined &&
+    HashMap.has(group, second)
+    ? `${first} ${second}`
+    : first;
+};
 
 export const makeCli = (providers: ReadonlyArray<string>) =>
   Command.run(makeCommand(providers), {
