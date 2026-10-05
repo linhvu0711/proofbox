@@ -250,6 +250,28 @@ it("harness log --follow moves the Deadline while it runs and not after it is ki
   });
 });
 
+it("harness log --full prints the Harness's own JSON lines unchanged", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--full"]);
+  // Then
+  expect({
+    code: result.exitCode,
+    same:
+      result.stdout ===
+      readFileSync(join(env.root, id.slice(5), "state", "turn", "out"), "utf8"),
+    first: result.stdout.split("\n")[0],
+  }).toEqual({
+    code: 0,
+    same: true,
+    first: '{"type":"activity","text":"read the prompt"}',
+  });
+});
+
 it("harness wait prints done and the last message", async () => {
   // Given
   const env = makeEnv();

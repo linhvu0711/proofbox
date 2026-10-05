@@ -400,8 +400,12 @@ const harnessWait = Command.make(
 
 const harnessLog = Command.make(
   "log",
-  { id: Args.text({ name: "id" }), follow: Options.boolean("follow") },
-  ({ id, follow }) => logTurn(id, { follow }),
+  {
+    id: Args.text({ name: "id" }),
+    follow: Options.boolean("follow"),
+    full: Options.boolean("full"),
+  },
+  ({ id, follow, full }) => logTurn(id, { follow, full }),
 );
 
 const harnessStop = Command.make(
