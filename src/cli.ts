@@ -356,6 +356,9 @@ const live = Command.make(
 );
 
 const command = Command.make("proofbox").pipe(
+  Command.withDescription(
+    "rent a disposable Sandbox, drive its screen, and bring back a Proof video",
+  ),
   Command.withSubcommands([
     create,
     exec,
