@@ -185,6 +185,101 @@ describe("Recording and the Proof video", () => {
     );
   });
 
+  it("record stop --json names the video and each Proof screenshot with its Step label", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    await runCli(env, ["mark", id, "step 2: close the menu"]);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `{"video":"${dir}/proof.mp4","screenshots":[{"step":1,"label":"step 1: open the menu","path":"${dir}/proof-1.png"},{"step":2,"label":"step 2: close the menu","path":"${dir}/proof-2.png"}]}\n`,
+    );
+  });
+
+  it("record stop --json with no Step marks gives an empty screenshots list", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(3000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `{"video":"${dir}/proof.mp4","screenshots":[]}\n`,
+    );
+  });
+
+  it("record stop --json with no Recording started leaves stdout empty and exits 125", async () => {
+    // Given: a Sandbox with no record start
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      `No Recording is running on ${id}; run record start first\n`,
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("a 3-minute Recording with long pauses comes out under 30 s", {
     timeout: 420_000,
   }, async () => {

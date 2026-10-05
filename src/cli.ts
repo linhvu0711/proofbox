@@ -260,8 +260,9 @@ const recordStop = Command.make(
     out: Options.text("out").pipe(Options.optional),
     discard: Options.boolean("discard"),
     maxSize: Options.text("max-size").pipe(Options.optional),
+    json,
   },
-  ({ id, out, discard, maxSize }) =>
+  ({ id, out, discard, maxSize, json }) =>
     Effect.gen(function* () {
       const limit = yield* maxSize.pipe(
         Option.map((value) => parseMaxSize(value)),
@@ -272,6 +273,7 @@ const recordStop = Command.make(
         out: Option.getOrUndefined(out),
         discard,
         maxSize: limit,
+        json,
       });
     }),
 );
