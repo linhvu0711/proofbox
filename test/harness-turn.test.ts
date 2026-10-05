@@ -1,4 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
@@ -188,6 +194,64 @@ it("two prompts at once start one turn", async () => {
     exitCode: 0,
     stdout: "done\nslept 5s\n",
     stderr: "",
+  });
+});
+
+it("an abandoned prompt lock older than 30 seconds does not block a prompt", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  const lock = join(env.root, id.slice(5), "state", "turn.lock");
+  mkdirSync(lock);
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(lock, past, past);
+  // When
+  const prompt = await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  const wait = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({ prompt: prompt.exitCode, wait }).toEqual({
+    prompt: 0,
+    wait: { exitCode: 0, stdout: "done\ndid: make hello.txt\n", stderr: "" },
+  });
+});
+
+it("a fresh prompt lock refuses the prompt", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  const lock = join(env.root, id.slice(5), "state", "turn.lock");
+  mkdirSync(lock);
+  const now = new Date();
+  utimesSync(lock, now, now);
+  // When
+  const result = await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr:
+      "a turn is running; run proofbox harness wait or proofbox harness stop\n",
+  });
+});
+
+it("a prompt lock that cannot be made reports the file error", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  writeFileSync(join(env.root, id.slice(5), "state", "turn.lock"), "");
+  // When
+  const result = await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  // Then
+  expect({
+    code: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    running: result.stderr.includes("a turn is running"),
+  }).toEqual({
+    code: 125,
+    stdout: "",
+    stderr: expect.stringMatching(/^could not start the Turn: mkdir:/),
+    running: false,
   });
 });
 

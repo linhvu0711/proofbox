@@ -15,8 +15,15 @@ import { withSecrets } from "./secrets.ts";
 const START = `set -eu
 umask 077
 t=$1; shift
-mkdir "$t.lock" 2>/dev/null || exit 125
-trap 'rmdir "$t.lock"' EXIT
+l="$t.lock"
+if ! err=$(mkdir "$l" 2>&1); then
+  if [ ! -d "$l" ]; then echo "error $err"; exit 1; fi
+  age=$(( $(date +%s) - $(perl -e 'print +(stat shift)[9]' "$l") ))
+  if [ "$age" -le 30 ]; then echo running; exit 0; fi
+  rmdir "$l" 2>/dev/null || true
+  if ! mkdir "$l" 2>/dev/null; then echo running; exit 0; fi
+fi
+trap 'rmdir "$l"' EXIT
 if [ -f "$t/pid" ] && [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$(cat "$t/pid")" 2>/dev/null; then
   echo running
   exit 0
@@ -202,8 +209,13 @@ export const startTurn = Effect.fn("turn.startTurn")(function* (
     rawId,
     withSecrets(files.secrets, ["sh", "-c", START, "sh", files.turn, ...argv]),
   );
-  if (result.code === 125 || result.out.trim() === "running")
-    return yield* new TurnRunningError();
+  const state = result.out.trim();
+  if (state === "running") return yield* new TurnRunningError();
+  if (state.startsWith("error "))
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: `could not start the Turn: ${state.slice(6)}`,
+    });
   if (result.code !== 0)
     return yield* new HarnessError({
       harness: rawId,

@@ -98,8 +98,21 @@ export const promptHarness = Effect.fn("harness.promptHarness")(function* (
     yield* settleTurn(rawId, turn.files, harness, turn.state);
     session = (yield* readTurn(rawId, 0)).session;
   }
-  yield* startTurn(rawId, harness.turn({ prompt, model, session }));
   const output = yield* CliOutput;
+  const started = yield* startTurn(
+    rawId,
+    harness.turn({ prompt, model, session }),
+  ).pipe(
+    Effect.as(true),
+    Effect.catchTag("HarnessError", (error) =>
+      Effect.gen(function* () {
+        yield* output.err(`${error.reason}\n`);
+        yield* output.setExitCode(125);
+        return false;
+      }),
+    ),
+  );
+  if (!started) return;
   yield* output.err(
     `proofbox: turn started; run proofbox harness wait ${rawId}\n`,
   );
