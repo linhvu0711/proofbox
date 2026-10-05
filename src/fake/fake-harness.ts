@@ -7,10 +7,14 @@ import { lastRefreshOf } from "../login/logins-file.ts";
 
 const End = Schema.Struct({
   type: Schema.Literal("end"),
-  session: Schema.String,
   message: Schema.String,
   error: Schema.optional(Schema.Literal("login", "usage-limit", "other")),
   resets: Schema.optional(Schema.String),
+});
+
+const Start = Schema.Struct({
+  type: Schema.Literal("start"),
+  session: Schema.String,
 });
 
 const Activity = Schema.Struct({
@@ -30,12 +34,22 @@ session=fake-$$
 if [ "$1" = --resume ]; then session=$2; shift 2; fi
 prompt=$1
 code=0
+printf '{"type":"start","session":"%s"}\n' "$session"
 mkdir -p "$HOME/.fake-harness/sessions"
 history="$HOME/.fake-harness/sessions/$session"
 heard=$(paste -sd ';' "$history" 2>/dev/null || true)
 printf '%s\n' "$prompt" >> "$history"
 echo '{"type":"activity","text":"read the prompt"}'
 case "$prompt" in
+  'lines '*)
+    n=$(printf '%s' "$prompt" | cut -d ' ' -f 2)
+    i=1
+    while [ "$i" -le "$n" ]; do
+      printf '{"type":"activity","text":"line %s"}\n' "$i"
+      i=$((i + 1))
+    done
+    message="did: $prompt"
+    ;;
   'sleep '*)
     n=$(printf '%s' "$prompt" | cut -d ' ' -f 2)
     printf '{"type":"activity","text":"sleeping %ss"}\n' "$n"
@@ -44,11 +58,11 @@ case "$prompt" in
     ;;
   recall) message="remembers: $heard" ;;
   'fail login')
-    printf '{"type":"end","session":"%s","error":"login","message":"401 login refused"}\n' "$session"
+    printf '{"type":"end","error":"login","message":"401 login refused"}\n'
     exit 1
     ;;
   'fail usage-limit')
-    printf '{"type":"end","session":"%s","error":"usage-limit","message":"usage limit reached","resets":"2026-10-05T03:00:00Z"}\n' "$session"
+    printf '{"type":"end","error":"usage-limit","message":"usage limit reached","resets":"2026-10-05T03:00:00Z"}\n'
     exit 1
     ;;
   crash) echo 'fake-harness: crashed on purpose' >&2; exit 3 ;;
@@ -61,7 +75,7 @@ case "$prompt" in
     ;;
   *) message="did: $prompt" ;;
 esac
-perl -MJSON::PP -e 'print encode_json({type => "end", session => $ARGV[0], message => $ARGV[1]}), "\n"' "$session" "$message"
+perl -MJSON::PP -e 'print encode_json({type => "end", message => $ARGV[0]}), "\n"' "$message"
 exit "$code"
 `;
 
@@ -83,13 +97,20 @@ export const makeFakeHarness = (name: string): Harness => ({
   ],
   readEnd: (output) => {
     try {
+      const start = output
+        .split("\n")
+        .map((line) =>
+          Schema.decodeUnknownOption(Schema.parseJson(Start))(line),
+        )
+        .find((value) => Option.isSome(value));
+      if (start === undefined || Option.isNone(start)) return { _tag: "NoEnd" };
       const end = Schema.decodeUnknownEither(End)(
         JSON.parse(output.trimEnd().split("\n").at(-1) ?? ""),
       );
       if (Either.isRight(end) && end.right.error !== undefined) {
         return {
           _tag: "Failed",
-          session: Option.some(end.right.session),
+          session: Option.some(start.value.session),
           kind: end.right.error,
           message: end.right.message,
           resets: Option.fromNullable(end.right.resets),
@@ -98,7 +119,7 @@ export const makeFakeHarness = (name: string): Harness => ({
       return Either.isRight(end)
         ? {
             _tag: "Done",
-            session: end.right.session,
+            session: start.value.session,
             lastMessage: end.right.message,
           }
         : { _tag: "NoEnd" };

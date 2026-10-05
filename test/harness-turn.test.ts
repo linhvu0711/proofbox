@@ -19,6 +19,22 @@ import {
 
 afterEach(cleanupEnvs);
 
+it("a session survives a Turn longer than 50 lines", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "lines 60"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  await runCli(env, ["harness", "prompt", id, "recall"]);
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
+    code: 0,
+    stdout: "done\nremembers: lines 60\n",
+  });
+});
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const sandbox = async (env: CliEnv, extra: string[] = []) => {
@@ -502,7 +518,7 @@ it("harness log --full prints the Harness's own JSON lines unchanged", async () 
   }).toEqual({
     code: 0,
     same: true,
-    first: '{"type":"activity","text":"read the prompt"}',
+    first: expect.stringMatching(/^\{"type":"start","session":"fake-\d+"\}$/),
   });
 });
 

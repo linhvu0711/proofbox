@@ -89,7 +89,7 @@ export interface Harness {
     readonly model: Option.Option<string>;
     readonly session: Option.Option<string>;
   }) => ReadonlyArray<string>;
-  // Reads the whole JSON output, one event per line.
+  // Reads the first line and the last 50 lines of the JSON output, one event per line.
   readonly readEnd: (output: string) => TurnEnd;
   // One line of the Harness's JSON output as its steps, in order; none when the line holds no step.
   readonly readSteps: (event: string) => ReadonlyArray<HarnessStep>;
