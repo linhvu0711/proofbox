@@ -160,8 +160,8 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       .step("starting Keeper", keeper.start(id))
       .pipe(
         Effect.catchAll(() =>
-          output.err(
-            "proofbox: Keeper did not start; commands still work, only slower\n",
+          progress.warn(
+            "Keeper did not start; commands still work, only slower",
           ),
         ),
       );
@@ -195,8 +195,8 @@ export const createSandbox = Effect.fn("create.createSandbox")(
               output.err(`proofbox: Snapshot saved, Fingerprint ${fp}\n`),
             ),
             Effect.catchAll((error) =>
-              output.err(
-                `proofbox: could not save the Snapshot (${error.message}); the next create runs the Setup script again\n`,
+              progress.warn(
+                `could not save the Snapshot (${error.message}); the next create runs the Setup script again`,
               ),
             ),
           );

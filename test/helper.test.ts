@@ -99,7 +99,7 @@ const layers = (mac: Provider) => {
     CliOutput.Test,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
-    Layer.succeed(Progress, noProgress),
+    Progress.Default.pipe(Layer.provide(CliOutput.Test)),
   );
 };
 

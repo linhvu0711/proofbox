@@ -1,7 +1,8 @@
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Ref } from "effect";
+import { Chunk, Effect, Layer, Ref } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
+import { Progress } from "../src/progress.ts";
 import { encodeUnderLimit } from "../src/proof/size-limit.ts";
 
 describe("Size limit", () => {
@@ -29,7 +30,14 @@ describe("Size limit", () => {
       expect(err).toBe(
         "proofbox: Proof video is 12.4 MB, over the 10.0 MB Size limit; trying lower quality\n",
       );
-    }).pipe(Effect.provide(CliOutput.Test)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+    ),
   );
 
   it.effect(
@@ -53,6 +61,13 @@ describe("Size limit", () => {
         expect(error.message).toBe(
           "Proof video is 10.6 MB at the lowest quality, over the 10.0 MB Size limit, so nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; make a shorter Recording, or raise --max-size.",
         );
-      }).pipe(Effect.provide(CliOutput.Test)),
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            CliOutput.Test,
+            Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          ),
+        ),
+      ),
   );
 });

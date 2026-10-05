@@ -46,7 +46,9 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
     });
     // A warning: something went wrong, and the command goes on without it.
     const warn = Effect.fn("Progress.warn")((text: string) =>
-      output.err(`proofbox: ${text}\n`),
+      output.err(
+        style.look ? `${style.mark("warn")} ${text}\n` : `proofbox: ${text}\n`,
+      ),
     );
     return { step, warn };
   }),

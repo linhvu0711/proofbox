@@ -49,7 +49,12 @@ const program = Effect.gen(function* () {
       providersLive,
       KeeperClient.Default.pipe(
         Layer.provide(
-          Layer.mergeAll(CliOutput.Default, providersLive, NodeContext.layer),
+          Layer.mergeAll(
+            CliOutput.Default,
+            providersLive,
+            NodeContext.layer,
+            Progress.Default.pipe(Layer.provide(CliOutput.Default)),
+          ),
         ),
       ),
       Progress.Default.pipe(Layer.provide(CliOutput.Default)),

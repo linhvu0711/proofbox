@@ -16,6 +16,27 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 describe("Progress", () => {
   afterEach(cleanupEnvs);
 
+  it.effect("with FORCE_COLOR=1 a warning prints a yellow !", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.warn("disk is slow");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("\u001b[33m!\u001b[0m disk is slow\n");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["FORCE_COLOR", "1"]])),
+      ),
+    ),
+  );
+
   it("with FORCE_COLOR=1 create prints a ✔ line per step", async () => {
     const env = makeEnv();
     const result = await runCli(

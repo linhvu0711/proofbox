@@ -551,4 +551,18 @@ describe("create", () => {
         "proofbox: sending 1 Secret\n",
     );
   });
+
+  it("with FORCE_COLOR=1 an env file other users can read gets a ! warning", async () => {
+    const env = makeEnv();
+    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake", "--env-file", path],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      `! env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n`,
+    );
+    expect(result.exitCode).toBe(0);
+  });
 });
