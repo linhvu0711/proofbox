@@ -17,6 +17,7 @@ import { ConfigProvider, Effect, Layer } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { harnessEntryFor, saveHarnessLogin } from "../src/commands/harness.ts";
+import { stepLine } from "../src/harness.ts";
 import { HarnessesLive } from "../src/harness-registry.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
 
@@ -40,6 +41,45 @@ const readSaved = (home: string): unknown =>
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 afterEach(cleanupEnvs);
+
+it("a short step line stays as it is", () => {
+  // Given
+  const text = "Bash: pnpm test";
+  // When
+  const line = stepLine(text);
+  // Then
+  expect(line).toBe("Bash: pnpm test");
+});
+
+it("a step of many lines shows its first line and its size", () => {
+  // Given
+  const text = "Bash: pnpm test\necho done";
+  // When
+  const line = stepLine(text);
+  // Then
+  expect(line).toBe("Bash: pnpm test… (25 B)");
+});
+
+it("a long step line is cut to 119 characters with its size", () => {
+  // Given
+  const text = "a".repeat(121) + "\nsecond line";
+  // When
+  const line = stepLine(text);
+  // Then
+  expect(line).toBe("a".repeat(119) + "… (133 B)");
+});
+
+it("a step size counts in KB and MB", () => {
+  // Given
+  const texts = ["x".repeat(48_200), "x".repeat(1_300_000)];
+  // When
+  const lines = texts.map((text) => stepLine(text));
+  // Then
+  expect(lines).toEqual([
+    "x".repeat(119) + "… (48.2 KB)",
+    "x".repeat(119) + "… (1.3 MB)",
+  ]);
+});
 
 describe("Harness logins", () => {
   it("harness login with a blocked config directory names the Harness logins file", async () => {

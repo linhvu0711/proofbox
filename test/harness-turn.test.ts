@@ -24,6 +24,341 @@ const sandbox = async (env: CliEnv, extra: string[] = []) => {
   return created.stdout.trim();
 };
 
+it("harness log after a Turn prints each step with its time and the end state last", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({
+    code: result.exitCode,
+    stderr: result.stderr,
+    lines: result.stdout.split("\n"),
+  }).toEqual({
+    code: 0,
+    stderr: "",
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
+it("harness log during a Turn prints the steps so far and still running", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 20"]);
+  // When
+  let result = await runCli(env, ["harness", "log", id]);
+  for (let n = 1; n < 40 && !result.stdout.includes("sleeping 20s"); n++) {
+    await sleep(250);
+    result = await runCli(env, ["harness", "log", id]);
+  }
+  await runCli(env, ["harness", "stop", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 20s$/,
+      ),
+      "still running",
+      "",
+    ],
+  });
+});
+
+it("harness log reads 1,200 activity lines in bounded batches and prints done last", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  const turn = join(env.root, id.slice(5), "state", "turn");
+  const events = Array.from({ length: 1200 }, (_, i) =>
+    JSON.stringify({ type: "activity", text: `step ${i + 1}` }),
+  );
+  const raw = `${events.join("\n")}\n`;
+  writeFileSync(join(turn, "out"), raw);
+  writeFileSync(join(turn, "times"), "1791172800\n".repeat(1200));
+  const log = join(env.runtime, `fake-${id.slice(5)}.log`);
+  // When
+  for (const flags of [[], ["--follow"], ["--full"]]) {
+    const before = readFileSync(log, "utf8").length;
+    const result = await runCli(env, ["harness", "log", id, ...flags]);
+    const requests = readFileSync(log, "utf8")
+      .slice(before)
+      .split("\n")
+      .filter((line) => line.includes(" exec sh "));
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(requests).toHaveLength(flags.includes("--full") ? 3 : 4);
+    expect(result.stdout).toBe(
+      flags.includes("--full")
+        ? raw
+        : `${events.map((_, i) => `2026-10-05T04:00:00Z step ${i + 1}`).join("\n")}\ndone\n`,
+    );
+  }
+});
+
+it("harness log before any prompt says no turn has run yet", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr: `no turn has run yet; run proofbox harness prompt ${id} "<prompt>"\n`,
+  });
+});
+
+it("harness log on a Sandbox made without --harness is refused", async () => {
+  // Given
+  const env = makeEnv();
+  const created = await runCli(env, [
+    "create",
+    "--os",
+    "linux",
+    "--provider",
+    "fake",
+  ]);
+  const id = created.stdout.trim();
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+    code: 125,
+    stderr: `Sandbox ${id} was made without --harness; make one with proofbox create --harness claude.\n`,
+  });
+});
+
+it("harness log after a failed Turn ends with the failure", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "fail login"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "failed: Harness login refused: 401 login refused",
+      "",
+    ],
+  });
+});
+
+it("harness log on an ended Turn that no wait has read prints done and saves nothing", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  // When
+  let result = await runCli(env, ["harness", "log", id]);
+  for (
+    let n = 1;
+    n < 40 && result.stdout.trimEnd().endsWith("still running");
+    n++
+  ) {
+    await sleep(250);
+    result = await runCli(env, ["harness", "log", id]);
+  }
+  // Then
+  expect({
+    lines: result.stdout.split("\n"),
+    saved: existsSync(join(env.root, id.slice(5), "state", "turn", "result")),
+  }).toEqual({
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "done",
+      "",
+    ],
+    saved: false,
+  });
+});
+
+it("harness log --follow prints new steps and returns 0 when the Turn ends", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 2"]);
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 2s$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
+it("harness log --follow prints a step while the Turn still runs", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  let text = "";
+  let stopping: Promise<unknown> | undefined;
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"], {
+    onStdout: (chunk) => {
+      text += chunk;
+      if (text.includes("sleeping 30s") && stopping === undefined)
+        stopping = runCli(env, ["harness", "stop", id]);
+    },
+  });
+  await stopping;
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 30s$/,
+      ),
+      "stopped",
+      "",
+    ],
+  });
+});
+
+it("harness log --follow never reads steps from a replacement Turn", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  let text = "";
+  let replacing: Promise<unknown> | undefined;
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"], {
+    onStdout: (chunk) => {
+      text += chunk;
+      if (text.includes("sleeping 30s") && replacing === undefined)
+        replacing = (async () => {
+          await runCli(env, ["harness", "stop", id]);
+          await runCli(env, ["harness", "prompt", id, "hello"]);
+        })();
+    },
+  });
+  await replacing;
+  // Then
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("sleeping 30s");
+  expect(result.stdout).not.toContain("did: hello");
+  expect(result.stdout.trimEnd().split("\n").at(-1)).toMatch(
+    /^(stopped|ended; a new Turn started)$/,
+  );
+});
+
+it("harness log --follow moves the Deadline while it runs and not after it is killed", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env, ["--idle", "1m"]);
+  await runCli(env, ["harness", "prompt", id, "sleep 40"]);
+  const deadline = () =>
+    Number(readFileSync(join(env.root, id.slice(5), "deadline"), "utf8"));
+  let stopLog = () => {};
+  const logging = runCli(env, ["harness", "log", id, "--follow"], {
+    onSpawn: (interrupt) => {
+      stopLog = interrupt;
+    },
+  });
+  // When
+  await sleep(2000);
+  const d0 = deadline();
+  await sleep(8000);
+  const d1 = deadline();
+  stopLog();
+  await logging;
+  await sleep(1000);
+  const d2 = deadline();
+  await sleep(8000);
+  const d3 = deadline();
+  // Then
+  expect({ moved: d1 > d0, still: d3 === d2 }).toEqual({
+    moved: true,
+    still: true,
+  });
+});
+
+it("harness log --full prints the Harness's own JSON lines unchanged", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--full"]);
+  // Then
+  expect({
+    code: result.exitCode,
+    same:
+      result.stdout ===
+      readFileSync(join(env.root, id.slice(5), "state", "turn", "out"), "utf8"),
+    first: result.stdout.split("\n")[0],
+  }).toEqual({
+    code: 0,
+    same: true,
+    first: '{"type":"activity","text":"read the prompt"}',
+  });
+});
+
+it("harness log cuts a long step to one line with its size", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "long"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z x{119}… \(212 B\)$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
 it("harness wait prints done and the last message", async () => {
   // Given
   const env = makeEnv();
