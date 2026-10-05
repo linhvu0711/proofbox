@@ -1,6 +1,6 @@
 import { Either, Option, Schema } from "effect";
 import { formatTime } from "./format-time.ts";
-import type { Harness } from "./harness.ts";
+import type { Harness, HarnessStep } from "./harness.ts";
 import { shellJoin } from "./shell.ts";
 
 const Result = Schema.Struct({
@@ -22,6 +22,30 @@ const Assistant = Schema.Struct({
   message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }),
 });
 
+const Init = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("init"),
+  model: Schema.String,
+});
+
+const ApiRetry = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("api_retry"),
+  attempt: Schema.Number,
+  error: Schema.String,
+});
+
+const User = Schema.Struct({
+  type: Schema.Literal("user"),
+  message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }),
+});
+
+const ToolResult = Schema.Struct({
+  type: Schema.Literal("tool_result"),
+  content: Schema.Union(Schema.String, Schema.Array(Schema.Unknown)),
+  isError: Schema.optional(Schema.Boolean).pipe(Schema.fromKey("is_error")),
+});
+
 const ActivityBlock = Schema.Union(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
   Schema.Struct({
@@ -30,22 +54,6 @@ const ActivityBlock = Schema.Union(
     input: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
   }),
 );
-
-const activityText = (block: typeof ActivityBlock.Type): string => {
-  let text: string;
-  if (block.type === "text") text = block.text;
-  else {
-    const detail = ["command", "file_path", "pattern", "url", "description"]
-      .map((key) => block.input[key])
-      .find((value): value is string => typeof value === "string");
-    text =
-      detail === undefined
-        ? block.name
-        : `${block.name}: ${detail.split(/\r?\n/)[0] ?? ""}`;
-  }
-  const line = text.split(/\r?\n/)[0] ?? "";
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
-};
 
 const resetText = (message: string): Option.Option<string> => {
   const epoch = /\|(\d{10})(?!\d)/.exec(message);
@@ -102,18 +110,60 @@ export const makeClaudeHarness = (): Harness => ({
     }
     return { _tag: "NoEnd" };
   },
-  readActivity: (output) => {
-    for (const line of output.trimEnd().split("\n").reverse()) {
-      const event = Schema.decodeUnknownEither(Schema.parseJson(Assistant))(
-        line,
-      );
-      if (Either.isLeft(event)) continue;
-      for (const value of [...event.right.message.content].reverse()) {
-        const block = Schema.decodeUnknownEither(ActivityBlock)(value);
-        if (Either.isRight(block))
-          return Option.some(activityText(block.right));
+  readSteps: (event) => {
+    const decoded = Schema.decodeUnknownEither(
+      Schema.parseJson(Schema.Union(Assistant, Init, ApiRetry, User)),
+    )(event);
+    if (Either.isLeft(decoded)) return [];
+    const message = decoded.right;
+    if (message.type === "system")
+      return [
+        {
+          kind: "other",
+          text:
+            message.subtype === "init"
+              ? `started: ${message.model}`
+              : `API retry ${message.attempt}: ${message.error}`,
+        },
+      ];
+    const steps: HarnessStep[] = [];
+    for (const value of message.message.content) {
+      if (message.type === "user") {
+        const block = Schema.decodeUnknownEither(ToolResult)(value);
+        if (Either.isLeft(block)) continue;
+        const tool = block.right;
+        const content =
+          typeof tool.content === "string"
+            ? tool.content
+            : tool.content
+                .flatMap((value) => {
+                  const text = Schema.decodeUnknownEither(ActivityBlock)(value);
+                  return Either.isRight(text) && text.right.type === "text"
+                    ? [text.right.text]
+                    : [];
+                })
+                .join("\n");
+        steps.push({
+          kind: "result",
+          text: `${tool.isError === true ? "error" : "result"}: ${content}`,
+        });
+        continue;
       }
+      const block = Schema.decodeUnknownEither(ActivityBlock)(value);
+      if (Either.isLeft(block)) continue;
+      if (block.right.type === "text") {
+        steps.push({ kind: "said", text: block.right.text });
+        continue;
+      }
+      const tool = block.right;
+      const detail = ["command", "file_path", "pattern", "url", "description"]
+        .map((key) => tool.input[key])
+        .find((value): value is string => typeof value === "string");
+      steps.push({
+        kind: "tool",
+        text: detail === undefined ? tool.name : `${tool.name}: ${detail}`,
+      });
     }
-    return Option.none();
+    return steps;
   },
 });
