@@ -18,10 +18,8 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
         const ms = (yield* Clock.currentTimeMillis) - step.started;
         const time = formatElapsed(Duration.millis(ms));
         const frame = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(ms / 80) % 10] ?? "⠋";
-        const label = style.cut(
-          step.label,
-          style.columns - 1 - 4 - time.length,
-        );
+        const columns = yield* style.columns;
+        const label = style.cut(step.label, columns - 1 - 4 - time.length);
         return `${style.paint("spin", frame)} ${label}  ${style.paint("dim", time)}`;
       });
     const draw = writes.withPermits(1)(

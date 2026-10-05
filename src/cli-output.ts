@@ -5,8 +5,11 @@ const asText = (data: string | Uint8Array) =>
   typeof data === "string" ? data : decoder.decode(data);
 
 interface CliOutputShape {
-  // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
-  readonly terminal: { readonly isTTY: boolean; readonly columns: number };
+  readonly terminal: {
+    // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
+    readonly isTTY: boolean;
+    readonly columns: Effect.Effect<number>;
+  };
   readonly out: (data: string | Uint8Array) => Effect.Effect<void>;
   readonly err: (data: string | Uint8Array) => Effect.Effect<void>;
   readonly setExitCode: (code: number) => Effect.Effect<void>;
@@ -45,7 +48,7 @@ export class CliOutput extends Effect.Service<CliOutput>()(
         terminal: {
           // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
           isTTY: process.stderr.isTTY === true,
-          columns: process.stderr.columns ?? 80,
+          columns: Effect.sync(() => process.stderr.columns ?? 0),
         },
         out: Effect.fn("CliOutput.out")((data: string | Uint8Array) =>
           write(process.stdout, captured.out, data),
@@ -69,7 +72,7 @@ export class CliOutput extends Effect.Service<CliOutput>()(
       (captured) =>
         new CliOutput({
           // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
-          terminal: { isTTY: false, columns: 80 },
+          terminal: { isTTY: false, columns: Effect.succeed(0) },
           out: (data) => Ref.update(captured.out, Chunk.append(asText(data))),
           err: (data) => Ref.update(captured.err, Chunk.append(asText(data))),
           setExitCode: (code) => Ref.set(captured.exitCode, code),
@@ -79,15 +82,19 @@ export class CliOutput extends Effect.Service<CliOutput>()(
     ),
   );
 
-  static TestTerminal = (columns: number) =>
+  static TestTerminal = (columns: number | Effect.Effect<number>) =>
     Layer.effect(
       CliOutput,
       Effect.map(
         makeCaptured,
         (captured) =>
           new CliOutput({
-            // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
-            terminal: { isTTY: true, columns },
+            terminal: {
+              // biome-ignore lint/style/useNamingConvention: matches Node's terminal fact.
+              isTTY: true,
+              columns:
+                typeof columns === "number" ? Effect.succeed(columns) : columns,
+            },
             out: (data) => Ref.update(captured.out, Chunk.append(asText(data))),
             err: (data) => Ref.update(captured.err, Chunk.append(asText(data))),
             setExitCode: (code) => Ref.set(captured.exitCode, code),

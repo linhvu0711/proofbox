@@ -154,6 +154,41 @@ describe("Progress", () => {
     );
   });
 
+  it.effect("a live line uses the current terminal width after a resize", () =>
+    Effect.gen(function* () {
+      const columns = yield* Ref.make(80);
+      const terminal = CliOutput.TestTerminal(Ref.get(columns));
+      yield* Effect.gen(function* () {
+        const progress = yield* Progress;
+        const fiber = yield* Effect.fork(
+          progress.step("creating fake Sandbox", Effect.sleep("1 second")),
+        );
+        yield* TestClock.adjust("0 millis");
+        const output = yield* CliOutput;
+        expect(
+          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
+        ).toBe("\r\u001b[2K⠋ creating fake Sandbox  0s");
+        yield* Ref.set(columns, 20);
+        yield* TestClock.adjust("80 millis");
+        expect(
+          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
+        ).toBe("\r\u001b[2K⠙ creating fak…  0s");
+        yield* Fiber.interrupt(fiber);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            terminal,
+            Progress.Default.pipe(Layer.provide(terminal)),
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+      ),
+    ),
+  );
+
   it.effect("with FORCE_COLOR=1 a note prints dim with two spaces", () =>
     Effect.gen(function* () {
       const progress = yield* Progress;
