@@ -1,10 +1,11 @@
 import { FileSystem } from "@effect/platform";
-import { Effect } from "effect";
+import { Clock, Effect } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   idleDefault,
   MAX_LIFE_DEFAULT,
   parseSpan,
+  pushedDeadline,
   withDeadlinePush,
 } from "../deadline.ts";
 import {
@@ -17,6 +18,7 @@ import {
   UnknownProviderError,
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
+import { formatClock } from "../format-time.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
@@ -211,6 +213,16 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       ),
     );
     yield* output.out(`${id}\n`);
+    // The steps above push the Deadline past info.deadline, so the time it
+    // ends if idle is the one a push sets now.
+    const deadline = yield* pushedDeadline(info);
+    const now = new Date(yield* Clock.currentTimeMillis);
+    yield* progress.hint(`run a command: proofbox exec ${id} -- <command>`);
+    yield* progress.hint(`watch the screen: proofbox live ${id}`);
+    yield* progress.hint(`delete it: proofbox delete ${id}`);
+    yield* progress.hint(
+      `ends at ${formatClock(deadline, now)} if idle, at ${formatClock(info.maxLifeAt, now)} at the latest`,
+    );
   },
   Effect.scoped,
 );

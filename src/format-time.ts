@@ -22,3 +22,13 @@ export const formatElapsed = (elapsed: Duration.Duration) => {
   if (minutes === 0) return `${rest}s`;
   return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 };
+
+// A local clock time a person reads: "14:05" today, "2026-10-06 01:30" on
+// another day. Cut to the minute, never rounded up.
+export const formatClock = (date: Date, now: Date) => {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const time = `${two(date.getHours())}:${two(date.getMinutes())}`;
+  const day = (d: Date) =>
+    `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+  return day(date) === day(now) ? time : `${day(date)} ${time}`;
+};
