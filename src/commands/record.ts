@@ -76,12 +76,38 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
   }
 }, Effect.scoped);
 
+// A Step mark's label, as the Caller gave it to `mark`: the helper keeps it
+// in `caption-<step>.txt` in the Recording folder, with no newline.
+export const readStepLabel = Effect.fn("record.readStepLabel")(function* (
+  id: string,
+  dir: string,
+  step: number,
+) {
+  const caption = yield* runHelper(
+    id,
+    RECORD_HELPER,
+    ["fetch", `${dir}/caption-${step}.txt`],
+    {
+      outcome: "no Proof video was made",
+      limit: { _tag: "Download", name: "Step label" },
+    },
+  );
+  if (caption.code !== 0) {
+    return yield* new ProviderError({
+      provider: caption.provider,
+      reason: `Recording helper failed: ${caption.stderr}`,
+    });
+  }
+  return caption.stdout.toString("utf8");
+});
+
 export const stopRecording = Effect.fn("record.stopRecording")(
   function* (options: {
     readonly id: string;
     readonly out?: string | undefined;
     readonly discard?: boolean | undefined;
     readonly maxSize?: number | undefined;
+    readonly json?: boolean | undefined;
   }) {
     if (options.out === undefined && options.discard !== true) {
       return yield* new StopFlagsError({ both: false });
@@ -140,6 +166,11 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       yield* output.err(
         `proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv\n`,
       );
+      if (options.json === true) {
+        yield* output.out(
+          `${JSON.stringify({ discarded: true, raw: `${info.dir}/raw.mkv` })}\n`,
+        );
+      }
       return;
     }
     if (out === undefined) {
@@ -292,7 +323,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     if (video.code !== 0) {
       return yield* helperFailed(video);
     }
-    const lines = [out];
+    const screenshots: { step: number; label?: string; path: string }[] = [];
     for (let k = 1; k <= info.steps; k++) {
       const path = `${base}-${k}.png`;
       const shot = yield* fetchHelper(
@@ -305,9 +336,23 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
       }
-      lines.push(path);
+      // Only the JSON names the labels, so the plain path reads none.
+      screenshots.push(
+        options.json === true
+          ? {
+              step: k,
+              label: yield* readStepLabel(options.id, info.dir, k),
+              path,
+            }
+          : { step: k, path },
+      );
     }
     const output = yield* CliOutput;
+    if (options.json === true) {
+      yield* output.out(`${JSON.stringify({ video: out, screenshots })}\n`);
+      return;
+    }
+    const lines = [out, ...screenshots.map((shot) => shot.path)];
     yield* output.out(`${lines.join("\n")}\n`);
   },
   Effect.scoped,

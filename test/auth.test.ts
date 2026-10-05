@@ -859,6 +859,148 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("auth status keeps the lines it printed when a later Provider cannot be reached", async () => {
+    // Given: a Namespace env token, and Namespace cannot be reached
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home, PROOFBOX_NAMESPACE_TOKEN: TOKEN },
+    });
+    // Then
+    expect(result.stdout).toBe("docker  no login needed\n");
+    expect(result.stderr).toBe(
+      "Could not reach Namespace. Check your network and try again.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
+  it("auth status --json with no logins lists each Provider as not-needed or none", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      '[{"provider":"docker","login":"not-needed"},{"provider":"namespace","login":"none"},{"provider":"fake","login":"none"}]\n',
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status --json shows the saved login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const set = { HOME: home };
+    const unset = ["PROOFBOX_FAKE_TOKEN"];
+    await runCli(env, ["auth", "login", "fake", "--token"], {
+      input: "t0k\n",
+      set,
+      unset,
+    });
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set,
+      unset,
+    });
+    // Then
+    expect(result.stdout).toBe(
+      '[{"provider":"docker","login":"not-needed"},{"provider":"namespace","login":"none"},{"provider":"fake","login":"ok","from":"saved","account":"ada","expires":"2999-01-01T00:00:00Z"}]\n',
+    );
+  });
+
+  it("auth status --json shows the env token login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: { HOME: home, PROOFBOX_FAKE_TOKEN: "t0k" },
+    });
+    // Then
+    expect(result.stdout).toBe(
+      '[{"provider":"docker","login":"not-needed"},{"provider":"namespace","login":"none"},{"provider":"fake","login":"ok","from":"env","account":"ada","expires":"2999-01-01T00:00:00Z","env":"PROOFBOX_FAKE_TOKEN"}]\n',
+    );
+  });
+
+  it("auth status --json says when the env token is rejected", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: { HOME: home, PROOFBOX_FAKE_TOKEN: "nope" },
+    });
+    // Then
+    expect(result.stdout).toBe(
+      '[{"provider":"docker","login":"not-needed"},{"provider":"namespace","login":"none"},{"provider":"fake","login":"rejected","from":"env","env":"PROOFBOX_FAKE_TOKEN"}]\n',
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("auth status --json shows an expired saved login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"fake":{"way":"token","token":"t0k","account":"ada","expiresAt":"2000-01-01T00:00:00.000Z"}}',
+    );
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect(result.stdout).toBe(
+      '[{"provider":"docker","login":"not-needed"},{"provider":"namespace","login":"none"},{"provider":"fake","login":"expired","from":"saved","expires":"2000-01-01T00:00:00Z"}]\n',
+    );
+  });
+
+  it("auth status --json shows an opaque saved Namespace token by its end", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome(
+      '{"namespace":{"way":"token","token":"nsrt_opaque0000a1b2","region":"us"}}',
+    );
+    const ns = await fakeNamespace(() => {
+      throw new Error("no calls wanted");
+    });
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.stdout).toContain(
+      '{"provider":"namespace","login":"ok","from":"saved","region":"us","tokenEnd":"a1b2"}',
+    );
+  });
+
+  it("auth status --json shows the Namespace env login with its region", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    // When
+    const result = await runCli(env, ["auth", "status", "--json"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+        PROOFBOX_NAMESPACE_REGION: "eu",
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+      },
+    });
+    // Then
+    expect(result.stdout).toContain(
+      '{"provider":"namespace","login":"ok","from":"env","account":"tnt_test","region":"eu","expires":"3000-01-01T00:00:00Z","env":"PROOFBOX_NAMESPACE_TOKEN"}',
+    );
+  });
+
   it("auth logout deletes the Sandboxes this machine started", async () => {
     // Given
     const { env, home, set, unset, ids } = await fakeLoginWith(2);

@@ -227,10 +227,13 @@ const screenshot = Command.make(
   ({ id, out }) => takeScreenshot(id, out),
 );
 
-const list = Command.make(
-  "list",
-  { json: Options.boolean("json") },
-  ({ json }) => listSandboxes({ json }),
+// One `--json` for every command whose stdout has more than one field.
+const json = Options.boolean("json").pipe(
+  Options.withDescription("print JSON for scripts"),
+);
+
+const list = Command.make("list", { json }, ({ json }) =>
+  listSandboxes({ json }),
 );
 
 const del = Command.make(
@@ -266,8 +269,9 @@ const recordStop = Command.make(
     out: Options.text("out").pipe(Options.optional),
     discard: Options.boolean("discard"),
     maxSize: Options.text("max-size").pipe(Options.optional),
+    json,
   },
-  ({ id, out, discard, maxSize }) =>
+  ({ id, out, discard, maxSize, json }) =>
     Effect.gen(function* () {
       const limit = yield* maxSize.pipe(
         Option.map((value) => parseMaxSize(value)),
@@ -278,6 +282,7 @@ const recordStop = Command.make(
         out: Option.getOrUndefined(out),
         discard,
         maxSize: limit,
+        json,
       });
     }),
 );
@@ -296,7 +301,9 @@ const authLogin = Command.make(
   ({ provider, token, region }) => loginToProvider({ provider, token, region }),
 );
 
-const authStatus = Command.make("status", {}, () => showAuthStatus);
+const authStatus = Command.make("status", { json }, ({ json }) =>
+  showAuthStatus({ json }),
+);
 
 const authLogout = Command.make(
   "logout",
@@ -343,8 +350,9 @@ const live = Command.make(
     id: Args.text({ name: "id" }).pipe(
       Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
+    json,
   },
-  ({ id }) => openLive(id),
+  ({ id, json }) => openLive(id, { json }),
 );
 
 const command = Command.make("proofbox").pipe(
