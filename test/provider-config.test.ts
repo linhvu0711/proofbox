@@ -18,6 +18,22 @@ const makeHome = (config?: string): string => {
 describe("Provider config", () => {
   afterEach(cleanupEnvs);
 
+  it("a config file with an unknown Provider name prints Unknown Provider", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome('{"linux": "dockr"}');
+    // When
+    const result = await runCli(env, ["create", "--os", "linux"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_ROOT"],
+    });
+    // Then
+    expect(result.stderr).toBe(
+      'Unknown Provider "dockr": use one of: docker, namespace\n',
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("create with no --provider uses the config file's Provider for the OS", async () => {
     // Given
     const env = makeEnv();

@@ -1,26 +1,30 @@
 #!/usr/bin/env -S node --
-import { ValidationError } from "@effect/cli";
+import { CliConfig, ValidationError } from "@effect/cli";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Console, Effect, Exit, Layer } from "effect";
-import { cli, commandWords } from "./cli.ts";
+import { commandWords, makeCli } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
+import { Providers } from "./provider.ts";
 import { ProvidersLive } from "./provider-registry.ts";
 import { Style } from "./style.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
-const dispatch = (argv: ReadonlyArray<string>) => {
+const dispatch = Effect.fn("main.dispatch")(function* (
+  argv: ReadonlyArray<string>,
+) {
   if (argv[2] === "exec") {
     const separator = argv.indexOf("--", 3);
     if (separator > 3 && separator < argv.length - 1) {
-      return execInSandbox(argv[3] as string, argv.slice(separator + 1));
+      return yield* execInSandbox(argv[3] as string, argv.slice(separator + 1));
     }
   }
-  return cli(argv);
-};
+  const providers = yield* Providers;
+  return yield* makeCli([...providers.keys()])(argv);
+});
 
 const providersLive = ProvidersLive.pipe(Layer.provide(NodeContext.layer));
 
@@ -28,7 +32,8 @@ const program = Effect.gen(function* () {
   const output = yield* CliOutput;
   const style = yield* Style;
   const defaultConsole = yield* Console.consoleWith(Effect.succeed);
-  const command = commandWords(process.argv.slice(2));
+  const providers = yield* Providers;
+  const command = commandWords(process.argv.slice(2), [...providers.keys()]);
   const words = command === "" ? "" : `${command} `;
   const parserConsole = {
     ...defaultConsole,
@@ -59,6 +64,7 @@ const program = Effect.gen(function* () {
   Effect.provide(
     Layer.mergeAll(
       NodeContext.layer,
+      CliConfig.layer({ showBuiltIns: false }),
       CliOutput.Default,
       Style.Default.pipe(Layer.provide(CliOutput.Default)),
       providersLive,

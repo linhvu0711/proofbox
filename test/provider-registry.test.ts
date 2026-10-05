@@ -82,19 +82,20 @@ describe("Provider registry", () => {
     expect(listed.stdout).toContain(created.stdout.trim());
   });
 
-  it("without PROOFBOX_FAKE_ROOT the Unknown Provider list names docker and namespace", async () => {
+  it("without PROOFBOX_FAKE_ROOT a bad --provider names docker and namespace", async () => {
     // Given
     const env = makeEnv();
     // When
     const result = await runCli(
       env,
-      ["create", "--os", "linux", "--provider", "nope"],
+      ["create", "--os", "linux", "--provider", "dockr"],
       { unset: ["PROOFBOX_FAKE_ROOT"] },
     );
     // Then
     expect(result.stderr).toBe(
-      'Unknown Provider "nope": use one of: docker, namespace\n',
+      "Expected one of the following cases: docker, namespace\n\n",
     );
+    expect(result.stdout).toBe("");
     expect(result.exitCode).toBe(125);
   });
 

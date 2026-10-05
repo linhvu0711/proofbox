@@ -94,6 +94,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - A command that runs out of memory exits `122`, with a message that names the Sandbox size and the next size up.
   At the largest size, the message says that it is the largest. With no size limit, it says the host has no free memory left.
 - An error message says what went wrong and what to do next, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
+- Every command, argument, and option has a description in `src/cli.ts`: a short phrase in lower case, Glossary terms with a capital letter, and for a value the format, the default (or `required`), and an example, as on `--idle`. `test/help-text.test.ts` fails on one with none.
 
 ## Formatting
 

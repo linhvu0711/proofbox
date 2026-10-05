@@ -308,7 +308,7 @@ describe("auth", () => {
     });
     // Then
     expect(result.stderr).toBe(
-      'No provider named "foo". Providers: docker, namespace.\n',
+      "Expected one of the following cases: docker, namespace\n\n",
     );
     expect(result.exitCode).toBe(125);
   });
@@ -531,25 +531,20 @@ describe("auth", () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
-    const ns = await fakeNamespace(() => ({ json: {} }));
     // When
     const result = await runCli(
       env,
       ["auth", "login", "namespace", "--token", "--region", "mars"],
       {
         input: `${TOKEN}\n`,
-        set: {
-          HOME: home,
-          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
-        },
+        set: { HOME: home },
       },
     );
     // Then
     expect(result.stderr).toBe(
-      'Unknown region "mars" for namespace: use one of: us, eu\n',
+      "Expected one of the following cases: us, eu\n\n",
     );
     expect(result.exitCode).toBe(125);
-    expect(ns.calls).toEqual([]);
   });
 
   it("auth login fake --region eu says fake has no regions", async () => {

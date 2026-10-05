@@ -1,8 +1,27 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { commandWords } from "../src/cli.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 
 describe("CLI", () => {
   afterEach(cleanupEnvs);
+
+  it("command lookup uses the registered command tree and nested groups", () => {
+    const providers = ["docker", "namespace", "fake"];
+    for (const [args, expected] of [
+      [[], ""],
+      [["nosuch"], ""],
+      [["exec", "fake:1"], "exec"],
+      [["auth", "login", "fake"], "auth login"],
+      [["auth", "status"], "auth status"],
+      [["auth", "logout"], "auth logout"],
+      [["auth", "token"], "auth token"],
+      [["record", "start"], "record start"],
+      [["record", "stop"], "record stop"],
+      [["record", "nosuch"], "record"],
+    ] as const) {
+      expect(commandWords(args, providers)).toBe(expected);
+    }
+  });
 
   it("with FORCE_COLOR=1 a missing argument prints ✘ and the help to read", async () => {
     const env = makeEnv();
