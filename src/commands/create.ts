@@ -22,7 +22,7 @@ import { formatClock } from "../format-time.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
-import { lacksFeature, type Os, Providers } from "../provider.ts";
+import { lacksFeature, liveViewOn, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
@@ -218,7 +218,9 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     const deadline = yield* pushedDeadline(info);
     const now = new Date(yield* Clock.currentTimeMillis);
     yield* progress.hint(`run a command: proofbox exec ${id} -- <command>`);
-    yield* progress.hint(`watch the screen: proofbox live ${id}`);
+    if (liveViewOn(provider, options.os) !== undefined) {
+      yield* progress.hint(`watch the screen: proofbox live ${id}`);
+    }
     yield* progress.hint(`delete it: proofbox delete ${id}`);
     yield* progress.hint(
       `ends at ${formatClock(deadline, now)} if idle, at ${formatClock(info.maxLifeAt, now)} at the latest`,

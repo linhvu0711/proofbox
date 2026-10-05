@@ -2,7 +2,7 @@ import { Duration, Effect, Schedule } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { deadlinePush } from "../deadline.ts";
 import { Progress } from "../progress.ts";
-import { lacksFeature, Providers } from "../provider.ts";
+import { lacksFeature, liveViewOn, Providers } from "../provider.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
 
 export const openLive = Effect.fn("live.openLive")(function* (
@@ -12,12 +12,9 @@ export const openLive = Effect.fn("live.openLive")(function* (
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const provider = id.provider;
-  const liveView = provider.liveView;
   const info = yield* provider.get(id);
-  if (
-    !provider.offers[info.os]?.features.has("live-view") ||
-    liveView === undefined
-  ) {
+  const liveView = liveViewOn(provider, info.os);
+  if (liveView === undefined) {
     return yield* lacksFeature(
       provider,
       info.os,

@@ -308,7 +308,7 @@ describe("Progress", () => {
         .replace(/\d+(m \d+)?s(?=\u001b\[0m\n)/g, "<t>")
         .replace(/(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}/g, "<time>"),
     ).toBe(
-      `\u001b[32m✔\u001b[0m creating fake Sandbox  \u001b[2m<t>\u001b[0m\n\u001b[32m✔\u001b[0m starting Keeper  \u001b[2m<t>\u001b[0m\n${dim(`run a command: proofbox exec ${id} -- <command>`)}${dim(`watch the screen: proofbox live ${id}`)}${dim(`delete it: proofbox delete ${id}`)}${dim("ends at <time> if idle, at <time> at the latest")}`,
+      `\u001b[32m✔\u001b[0m creating fake Sandbox  \u001b[2m<t>\u001b[0m\n\u001b[32m✔\u001b[0m starting Keeper  \u001b[2m<t>\u001b[0m\n${dim(`run a command: proofbox exec ${id} -- <command>`)}${dim(`delete it: proofbox delete ${id}`)}${dim("ends at <time> if idle, at <time> at the latest")}`,
     );
     expect(result.exitCode).toBe(0);
   });
@@ -386,7 +386,7 @@ describe("Progress", () => {
         .replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")
         .replace(/(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}/g, "<time>"),
     ).toBe(
-      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  watch the screen: proofbox live ${id}\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
+      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
     );
     expect(result.stderr).not.toContain("\u001b");
   });

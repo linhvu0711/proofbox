@@ -410,6 +410,12 @@ export class Providers extends Context.Tag("proofbox/Providers")<
   ReadonlyMap<string, ProviderEntry>
 >() {}
 
+// The Provider's Live view on this OS, when it offers one there.
+export const liveViewOn = (provider: Provider, os: Os) =>
+  provider.offers[os]?.features.has("live-view") === true
+    ? provider.liveView
+    : undefined;
+
 // The OS is named only for a Provider with more than one OS, where the
 // feature may be there on the other one.
 export const lacksFeature = (

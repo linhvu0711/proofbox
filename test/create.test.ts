@@ -48,7 +48,7 @@ const envFile = (content: string, mode = 0o600) => {
 // The dim lines a create ends with, as the look prints them with NO_COLOR=1,
 // each time already replaced by <time>.
 const hintLines = (id: string) =>
-  `  run a command: proofbox exec ${id} -- <command>\n  watch the screen: proofbox live ${id}\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`;
+  `  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`;
 
 // Elapsed times and clock times change from run to run.
 const steady = (stderr: string) =>
@@ -231,7 +231,7 @@ describe("create", () => {
   });
 
   it("with FORCE_COLOR=1 create ends with how to use the Sandbox and when it ends", async () => {
-    // Given
+    // Given: the fake Provider, which has no Live view, so no live hint
     const env = makeEnv();
     // When
     const result = await runCli(
@@ -242,7 +242,7 @@ describe("create", () => {
     // Then
     const id = result.stdout.trim();
     expect(steady(result.stderr)).toBe(
-      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  watch the screen: proofbox live ${id}\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
+      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
     );
   });
 
