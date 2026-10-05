@@ -39,6 +39,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
 import { nodeFs } from "./support/node-fs.ts";
@@ -103,6 +104,7 @@ const layers = (mac: Provider) => {
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+    Style.Default.pipe(Layer.provide(CliOutput.Test)),
   );
 };
 
@@ -134,6 +136,7 @@ const macSandbox = (answer: Answer) =>
           | Providers
           | KeeperClient
           | Progress
+          | Style
           | NodeContext.NodeContext
         >,
       ) =>
@@ -292,6 +295,7 @@ describe("Helper call time limits", () => {
     | Providers
     | KeeperClient
     | Progress
+    | Style
     | NodeContext.NodeContext;
   interface Action {
     readonly name: string;

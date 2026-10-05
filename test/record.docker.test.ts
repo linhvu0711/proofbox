@@ -940,6 +940,43 @@ describe("Recording and the Proof video", () => {
     expect(result.stdout).toBe(`${join(dir, "proof.mp4")}\n`);
   });
 
+  it("with FORCE_COLOR=1 record stop names the Proof video size and each Proof screenshot", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "login done"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(3000);
+    // When
+    const result = await runCli(
+      env,
+      ["record", "stop", id, "--out", join(dir, "proof.mp4")],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    // Then
+    expect(
+      result.stderr
+        .split("\n")
+        .filter((line) => line.startsWith("  Proof"))
+        .map((line) => line.replace(/\d+\.\d MB of/, "<n> MB of")),
+    ).toEqual([
+      `  Proof video ${dir}/proof.mp4, <n> MB of the 10.0 MB Size limit`,
+      `  Proof screenshot ${dir}/proof-1.png, Step 1 "login done"`,
+    ]);
+  });
+
   it("record stop --out into a missing folder says it could not write the file", async () => {
     // Given
     const env = makeEnv({ docker: true });

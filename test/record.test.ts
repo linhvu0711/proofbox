@@ -26,6 +26,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
@@ -143,6 +144,7 @@ const layers = (mac: Provider) => {
         hint: () => Effect.void,
       }),
     ),
+    Style.Default.pipe(Layer.provide(CliOutput.Test)),
   );
 };
 

@@ -20,6 +20,8 @@ import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
+import { Style } from "../style.ts";
+import { formatMb } from "../upload/max-size.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",
@@ -312,13 +314,15 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         }
         return Number(built.stdout.toString("utf8").trim());
       });
-      yield* encodeUnderLimit(encode, {
-        limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
+      return yield* encodeUnderLimit(encode, {
+        limit,
         raw: `${info.dir}/raw.mkv`,
       });
     });
+    const limit = options.maxSize ?? PROOF_SIZE_DEFAULT;
     const progress = yield* Progress;
-    yield* progress.step("building the Proof video", buildProof);
+    const style = yield* Style;
+    const bytes = yield* progress.step("building the Proof video", buildProof);
     const video = yield* fetchHelper(
       options.id,
       RECORD_HELPER,
@@ -342,9 +346,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
       }
-      // Only the JSON names the labels, so the plain path reads none.
+      // Only the JSON and a person at a terminal see the labels, so a
+      // plain path for a program reads none.
       screenshots.push(
-        options.json === true
+        options.json === true || style.look
           ? {
               step: k,
               label: yield* readStepLabel(options.id, info.dir, k),
@@ -360,6 +365,14 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     }
     const lines = [out, ...screenshots.map((shot) => shot.path)];
     yield* output.out(`${lines.join("\n")}\n`);
+    yield* progress.hint(
+      `Proof video ${out}, ${formatMb(bytes)} MB of the ${formatMb(limit)} MB Size limit`,
+    );
+    for (const shot of screenshots) {
+      yield* progress.hint(
+        `Proof screenshot ${shot.path}, Step ${shot.step} "${shot.label}"`,
+      );
+    }
   },
   Effect.scoped,
 );
