@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema, Stream } from "effect";
+import { Duration, Effect, Option, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   CaptureBlockedError,
@@ -346,10 +346,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
       }
-      // Only the JSON and a person at a terminal see the labels, so a
-      // plain path for a program reads none.
+      // Only the JSON holds the labels, so a plain path for a program reads
+      // none.
       screenshots.push(
-        options.json === true || style.look
+        options.json === true
           ? {
               step: k,
               label: yield* readStepLabel(options.id, info.dir, k),
@@ -365,12 +365,26 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     }
     const lines = [out, ...screenshots.map((shot) => shot.path)];
     yield* output.out(`${lines.join("\n")}\n`);
+    // The hints are for a person only, and each label costs a fetch, so a
+    // program pays for none of it.
+    if (!style.look) {
+      return;
+    }
     yield* progress.hint(
       `Proof video ${out}, ${formatMb(bytes)} MB of the ${formatMb(limit)} MB Size limit`,
     );
+    // The files are saved by now; a label that cannot be read only leaves
+    // its line without one.
     for (const shot of screenshots) {
+      const label = yield* readStepLabel(options.id, info.dir, shot.step).pipe(
+        Effect.option,
+      );
       yield* progress.hint(
-        `Proof screenshot ${shot.path}, Step ${shot.step} "${shot.label}"`,
+        Option.match(label, {
+          onNone: () => `Proof screenshot ${shot.path}, Step ${shot.step}`,
+          onSome: (text) =>
+            `Proof screenshot ${shot.path}, Step ${shot.step} "${text}"`,
+        }),
       );
     }
   },
