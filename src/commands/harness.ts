@@ -191,6 +191,14 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       return;
     }
     if (turn.state._tag === "Saved") {
+      const entry = yield* harnessEntryFor(turn.harness.value);
+      yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+        Effect.catchAll((error) =>
+          output.err(
+            `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+          ),
+        ),
+      );
       yield* output.out(turn.state.text);
       yield* output.setExitCode(turn.state.code);
       return;

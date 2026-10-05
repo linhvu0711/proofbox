@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -83,6 +84,31 @@ it("harness wait keeps the saved login when the Sandbox one is for another accou
       saved: text,
     },
   );
+});
+
+it("a later harness wait saves back a login an earlier wait could not", async () => {
+  const env = makeEnv();
+  const { id, saved } = await fileSandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":5}';
+  await setSandboxLogin(env, id, text);
+  const lock = join(env.env.HOME ?? "", ".config", "proofbox", "logins.lock");
+  mkdirSync(lock);
+  const first = await runCli(env, ["harness", "wait", id]);
+  expect(first.stderr).toContain(
+    "proofbox: could not save the renewed Harness login back (",
+  );
+  rmSync(lock, { recursive: true });
+  const second = await runCli(env, ["harness", "wait", id]);
+  expect({
+    firstCode: first.exitCode,
+    secondCode: second.exitCode,
+    saved: readFileSync(saved, "utf8"),
+  }).toEqual({
+    firstCode: 0,
+    secondCode: 0,
+    saved: text,
+  });
 });
 
 it("harness wait saves back a newer Sandbox login file", async () => {
