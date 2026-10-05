@@ -1,5 +1,5 @@
 #!/usr/bin/env -S node --
-import { ValidationError } from "@effect/cli";
+import { CliConfig, ValidationError } from "@effect/cli";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Effect, Exit, Layer } from "effect";
 import { cli } from "./cli.ts";
@@ -38,6 +38,7 @@ const program = Effect.gen(function* () {
   Effect.provide(
     Layer.mergeAll(
       NodeContext.layer,
+      CliConfig.layer({ showBuiltIns: false }),
       CliOutput.Default,
       providersLive,
       KeeperClient.Default.pipe(
