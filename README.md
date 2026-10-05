@@ -101,10 +101,11 @@ proofbox harness prompt "$id" "Add a CSV export and commit it"
 proofbox harness wait "$id"           # blocks until the Turn ends, then prints its end state
 # check the result with exec, screenshot, and record, as in Example
 proofbox harness prompt "$id" "The export drops the header row. Fix it and commit."
-proofbox harness wait "$id" --timeout 10m || code=$?
-if [ "${code:-0}" -eq 124 ]; then proofbox harness stop "$id"; fi   # still running after 10 minutes: end it early
+proofbox harness wait "$id"
 proofbox delete "$id"
 ```
+
+To end a Turn early, wait with a limit: `proofbox harness wait "$id" --timeout 10m` exits 124 with `still running` when the Turn is not done by then. Then run `proofbox harness stop "$id"`.
 
 A Turn ends in one of these states. `harness wait` prints it on stdout and exits with its code:
 
