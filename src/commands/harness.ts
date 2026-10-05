@@ -186,20 +186,32 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
   }
 }, Effect.scoped);
 
-export const logTurn = Effect.fn("harness.logTurn")(function* (rawId: string) {
-  const steps = yield* readTurnSteps(rawId, 0, 0);
+export const logTurn = Effect.fn("harness.logTurn")(function* (
+  rawId: string,
+  options: { readonly follow: boolean },
+) {
+  let from = 0;
+  let steps = yield* readTurnSteps(rawId, from, 0);
   if (steps._tag === "NoHarness")
     return yield* new NotHarnessSandboxError({ id: rawId });
   if (steps._tag === "None") return yield* new NoTurnYetError({ id: rawId });
   const entry = yield* harnessEntryFor(steps.harness);
   const harness = yield* entry.load;
   const output = yield* CliOutput;
-  for (const { at, event } of steps.events) {
-    const step = harness.readStep(event);
-    if (Option.isSome(step))
-      yield* output.out(`${formatTime(at)} ${stepLine(step.value.text)}\n`);
+  while (steps._tag === "Read") {
+    for (const { at, event } of steps.events) {
+      const step = harness.readStep(event);
+      if (Option.isSome(step))
+        yield* output.out(`${formatTime(at)} ${stepLine(step.value.text)}\n`);
+    }
+    from += steps.events.length;
+    if (!steps.running) break;
+    if (!options.follow) return yield* output.out("still running\n");
+    steps = yield* readTurnSteps(rawId, from, 5);
   }
-  if (steps.running) return yield* output.out("still running\n");
+  if (steps._tag === "NoHarness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (steps._tag === "None") return yield* new NoTurnYetError({ id: rawId });
   const turn = yield* readTurn(rawId, 0);
   switch (turn.state._tag) {
     case "Saved":

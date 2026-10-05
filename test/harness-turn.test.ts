@@ -164,6 +164,92 @@ it("harness log on an ended Turn that no wait has read prints done and saves not
   });
 });
 
+it("harness log --follow prints new steps and returns 0 when the Turn ends", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 2"]);
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 2s$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
+it("harness log --follow prints a step while the Turn still runs", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  let text = "";
+  let stopping: Promise<unknown> | undefined;
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"], {
+    onStdout: (chunk) => {
+      text += chunk;
+      if (text.includes("sleeping 30s") && stopping === undefined)
+        stopping = runCli(env, ["harness", "stop", id]);
+    },
+  });
+  await stopping;
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 30s$/,
+      ),
+      "stopped",
+      "",
+    ],
+  });
+});
+
+it("harness log --follow moves the Deadline while it runs and not after it is killed", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env, ["--idle", "1m"]);
+  await runCli(env, ["harness", "prompt", id, "sleep 40"]);
+  const deadline = () =>
+    Number(readFileSync(join(env.root, id.slice(5), "deadline"), "utf8"));
+  let stopLog = () => {};
+  const logging = runCli(env, ["harness", "log", id, "--follow"], {
+    onSpawn: (interrupt) => {
+      stopLog = interrupt;
+    },
+  });
+  // When
+  await sleep(2000);
+  const d0 = deadline();
+  await sleep(8000);
+  const d1 = deadline();
+  stopLog();
+  await logging;
+  await sleep(1000);
+  const d2 = deadline();
+  await sleep(8000);
+  const d3 = deadline();
+  // Then
+  expect({ moved: d1 > d0, still: d3 === d2 }).toEqual({
+    moved: true,
+    still: true,
+  });
+});
+
 it("harness wait prints done and the last message", async () => {
   // Given
   const env = makeEnv();
