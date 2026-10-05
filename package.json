@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:docker": "vitest run --config vitest.docker.config.ts",
     "test:namespace": "vitest run --config vitest.namespace.config.ts",
+    "test:harness": "vitest run --config vitest.harness.config.ts",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

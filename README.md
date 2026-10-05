@@ -2,14 +2,14 @@
 
 proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots.
 
-It only checks work. Writing code stays wherever the agent already works (ADR 0001). The Caller drives the Sandbox from outside, so no agent and no model key ever runs inside it (ADR 0002). Any harness, script, or person can use it.
+It only checks work. Writing code stays wherever the agent already works (ADR 0001). The Caller drives the Sandbox from outside, so no agent and no model key ever runs inside it (ADR 0002). Any harness, script, or person can use it. A Sandbox made with `--harness` is the one exception: a Harness writes code inside it (ADR 0023). See Harness.
 
 Words are in `CONTEXT.md`. Decisions are in `docs/adr/`.
 
 ## What it does
 
 - Creates a Linux or macOS Sandbox, and the Provider deletes it at its Deadline, even when the Caller crashes (ADR 0003).
-- Uploads your Work folder (tracked and new files, minus git-ignored ones). The Sandbox never clones your repo and never gets a GitHub token (ADR 0005).
+- Without `--harness`, uploads your Work folder (tracked and new files, minus git-ignored ones). The Sandbox never clones your repo and never gets a GitHub token (ADR 0005).
 - Runs a Setup script, then sends Secrets from your env file after setup, so setup and Snapshots never hold them.
 - Drives the screen at human pace: screenshot, click, type, key, scroll, drag.
 - Records the desktop and builds a Proof video in the Sandbox: Still parts cut, click rings, step captions, under the Size limit (10 MB by default). It also saves a Proof screenshot at each Step mark (ADR 0006).
@@ -75,6 +75,57 @@ proofbox delete "$id"
 
 A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr.
 
+## Harness
+
+This section is `feat/harness` work: it is not in `main` yet. A Sandbox made without `--harness` stays verify-only, as above.
+
+With `--harness`, proofbox installs a Harness in the Sandbox: Claude Code now, Codex later (#194). The Harness runs there with all permissions, writes code, commits, and pushes. The Caller still drives it from outside (ADR 0023, ADR 0024).
+
+Save the logins once per laptop:
+
+```sh
+claude setup-token                                  # prints a Claude token
+echo <token> | proofbox harness login claude
+echo <token> | proofbox github login <owner>        # a fine-grained token for the repos the Harness may push to
+```
+
+A token that can push can usually merge too. Protect `main`, or your default branch, with a ruleset that needs a review.
+
+Make the Harness profile once: `proofbox harness profile init claude` copies `CLAUDE.md`, `skills/`, and `agents/` into `~/.config/proofbox/harness/claude/`. Edit it for Sandboxes only.
+
+The loop. Run it from your app's folder, on a branch that is on GitHub:
+
+```sh
+id=$(proofbox create --os linux --harness claude --work .)
+proofbox harness prompt "$id" "Add a CSV export and commit it"
+proofbox harness wait "$id"           # blocks until the Turn ends, then prints its end state
+# check the result with exec, screenshot, and record, as in Example
+proofbox harness prompt "$id" "The export drops the header row. Fix it and commit."
+proofbox harness wait "$id"
+proofbox delete "$id"
+```
+
+To end a Turn early, wait with a limit: `proofbox harness wait "$id" --timeout 10m` exits 124 with `still running` when the Turn is not done by then. Then run `proofbox harness stop "$id"`.
+
+A Turn ends in one of these states. `harness wait` prints it on stdout and exits with its code:
+
+| State | Exit | What to do |
+| --- | --- | --- |
+| `done`, then the Harness's last message | 0 | Check the work. |
+| `failed: Harness login refused` | 21 | Run `harness login`, then make a new Sandbox. |
+| `failed: usage limit`, with `resets:` when known | 22 | Wait for the reset, then send the next prompt. |
+| `failed: Harness crashed` | 23 | Read the lines above, then send the next prompt. |
+| `stopped` | 20 | `harness stop` ended the Turn. |
+| `still running`, with the last activity | 124 | Only with `--timeout`. Wait again, or `harness stop`. |
+
+What costs money while a Turn runs:
+
+- The Sandbox bills its Provider for every minute it lives, also while the model thinks: about $1.20 to $1.80 for a 20-minute Turn on a Namespace Mac (ADR 0023). Docker costs nothing.
+- The Harness login pays for the model. Claude usage counts against the account behind `claude setup-token`. A Codex API key bills OpenAI.
+- `harness wait` keeps the Sandbox alive. When you are done, `harness stop` and `delete`.
+
+To check that a new Harness version still works, run `pnpm test:harness` (see Develop).
+
 ## Commands
 
 | Command | What it does |
@@ -87,6 +138,9 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `harness login claude\|codex` | Saves a Harness login, readable only by you, under `~/.config/proofbox/`. `claude` reads a token from `claude setup-token` on stdin into `harness-logins.json`. `codex` runs Codex's own device-code login (`codex login --device-auth`; `codex` must be installed) with your ChatGPT plan and keeps its `auth.json` in `harness-logins/codex/`, apart from your own `~/.codex/`, so a renewal on one side never breaks the other. |
 | `harness profile init claude\|codex` | Makes the Harness profile `~/.config/proofbox/harness/<name>/` and copies in what works anywhere: `CLAUDE.md`, `skills/`, and `agents/` from `~/.claude/`, or `AGENTS.md` and `skills/` from `~/.codex/`. A link is copied as the files it points to. A link that leads nowhere or loops is skipped and named. Settings, hooks, plugins, and MCP config stay out. Prints the folder. The profile is readable only by you. Names any part the laptop lacks. Refuses a profile that already exists. Edit the profile for Sandboxes only. |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send), `--harness claude` (the Work folder becomes this branch fetched from GitHub with your unpushed commits and uncommitted files on top; installs Claude Code, `git`, and `gh`; sends the Harness login, the GitHub login, and the Harness profile; needs `harness login claude` and `github login <owner>` first), `--harness-version <v>` (an older Claude Code). |
+| `harness prompt <id> <prompt>` | Starts a Turn in a Sandbox made with `--harness` and returns at once. `--model <name>` picks the model. Refuses a prompt while a Turn runs. The next prompt goes on in the same Harness session. |
+| `harness wait <id>` | Waits for the Turn to end and prints its end state on stdout. Safe to run again. Pushes the Deadline while it waits. `--timeout 10m` returns early with `still running` and the last activity. |
+| `harness stop <id>` | Stops the running Turn. Then `harness wait` prints `stopped`. |
 | `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
 | `screenshot <id> --out <file>` | Saves a PNG of the screen at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |
@@ -128,6 +182,7 @@ Windows, mobile, the accessibility tree, and an MCP server.
 pnpm test             # fake Provider, no cloud
 pnpm test:docker      # needs Docker
 pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN (make one with `proofbox auth token namespace --name dev --expires 1d`); uses real Namespace minutes
+pnpm test:harness     # by hand: needs Docker and a Harness login; runs one real Turn per Harness and uses its tokens
 pnpm lint && pnpm typecheck
 ```
 
