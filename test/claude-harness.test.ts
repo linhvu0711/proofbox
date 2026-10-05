@@ -50,29 +50,42 @@ it("a Claude Turn resumes its session with the model it is given", () => {
   ]);
 });
 
-it("Claude's last activity names its last tool and what it ran on", () => {
+it("Claude's step for a tool call names the tool and its whole main input", () => {
   // Given
-  const output = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","name":"Bash","input":{"command":"pnpm test\\necho done"}}]}}\n{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","name":"Bash","input":{"command":"pnpm test\\necho done"}}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readStep(event);
   // Then
-  expect(result).toEqual(Option.some("Bash: pnpm test"));
+  expect(result).toEqual(
+    Option.some({ kind: "tool", text: "Bash: pnpm test\necho done" }),
+  );
 });
 
-it("Claude's activity skips thinking and cuts long first lines", () => {
+it("Claude's step for a message is its text", () => {
   // Given
-  const output = `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "a".repeat(121) + "\nsecond line" }] } })}\n{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}\n{"type":"assist`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readStep(event);
   // Then
-  expect(result).toEqual(Option.some("a".repeat(119) + "…"));
+  expect(result).toEqual(
+    Option.some({ kind: "said", text: "Running the tests." }),
+  );
 });
 
-it("Claude's activity has no entry when only thinking is present", () => {
+it("Claude has no step for thinking", () => {
   // Given
-  const output = `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(Option.none());
+});
+
+it("Claude has no step for a cut event", () => {
+  // Given
+  const event = '{"type":"assist';
+  // When
+  const result = makeClaudeHarness().readStep(event);
   // Then
   expect(result).toEqual(Option.none());
 });

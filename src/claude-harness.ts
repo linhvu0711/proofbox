@@ -31,22 +31,6 @@ const ActivityBlock = Schema.Union(
   }),
 );
 
-const activityText = (block: typeof ActivityBlock.Type): string => {
-  let text: string;
-  if (block.type === "text") text = block.text;
-  else {
-    const detail = ["command", "file_path", "pattern", "url", "description"]
-      .map((key) => block.input[key])
-      .find((value): value is string => typeof value === "string");
-    text =
-      detail === undefined
-        ? block.name
-        : `${block.name}: ${detail.split(/\r?\n/)[0] ?? ""}`;
-  }
-  const line = text.split(/\r?\n/)[0] ?? "";
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
-};
-
 const resetText = (message: string): Option.Option<string> => {
   const epoch = /\|(\d{10})(?!\d)/.exec(message);
   if (epoch !== null)
@@ -102,17 +86,24 @@ export const makeClaudeHarness = (): Harness => ({
     }
     return { _tag: "NoEnd" };
   },
-  readActivity: (output) => {
-    for (const line of output.trimEnd().split("\n").reverse()) {
-      const event = Schema.decodeUnknownEither(Schema.parseJson(Assistant))(
-        line,
-      );
-      if (Either.isLeft(event)) continue;
-      for (const value of [...event.right.message.content].reverse()) {
-        const block = Schema.decodeUnknownEither(ActivityBlock)(value);
-        if (Either.isRight(block))
-          return Option.some(activityText(block.right));
-      }
+  readStep: (event) => {
+    const decoded = Schema.decodeUnknownEither(Schema.parseJson(Assistant))(
+      event,
+    );
+    if (Either.isLeft(decoded)) return Option.none();
+    for (const value of [...decoded.right.message.content].reverse()) {
+      const block = Schema.decodeUnknownEither(ActivityBlock)(value);
+      if (Either.isLeft(block)) continue;
+      if (block.right.type === "text")
+        return Option.some({ kind: "said", text: block.right.text });
+      const tool = block.right;
+      const detail = ["command", "file_path", "pattern", "url", "description"]
+        .map((key) => tool.input[key])
+        .find((value): value is string => typeof value === "string");
+      return Option.some({
+        kind: "tool",
+        text: detail === undefined ? tool.name : `${tool.name}: ${detail}`,
+      });
     }
     return Option.none();
   },

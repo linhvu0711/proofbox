@@ -114,6 +114,10 @@ _Avoid_: thread, chat, session id
 One run of the Harness, from a prompt the Caller sends until the Harness ends it: done, failed, or stopped. A Sandbox runs one Turn at a time, and proofbox refuses a prompt while one runs.
 _Avoid_: run, task, job, step
 
+**Harness step**:
+One thing a Harness did in a Turn: a message, a tool call with its main input, or what a tool gave back. `harness log` prints one line per Harness step.
+_Avoid_: event, activity, Step mark
+
 **Harness profile**:
 A folder per Harness that the Caller owns on their machine, shaped like that Harness's home folder (for Claude Code, `~/.claude/`): global instructions, skills, subagents, and MCP servers meant for a Sandbox. proofbox copies it into a Sandbox after any Snapshot is saved. It is not the Caller's laptop config, which proofbox reads only once, to fill a new profile. It lives in `~/.config/proofbox/harness/<name>/`, and `proofbox harness profile init <name>` makes it.
 _Avoid_: config, dotfiles, settings

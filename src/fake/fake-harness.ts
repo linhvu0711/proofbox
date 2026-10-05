@@ -92,13 +92,12 @@ export const makeFakeHarness = (): Harness => ({
       return { _tag: "NoEnd" };
     }
   },
-  readActivity: (output) => {
-    for (const line of output.trimEnd().split("\n").reverse()) {
-      const activity = Schema.decodeUnknownEither(Schema.parseJson(Activity))(
-        line,
-      );
-      if (Either.isRight(activity)) return Option.some(activity.right.text);
-    }
-    return Option.none();
+  readStep: (event) => {
+    const activity = Schema.decodeUnknownEither(Schema.parseJson(Activity))(
+      event,
+    );
+    return Either.isRight(activity)
+      ? Option.some({ kind: "tool", text: activity.right.text })
+      : Option.none();
   },
 });

@@ -26,6 +26,27 @@ export type TurnEnd =
     }
   | { readonly _tag: "NoEnd" };
 
+// said: a message; tool: a tool call and its main input; result: what a tool
+// gave back; other: anything else worth a line. text is whole; stepLine cuts it.
+export interface HarnessStep {
+  readonly kind: "said" | "tool" | "result" | "other";
+  readonly text: string;
+}
+
+const byteSize = (bytes: number): string =>
+  bytes < 1000
+    ? `${bytes} B`
+    : bytes < 1_000_000
+      ? `${(bytes / 1000).toFixed(1)} KB`
+      : `${(bytes / 1_000_000).toFixed(1)} MB`;
+
+export const stepLine = (text: string): string => {
+  const line = text.split(/\r?\n/)[0] ?? "";
+  return line === text && line.length <= 120
+    ? line
+    : `${line.slice(0, 119)}… (${byteSize(Buffer.byteLength(text, "utf8"))})`;
+};
+
 export interface Harness {
   readonly name: string;
   // One shell command run as the Sandbox user; none installs the newest version.
@@ -43,8 +64,8 @@ export interface Harness {
   }) => ReadonlyArray<string>;
   // Reads the whole JSON output, one event per line.
   readonly readEnd: (output: string) => TurnEnd;
-  // What the Harness did last, from the tail of its JSON output.
-  readonly readActivity: (output: string) => Option.Option<string>;
+  // One line of the Harness's JSON output as one step; none when the line is no step.
+  readonly readStep: (event: string) => Option.Option<HarnessStep>;
 }
 
 // What profile init copies from the Caller's laptop. home is relative to

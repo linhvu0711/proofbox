@@ -15,7 +15,7 @@ import {
   TurnRunningError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { type HarnessEntry, Harnesses } from "../harness.ts";
+import { type HarnessEntry, Harnesses, stepLine } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
@@ -146,9 +146,19 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
         continue;
       const entry = yield* harnessEntryFor(turn.harness.value);
       const harness = yield* entry.load;
-      const activity = harness.readActivity(turn.state.output);
+      let last = "nothing yet";
+      for (const line of turn.state.output.trimEnd().split("\n").reverse()) {
+        const step = harness.readStep(line);
+        if (
+          Option.isSome(step) &&
+          (step.value.kind === "said" || step.value.kind === "tool")
+        ) {
+          last = stepLine(step.value.text);
+          break;
+        }
+      }
       yield* output.out(
-        `still running\nlast activity: ${formatTime(turn.state.activityAt)}\nlast: ${Option.getOrElse(activity, () => "nothing yet")}\n`,
+        `still running\nlast activity: ${formatTime(turn.state.activityAt)}\nlast: ${last}\n`,
       );
       yield* output.setExitCode(TURN_EXIT.stillRunning);
       return;
