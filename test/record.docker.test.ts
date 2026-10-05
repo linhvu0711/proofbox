@@ -6,7 +6,7 @@ import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { startNoise } from "./support/noise.ts";
+import { startFlicker, startNoise } from "./support/noise.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -585,6 +585,8 @@ describe("Recording and the Proof video", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    const flicker = await startFlicker(env, id);
+    expect(flicker.exitCode).toBe(0);
     await runCli(env, ["record", "start", id]);
     await runCli(env, ["mark", id, "step 1: open the menu"]);
     await runCli(env, [
