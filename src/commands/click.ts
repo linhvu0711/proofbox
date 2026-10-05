@@ -1,5 +1,6 @@
 import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
+import { Progress } from "../progress.ts";
 
 const BUTTONS = { left: "1", middle: "2", right: "3" } as const;
 
@@ -36,4 +37,6 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
       },
     },
   );
+  const progress = yield* Progress;
+  yield* progress.done(`clicked ${options.x},${options.y}`);
 }, Effect.scoped);

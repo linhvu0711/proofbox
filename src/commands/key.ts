@@ -1,5 +1,6 @@
 import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
+import { Progress } from "../progress.ts";
 
 export const pressKey = Effect.fn("key.pressKey")(function* (options: {
   readonly id: string;
@@ -22,4 +23,6 @@ export const pressKey = Effect.fn("key.pressKey")(function* (options: {
       },
     },
   );
+  const progress = yield* Progress;
+  yield* progress.done(`pressed ${options.keys}`);
 }, Effect.scoped);

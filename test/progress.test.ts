@@ -231,6 +231,47 @@ describe("Progress", () => {
     ),
   );
 
+  it.effect("with FORCE_COLOR=1 done prints a green ✔ and its text", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.done("clicked 120,340");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("\u001b[32m✔\u001b[0m clicked 120,340\n");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["FORCE_COLOR", "1"]])),
+      ),
+    ),
+  );
+
+  it.effect("without a terminal done and hint print nothing", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.done("clicked 120,340");
+      yield* progress.hint("make one: proofbox create --os linux");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(ConfigProvider.fromMap(new Map())),
+    ),
+  );
+
   it.effect("with FORCE_COLOR=1 a warning prints a yellow !", () =>
     Effect.gen(function* () {
       const progress = yield* Progress;

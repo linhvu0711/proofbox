@@ -457,6 +457,36 @@ describe("Pixel actions", () => {
     }
   });
 
+  it("with FORCE_COLOR=1 each Pixel action prints its ✔ line", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
+    const set = { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" };
+    // When
+    const stderrs: string[] = [];
+    for (const args of [
+      ["click", id, "120", "340", "--pace", "fast"],
+      ["type", id, "hello", "--pace", "fast"],
+      ["key", id, "ctrl+a", "--pace", "fast"],
+      ["scroll", id, "400", "300", "down", "3", "--pace", "fast"],
+      ["drag", id, "10", "10", "200", "200", "--pace", "fast"],
+      ["screenshot", id, "--out", out],
+    ]) {
+      stderrs.push((await runCli(env, args, { set })).stderr);
+    }
+    // Then
+    expect(stderrs).toEqual([
+      "✔ clicked 120,340\n",
+      "✔ typed 5 letters\n",
+      "✔ pressed ctrl+a\n",
+      "✔ scrolled down 3 at 400,300\n",
+      "✔ dragged 10,10 to 200,200\n",
+      `✔ saved ${out}\n`,
+    ]);
+  });
+
   it("click --screenshot writes the screen after the click", async () => {
     // Given
     const env = makeEnv({ docker: true });

@@ -76,6 +76,7 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
         step: (_label, effect) => effect,
         warn: () => Effect.void,
         note: () => Effect.void,
+        done: () => Effect.void,
         hint: () => Effect.void,
       }),
     ),

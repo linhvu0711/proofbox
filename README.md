@@ -73,7 +73,7 @@ proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1
 proofbox delete "$id"
 ```
 
-A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr. At a terminal, or with FORCE_COLOR=1, stderr shows ✔, ✘, and ! marks in color and one live line per step; NO_COLOR=1 keeps the marks without color. At a dead end, a dim line names the command to run next. Without a terminal it prints plain proofbox: lines.
+A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr. At a terminal, or with FORCE_COLOR=1, stderr shows ✔, ✘, and ! marks in color and one live line per step; NO_COLOR=1 keeps the marks without color. At a dead end, a dim line names the command to run next. A command with nothing else to say prints one ✔ line when it is done. Without a terminal it prints plain proofbox: lines.
 
 ## Commands
 
