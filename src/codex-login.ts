@@ -116,5 +116,16 @@ export const makeCodexLogin = (program: string): FileLoginTool => {
       ),
     ),
     renewedAt: lastRefreshOf,
+    accountOf: (text) =>
+      Schema.decodeUnknownOption(
+        Schema.parseJson(
+          Schema.Struct({
+            tokens: Schema.Struct({
+              // biome-ignore lint/style/useNamingConvention: Codex auth.json field.
+              account_id: Schema.String,
+            }),
+          }),
+        ),
+      )(text).pipe(Option.map((login) => login.tokens.account_id)),
   };
 };

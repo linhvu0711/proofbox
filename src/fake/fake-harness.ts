@@ -108,6 +108,7 @@ export const makeFakeHarness = (name: string): Harness => ({
 });
 
 const FakeLogin = Schema.Struct({
+  account: Schema.optional(Schema.String),
   // biome-ignore lint/style/useNamingConvention: Codex auth.json field.
   last_refresh: Schema.String,
   renewals: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
@@ -184,4 +185,8 @@ export const makeFakeFileLogin = (): FileLoginTool => ({
     yield* writeFakeLogin(home, `${JSON.stringify(renewed)}\n`);
   }),
   renewedAt: lastRefreshOf,
+  accountOf: (text) =>
+    Schema.decodeUnknownOption(
+      Schema.parseJson(Schema.Struct({ account: Schema.String })),
+    )(text).pipe(Option.map((login) => login.account)),
 });

@@ -3,12 +3,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, expect } from "vitest";
 import { makeCodexLogin } from "../src/codex-login.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 
 afterEach(cleanupEnvs);
+
+it("Codex reads the account from its saved tokens", () => {
+  const tool = makeCodexLogin("codex");
+  expect(tool.accountOf('{"tokens":{"account_id":"acct"}}')).toEqual(
+    Option.some("acct"),
+  );
+  expect(tool.accountOf('{"account_id":"not-the-token-account"}')).toEqual(
+    Option.none(),
+  );
+  expect(tool.accountOf("not JSON")).toEqual(Option.none());
+});
 
 const fixture = (script: string) => {
   const home = mkdtempSync(join(tmpdir(), "proofbox-codex-renew-"));

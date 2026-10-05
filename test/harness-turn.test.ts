@@ -30,10 +30,15 @@ const sandbox = async (env: CliEnv, extra: string[] = []) => {
   return created.stdout.trim();
 };
 
-const fileSandbox = async (env: CliEnv) => {
+const fileSandbox = async (env: CliEnv, account?: string) => {
   const { folder, github } = makeGithub();
   loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
-  const text = `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0}`;
+  const text = JSON.stringify({
+    // biome-ignore lint/style/useNamingConvention: Fake auth.json field.
+    last_refresh: new Date(Date.now() - 3_600_000).toISOString(),
+    renewals: 0,
+    ...(account === undefined ? {} : { account }),
+  });
   harnessLoginFile(env, "fake-file", text);
   const created = await runCli(env, createArgs(folder, "fake-file"), {
     set: { PROOFBOX_GITHUB_URL: `file://${github}` },
@@ -61,6 +66,24 @@ const setSandboxLogin = (env: CliEnv, id: string, text: string) =>
     "sh",
     text,
   ]);
+
+it("harness wait keeps the saved login when the Sandbox one is for another account", async () => {
+  const env = makeEnv();
+  const { id, saved, text } = await fileSandbox(env, "b");
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  await setSandboxLogin(
+    env,
+    id,
+    '{"last_refresh":"2999-01-01T00:00:00Z","renewals":5,"account":"a"}',
+  );
+  const result = await runCli(env, ["harness", "wait", id]);
+  expect({ code: result.exitCode, saved: readFileSync(saved, "utf8") }).toEqual(
+    {
+      code: 0,
+      saved: text,
+    },
+  );
+});
 
 it("harness wait saves back a newer Sandbox login file", async () => {
   const env = makeEnv();

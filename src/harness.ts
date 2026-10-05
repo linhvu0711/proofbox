@@ -35,6 +35,7 @@ export interface FileLoginTool {
     home: string,
   ) => Effect.Effect<void, HarnessLoginError, CommandExecutor.CommandExecutor>;
   readonly renewedAt: (text: string) => Option.Option<Date>;
+  readonly accountOf: (text: string) => Option.Option<string>;
 }
 
 export type TurnEnd =
