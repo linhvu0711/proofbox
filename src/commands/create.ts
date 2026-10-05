@@ -160,7 +160,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       .step("starting Keeper", keeper.start(id))
       .pipe(
         Effect.catchAll(() =>
-          output.err(
+          keeper.warnNotStarted(
             "proofbox: Keeper did not start; commands still work, only slower\n",
           ),
         ),

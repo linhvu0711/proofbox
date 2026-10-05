@@ -83,6 +83,15 @@ export const cleanupEnvs = () => {
   }
 };
 
+// A socket path this long fails at once on macOS and Linux, so the Keeper cannot start.
+export const keeperCannotStart = (
+  env: CliEnv,
+): Readonly<Record<string, string>> => {
+  const runtime = join(env.runtime, "k".repeat(110));
+  mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  return { PROOFBOX_RUNTIME_DIR: runtime };
+};
+
 export const trackTempDir = (dir: string): void => {
   made.push(dir);
 };
