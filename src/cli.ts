@@ -337,8 +337,9 @@ const live = Command.make(
     id: Args.text({ name: "id" }).pipe(
       Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
+    json,
   },
-  ({ id }) => openLive(id),
+  ({ id, json }) => openLive(id, { json }),
 );
 
 const command = Command.make("proofbox").pipe(

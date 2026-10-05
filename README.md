@@ -97,7 +97,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `record start <id>` | Starts a Recording. |
 | `record stop <id> --out <file>` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. Each Proof screenshot is at the size the Caller clicks in, as `screenshot` gives. `--max-size 10MB` sets the Size limit. |
 | `record stop <id> --discard` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). |
-| `live <id>` | Prints the address and password of a Live view, so a person can watch and control the screen. |
+| `live <id> [--json]` | Prints the address and password of a Live view, so a person can watch and control the screen. `--json` prints `{"address":…,"password":…}` once, then stays open until Ctrl-C. |
 | `list [--json]` | Lists your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. `--json` prints one line of JSON: an array of `{id, os, base, deadline, maxLife}`, `base` only when set. |
 | `delete <id>` | Deletes a Sandbox. |
 
