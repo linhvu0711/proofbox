@@ -241,6 +241,38 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
+  it("with FORCE_COLOR=1 a failing Setup script marks its step ✘", async () => {
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript(
+      '#!/bin/sh\nfor i in $(seq 1 60); do echo "line $i"; done\nexit 3\n',
+    );
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 11}\n`).join(
+      "",
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✘ running Setup script\n" +
+        lines +
+        "✘ Setup script failed with exit code 3; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("create with a missing Setup script makes nothing", async () => {
     // Given: a git folder and a Setup script path that does not exist
     const env = makeEnv();
