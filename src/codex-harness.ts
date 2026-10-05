@@ -31,6 +31,78 @@ const EndEvent = Schema.Union(
 );
 const decodeEndEvent = Schema.decodeUnknownEither(Schema.parseJson(EndEvent));
 
+const CommandStarted = Schema.Struct({
+  type: Schema.Literal("item.started"),
+  item: Schema.Struct({
+    type: Schema.Literal("command_execution"),
+    command: Schema.String,
+  }),
+});
+
+const CommandCompleted = Schema.Struct({
+  type: Schema.Literal("item.completed"),
+  item: Schema.Struct({
+    type: Schema.Literal("command_execution"),
+    aggregatedOutput: Schema.propertySignature(Schema.String).pipe(
+      Schema.fromKey("aggregated_output"),
+    ),
+    exitCode: Schema.propertySignature(Schema.NullOr(Schema.Number)).pipe(
+      Schema.fromKey("exit_code"),
+    ),
+  }),
+});
+
+const FileChange = Schema.Struct({
+  type: Schema.Literal("item.completed"),
+  item: Schema.Struct({
+    type: Schema.Literal("file_change"),
+    changes: Schema.Array(Schema.Struct({ path: Schema.String })),
+  }),
+});
+
+const McpToolCall = Schema.Struct({
+  type: Schema.Literal("item.started"),
+  item: Schema.Struct({
+    type: Schema.Literal("mcp_tool_call"),
+    server: Schema.String,
+    tool: Schema.String,
+  }),
+});
+
+const WebSearch = Schema.Struct({
+  type: Schema.Literal("item.completed"),
+  item: Schema.Struct({
+    type: Schema.Literal("web_search"),
+    query: Schema.String,
+  }),
+});
+
+const ErrorItem = Schema.Struct({
+  type: Schema.Literal("item.completed"),
+  item: Schema.Struct({
+    type: Schema.Literal("error"),
+    message: Schema.String,
+  }),
+});
+
+const ErrorEvent = Schema.Struct({
+  type: Schema.Literal("error"),
+  message: Schema.String,
+});
+
+const StepEvent = Schema.Union(
+  ThreadStarted,
+  AgentMessage,
+  CommandStarted,
+  CommandCompleted,
+  FileChange,
+  McpToolCall,
+  WebSearch,
+  ErrorItem,
+  ErrorEvent,
+);
+const decodeStepEvent = Schema.decodeUnknownEither(Schema.parseJson(StepEvent));
+
 export const makeCodexHarness = (): Harness => ({
   name: "codex",
   install: (version) =>
@@ -91,5 +163,52 @@ export const makeCodexHarness = (): Harness => ({
     }
     return { _tag: "NoEnd" };
   },
-  readSteps: () => [],
+  readSteps: (line) => {
+    const decoded = decodeStepEvent(line);
+    if (Either.isLeft(decoded)) return [];
+    const event = decoded.right;
+    switch (event.type) {
+      case "thread.started":
+        return [{ kind: "other", text: `started: ${event.threadId}` }];
+      case "error":
+        return [{ kind: "other", text: event.message }];
+      case "item.started": {
+        const item = event.item;
+        return [
+          {
+            kind: "tool",
+            text:
+              item.type === "command_execution"
+                ? `command_execution: ${item.command}`
+                : `mcp_tool_call: ${item.server}/${item.tool}`,
+          },
+        ];
+      }
+      case "item.completed": {
+        const item = event.item;
+        switch (item.type) {
+          case "agent_message":
+            return [{ kind: "said", text: item.text }];
+          case "command_execution":
+            return [
+              {
+                kind: "result",
+                text: `${item.exitCode === 0 ? "result" : "error"}: ${item.aggregatedOutput}`,
+              },
+            ];
+          case "file_change":
+            return [
+              {
+                kind: "tool",
+                text: `file_change: ${item.changes.map((change) => change.path).join(", ")}`,
+              },
+            ];
+          case "web_search":
+            return [{ kind: "tool", text: `web_search: ${item.query}` }];
+          case "error":
+            return [{ kind: "other", text: `error: ${item.message}` }];
+        }
+      }
+    }
+  },
 });

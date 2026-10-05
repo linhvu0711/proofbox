@@ -215,3 +215,168 @@ it("a Codex completion with no agent message has empty last text", () => {
   // Then
   expect(end).toEqual({ _tag: "Done", session, lastMessage: "" });
 });
+
+it("Codex reads a thread start as another step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  // When
+  const steps = harness.readSteps(thread);
+  // Then
+  expect(steps).toEqual([{ kind: "other", text: `started: ${session}` }]);
+});
+
+it("Codex reads an agent message as words it said", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I will list files"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "said", text: "I will list files" }]);
+});
+
+it("Codex reads a command start as a tool step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls -la","aggregated_output":"","exit_code":null,"status":"in_progress"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "tool", text: "command_execution: ls -la" }]);
+});
+
+it("Codex reads command output as a result step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls -la","aggregated_output":"hello.txt\\n","exit_code":0,"status":"completed"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "result", text: "result: hello.txt\n" }]);
+});
+
+it("Codex reads failed command output as an error result", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"false","aggregated_output":"command failed","exit_code":1,"status":"failed"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "result", text: "error: command failed" }]);
+});
+
+it("Codex reads every changed file as one tool step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"a.ts","kind":"update"},{"path":"b.ts","kind":"add"}],"status":"completed"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "tool", text: "file_change: a.ts, b.ts" }]);
+});
+
+it("Codex reads an MCP call start as a tool step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","status":"in_progress"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "tool", text: "mcp_tool_call: docs/search" }]);
+});
+
+it("Codex reads a web search as a tool step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_4","type":"web_search","query":"Codex documentation"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([
+    { kind: "tool", text: "web_search: Codex documentation" },
+  ]);
+});
+
+it("Codex reads an error item as another step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"item.completed","item":{"id":"item_5","type":"error","message":"tool failed"}}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "other", text: "error: tool failed" }]);
+});
+
+it("Codex reads a retry error as another step", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const event =
+    '{"type":"error","message":"Reconnecting... 2/5 (workspace routing discovery unauthorized (401))"}';
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([
+    {
+      kind: "other",
+      text: "Reconnecting... 2/5 (workspace routing discovery unauthorized (401))",
+    },
+  ]);
+});
+
+it("Codex skips reasoning and todo steps", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const events = [
+    '{"type":"item.completed","item":{"id":"item_6","type":"reasoning","text":"thinking"}}',
+    '{"type":"item.completed","item":{"id":"item_7","type":"todo_list","items":[]}}',
+  ];
+  // When
+  const steps = events.map((event) => harness.readSteps(event));
+  // Then
+  expect(steps).toEqual([[], []]);
+});
+
+it("Codex skips Turn events in its step log", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const events = [
+    '{"type":"turn.started"}',
+    '{"type":"turn.completed"}',
+    '{"type":"turn.failed","error":{"message":"failed"}}',
+  ];
+  // When
+  const steps = events.map((event) => harness.readSteps(event));
+  // Then
+  expect(steps).toEqual([[], [], []]);
+});
+
+it("Codex skips a step line that does not decode", () => {
+  // Given
+  const harness = makeCodexHarness();
+  // When
+  const steps = harness.readSteps('{"type":"item.comp');
+  // Then
+  expect(steps).toEqual([]);
+});
+
+it("Codex leaves long multiline words for the shared step formatter", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const text = `${"a".repeat(130)}\nsecond`;
+  const event = JSON.stringify({
+    type: "item.completed",
+    item: { type: "agent_message", text },
+  });
+  // When
+  const steps = harness.readSteps(event);
+  // Then
+  expect(steps).toEqual([{ kind: "said", text }]);
+});
