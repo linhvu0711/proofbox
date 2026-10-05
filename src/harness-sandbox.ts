@@ -120,6 +120,38 @@ export const checkHarnessCreate = Effect.fn(
   };
 });
 
+export const sendHarnessLoginFile = Effect.fn(
+  "harnessSandbox.sendHarnessLoginFile",
+)(function* (rawId: string, harness: Harness, file: string, text: string) {
+  const providers = yield* Providers;
+  const id = yield* resolveSandboxId(rawId, providers);
+  const info = yield* id.provider.get(id);
+  const progress = yield* Progress;
+  const keeper = yield* KeeperClient;
+  yield* progress.step(
+    "sending the Harness login",
+    withDeadlinePush(
+      id.provider,
+      id,
+      info,
+    )(
+      runInSandbox(
+        keeper,
+        rawId,
+        [
+          "sh",
+          "-c",
+          'umask 077; mkdir -p "$HOME/$1" && cat > "$HOME/$1/$2" && chmod 600 "$HOME/$1/$2"',
+          "sh",
+          harness.home,
+          file,
+        ],
+        Stream.make(new TextEncoder().encode(text)),
+      ),
+    ),
+  );
+});
+
 const FETCH = `set -eu
 IFS= read -r token
 url=$1; base=$2; keep=$3; shift 3

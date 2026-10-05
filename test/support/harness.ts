@@ -36,6 +36,18 @@ export const loginFile = (env: CliEnv, name: string, value: unknown) => {
   });
 };
 
+export const harnessLoginFile = (env: CliEnv, name: string, text: string) => {
+  const dir = join(
+    env.env.HOME ?? "",
+    ".config",
+    "proofbox",
+    "harness-logins",
+    name,
+  );
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, "auth.json"), text, { mode: 0o600 });
+};
+
 export const createArgs = (folder: string, harness = "claude") => [
   "create",
   "--os",

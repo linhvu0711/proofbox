@@ -22,6 +22,7 @@ import {
 import {
   createArgs,
   fakeLogins,
+  harnessLoginFile,
   loginFile,
   makeGithub,
 } from "./support/harness.ts";
@@ -30,6 +31,80 @@ const git = (folder: string, ...args: string[]) =>
   execFileSync("git", args, { cwd: folder, encoding: "utf8" });
 
 afterEach(cleanupEnvs);
+
+it("create --harness with a file login writes it owner-only and out of git", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const text = `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0}`;
+  harnessLoginFile(env, "fake-file", text);
+  const created = await runCli(env, createArgs(folder, "fake-file"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const file = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "cat",
+    ".fake-harness/auth.json",
+  ]);
+  const mode = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "perl",
+    "-e",
+    'printf "%o\\n", (stat shift)[2] & 0777',
+    ".fake-harness/auth.json",
+  ]);
+  const status = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "git",
+    "status",
+    "--porcelain",
+  ]);
+  expect({
+    code: created.exitCode,
+    file: file.stdout,
+    mode: mode.stdout,
+    status: status.stdout,
+  }).toEqual({ code: 0, file: text, mode: "600\n", status: "" });
+});
+
+it("a Snapshot saved by create --harness holds no login file", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const text = `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0,"mark":"login-mark-5e3a"}`;
+  harnessLoginFile(env, "fake-file", text);
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshots-"));
+  trackTempDir(dir);
+  const script = join(env.env.HOME ?? "", "setup.sh");
+  writeFileSync(script, "#!/bin/sh\necho ran > ran.txt\n");
+  const created = await runCli(
+    env,
+    [...createArgs(folder, "fake-file"), "--setup", script],
+    {
+      set: {
+        PROOFBOX_GITHUB_URL: `file://${github}`,
+        PROOFBOX_FAKE_SNAPSHOTS: dir,
+      },
+    },
+  );
+  const paths = readdirSync(dir, { recursive: true, encoding: "utf8" });
+  const contents = paths
+    .filter((path) => statSync(join(dir, path)).isFile())
+    .map((path) => readFileSync(join(dir, path), "utf8"))
+    .join("\n");
+  expect({
+    code: created.exitCode,
+    leaked: /login-mark-5e3a/.test(contents),
+  }).toEqual({ code: 0, leaked: false });
+  expect(readdirSync(dir)).toHaveLength(1);
+});
 
 it("create --harness prints a step for the clone and one for the install", async () => {
   // Given

@@ -25,6 +25,7 @@ import {
   cloneWorkFolder,
   copyHarnessProfile,
   installHarness,
+  sendHarnessLoginFile,
 } from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
@@ -276,6 +277,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             harness: harness.name,
             reason: `could not write the Harness name in the Sandbox (exit code ${code})`,
           });
+        }
+        if (
+          check !== undefined &&
+          check.entry.login._tag === "File" &&
+          check.harnessLogin._tag === "File"
+        ) {
+          yield* sendHarnessLoginFile(
+            id,
+            harness,
+            check.entry.login.file,
+            check.harnessLogin.text,
+          );
         }
       }
       if (secrets !== undefined) {
