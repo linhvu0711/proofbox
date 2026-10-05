@@ -168,8 +168,10 @@ export const stopHarnessTurn = Effect.fn("harness.stopHarnessTurn")(function* (
   if (state === "no-harness")
     return yield* new NotHarnessSandboxError({ id: rawId });
   const output = yield* CliOutput;
-  yield* output.out(
-    state === "stopped" ? "stopped the turn\n" : "no turn is running\n",
+  yield* output.err(
+    state === "stopped"
+      ? "proofbox: stopped the turn\n"
+      : "proofbox: no turn is running\n",
   );
 }, Effect.scoped);
 

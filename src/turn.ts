@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { Effect, Option, Stream } from "effect";
-import { HarnessError } from "./errors.ts";
+import { HarnessError, TurnRunningError } from "./errors.ts";
 import type { Harness } from "./harness.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Providers } from "./provider.ts";
@@ -14,15 +15,21 @@ import { withSecrets } from "./secrets.ts";
 const START = `set -eu
 umask 077
 t=$1; shift
+mkdir "$t.lock" 2>/dev/null || exit 125
+trap 'rmdir "$t.lock"' EXIT
+if [ -f "$t/pid" ] && [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$(cat "$t/pid")" 2>/dev/null; then
+  echo running
+  exit 0
+fi
 rm -rf "$t"; mkdir -p "$t"
-nohup perl -MPOSIX -e 'POSIX::setsid() >= 0 or die; exec @ARGV or die' \\
+(trap '' HUP; exec perl -MPOSIX -e 'POSIX::setsid() >= 0 or die; exec @ARGV or die' \\
   sh -c 't=$1; shift; "$@" > "$t/out" 2> "$t/err"; echo "$?" > "$t/exit.tmp"; mv "$t/exit.tmp" "$t/exit"' \\
-  sh "$t" "$@" < /dev/null > /dev/null 2>&1 &
+  sh "$t" "$@") < /dev/null > /dev/null 2>&1 &
 echo "$!" > "$t/pid"
 `;
 
 const READ = `set -eu
-h=$1; t=$2; s=$3; seconds=$4
+h=$1; t=$2; s=$3; seconds=$4; marker=$5
 if [ ! -f "$h" ]; then echo no-harness; exit; fi
 head -n 1 "$h"
 if [ -f "$s" ]; then head -n 1 "$s"; else echo; fi
@@ -44,7 +51,7 @@ else
   echo 'ended none'
 fi
 if [ -f "$t/out" ]; then tail -n 50 "$t/out" | tail -c 1048576; fi
-echo proofbox-turn-err
+printf '%s\\n' "$marker"
 if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
 `;
 
@@ -122,6 +129,7 @@ export const readTurn = Effect.fn("turn.readTurn")(function* (
   waitSeconds: number,
 ) {
   const files = yield* turnFiles(rawId);
+  const marker = randomUUID();
   const result = yield* runTurnScript(rawId, [
     "sh",
     "-c",
@@ -131,6 +139,7 @@ export const readTurn = Effect.fn("turn.readTurn")(function* (
     files.turn,
     files.session,
     String(waitSeconds),
+    marker,
   ]);
   if (result.code !== 0) {
     return yield* new HarnessError({
@@ -141,10 +150,10 @@ export const readTurn = Effect.fn("turn.readTurn")(function* (
   const [name = "", session = "", status = "", ...rest] =
     result.out.split("\n");
   const body = rest.join("\n");
-  const separator = body.lastIndexOf("proofbox-turn-err\n");
+  const separator = body.lastIndexOf(`${marker}\n`);
   const output = separator < 0 ? body : body.slice(0, separator);
   const errLines =
-    separator < 0 ? "" : body.slice(separator + "proofbox-turn-err\n".length);
+    separator < 0 ? "" : body.slice(separator + marker.length + 1);
   let state: TurnState;
   if (name === "no-harness" || status === "none") state = { _tag: "None" };
   else if (status === "saved") {
@@ -193,6 +202,8 @@ export const startTurn = Effect.fn("turn.startTurn")(function* (
     rawId,
     withSecrets(files.secrets, ["sh", "-c", START, "sh", files.turn, ...argv]),
   );
+  if (result.code === 125 || result.out.trim() === "running")
+    return yield* new TurnRunningError();
   if (result.code !== 0)
     return yield* new HarnessError({
       harness: rawId,
@@ -230,7 +241,7 @@ export const endText = (
   errLines: string,
 ) => {
   const end = harness.readEnd(output);
-  if (end._tag === "Done")
+  if (end._tag === "Done" && Option.isSome(exit) && exit.value === 0)
     return {
       code: TURN_EXIT.done,
       text: `done\n${end.lastMessage}\n`,
@@ -240,7 +251,7 @@ export const endText = (
     if (end.kind === "login")
       return {
         code: TURN_EXIT.login,
-        text: `failed: Harness login refused: ${end.message}\nfix: run proofbox harness login ${harness.name}\n`,
+        text: `failed: Harness login refused: ${end.message}\nfix: run proofbox harness login ${harness.name}, then make a new Sandbox with proofbox create --harness ${harness.name}\n`,
         session: end.session,
       };
     if (end.kind === "usage-limit")
@@ -258,7 +269,8 @@ export const endText = (
   return {
     code: TURN_EXIT.crash,
     text: `failed: Harness crashed ${Option.isSome(exit) ? `with exit code ${exit.value}` : "with no exit code"}\n${errLines}fix: read the lines above, then send the next prompt\n`,
-    session: Option.none<string>(),
+    session:
+      end._tag === "Done" ? Option.some(end.session) : Option.none<string>(),
   };
 };
 

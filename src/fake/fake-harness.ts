@@ -20,6 +20,7 @@ shift
 session=fake-$$
 if [ "$1" = --resume ]; then session=$2; shift 2; fi
 prompt=$1
+code=0
 mkdir -p "$HOME/.fake-harness/sessions"
 history="$HOME/.fake-harness/sessions/$session"
 heard=$(paste -sd ';' "$history" 2>/dev/null || true)
@@ -42,9 +43,12 @@ case "$prompt" in
     exit 1
     ;;
   crash) echo 'fake-harness: crashed on purpose' >&2; exit 3 ;;
+  'done then exit 2') message="did: $prompt"; code=2 ;;
+  'stderr marker') echo proofbox-turn-err >&2; message="did: $prompt" ;;
   *) message="did: $prompt" ;;
 esac
 perl -MJSON::PP -e 'print encode_json({type => "end", session => $ARGV[0], message => $ARGV[1]}), "\n"' "$session" "$message"
+exit "$code"
 `;
 
 export const makeFakeHarness = (): Harness => ({

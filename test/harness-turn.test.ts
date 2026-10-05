@@ -156,7 +156,76 @@ it("a refused Harness login prints the fix and exits 21", async () => {
   expect({ code: result.exitCode, stdout: result.stdout }).toEqual({
     code: 21,
     stdout:
-      "failed: Harness login refused: 401 login refused\nfix: run proofbox harness login fake\n",
+      "failed: Harness login refused: 401 login refused\nfix: run proofbox harness login fake, then make a new Sandbox with proofbox create --harness fake\n",
+  });
+});
+
+it("two prompts at once start one turn", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  // When
+  const prompts = await Promise.all([
+    runCli(env, ["harness", "prompt", id, "sleep 5"]),
+    runCli(env, ["harness", "prompt", id, "sleep 5"]),
+  ]);
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(prompts.sort((a, b) => a.exitCode - b.exitCode)).toEqual([
+    {
+      exitCode: 0,
+      stdout: "",
+      stderr: `proofbox: turn started; run proofbox harness wait ${id}\n`,
+    },
+    {
+      exitCode: 125,
+      stdout: "",
+      stderr:
+        "a turn is running; run proofbox harness wait or proofbox harness stop\n",
+    },
+  ]);
+  expect(result).toEqual({
+    exitCode: 0,
+    stdout: "done\nslept 5s\n",
+    stderr: "",
+  });
+});
+
+it("a done event with a nonzero exit is a crash and preserves the session", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "done then exit 2"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  await runCli(env, ["harness", "prompt", id, "recall"]);
+  const resumed = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 23,
+    stdout:
+      "failed: Harness crashed with exit code 2\nfix: read the lines above, then send the next prompt\n",
+    stderr: "",
+  });
+  expect(resumed).toEqual({
+    exitCode: 0,
+    stdout: "done\nremembers: done then exit 2\n",
+    stderr: "",
+  });
+});
+
+it("a fixed stderr marker does not change the real end event", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "stderr marker"]);
+  // When
+  const result = await runCli(env, ["harness", "wait", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 0,
+    stdout: "done\ndid: stderr marker\n",
+    stderr: "",
   });
 });
 
@@ -266,12 +335,14 @@ it("harness stop ends a running Turn and wait prints stopped", async () => {
   expect({
     stop: stop.exitCode,
     stopOut: stop.stdout,
+    stopErr: stop.stderr,
     wait: wait.exitCode,
     waitOut: wait.stdout,
     processes: processes.stdout,
   }).toEqual({
     stop: 0,
-    stopOut: "stopped the turn\n",
+    stopOut: "",
+    stopErr: "proofbox: stopped the turn\n",
     wait: 20,
     waitOut: "stopped\n",
     processes: "none\n",
@@ -287,8 +358,8 @@ it("harness stop with no Turn running says so and exits 0", async () => {
   // Then
   expect(result).toEqual({
     exitCode: 0,
-    stdout: "no turn is running\n",
-    stderr: "",
+    stdout: "",
+    stderr: "proofbox: no turn is running\n",
   });
 });
 
