@@ -64,19 +64,25 @@ if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
 `;
 
 const STEPS = `set -eu
-h=$1; t=$2; from=$3; seconds=$4
+h=$1; t=$2; from=$3; seconds=$4; limit=$5
 if [ ! -f "$h" ]; then echo no-harness; exit; fi
 head -n 1 "$h"
 if [ ! -f "$t/pid" ]; then echo none; exit; fi
 pid=$(cat "$t/pid")
 count() { if [ -f "$t/times" ]; then wc -l < "$t/times" | tr -d ' '; else echo 0; fi; }
-running() { [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$pid" 2>/dev/null; }
+running() { [ -f "$t/pid" ] && [ "$(cat "$t/pid")" = "$pid" ] && [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$pid" 2>/dev/null; }
 while [ "$seconds" -gt 0 ] && [ "$(count)" -le "$from" ] && running; do
   sleep 1
   seconds=$((seconds - 1))
 done
+if [ ! -f "$t/pid" ]; then echo none; exit; fi
+pid=$(cat "$t/pid")
 if running; then echo running; else echo ended; fi
-n=$(count); echo "$n"
+echo "$pid"
+n=$(count); more=no
+if [ "$limit" -gt 500 ]; then limit=500; fi
+if [ "$n" -gt "$((from + limit))" ]; then n=$((from + limit)); more=yes; fi
+echo "$n"; echo "$more"
 if [ "$n" -gt "$from" ]; then
   tail -n "+$((from + 1))" "$t/times" | head -n "$((n - from))"
   tail -n "+$((from + 1))" "$t/out" | head -n "$((n - from))"
@@ -225,6 +231,7 @@ export const readTurnSteps = Effect.fn("turn.readTurnSteps")(function* (
   rawId: string,
   from: number,
   waitSeconds: number,
+  limit: number,
 ) {
   const files = yield* turnFiles(rawId);
   const result = yield* runTurnScript(rawId, [
@@ -236,19 +243,23 @@ export const readTurnSteps = Effect.fn("turn.readTurnSteps")(function* (
     files.turn,
     String(from),
     String(waitSeconds),
+    String(limit),
   ]);
   if (result.code !== 0)
     return yield* new HarnessError({
       harness: rawId,
       reason: `could not read the Turn steps (exit code ${result.code})`,
     });
-  const [name = "", status = "", count = "0", ...rest] = result.out.split("\n");
+  const [name = "", status = "", pid = "", count = "0", more = "no", ...rest] =
+    result.out.split("\n");
   if (name === "no-harness") return { _tag: "NoHarness" } as const;
   if (status === "none") return { _tag: "None" } as const;
   const length = Math.max(0, Number(count) - from);
   return {
     _tag: "Read" as const,
     harness: name,
+    pid,
+    more: more === "yes",
     running: status === "running",
     events: rest.slice(length, length * 2).map((event, index) => ({
       at: new Date(Number(rest[index]) * 1000),

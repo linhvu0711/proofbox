@@ -78,6 +78,40 @@ it("harness log during a Turn prints the steps so far and still running", async 
   });
 });
 
+it("harness log reads 1,200 activity lines in bounded batches and prints done last", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  const turn = join(env.root, id.slice(5), "state", "turn");
+  const events = Array.from({ length: 1200 }, (_, i) =>
+    JSON.stringify({ type: "activity", text: `step ${i + 1}` }),
+  );
+  const raw = `${events.join("\n")}\n`;
+  writeFileSync(join(turn, "out"), raw);
+  writeFileSync(join(turn, "times"), "1791172800\n".repeat(1200));
+  const log = join(env.runtime, `fake-${id.slice(5)}.log`);
+  // When
+  for (const flags of [[], ["--follow"], ["--full"]]) {
+    const before = readFileSync(log, "utf8").length;
+    const result = await runCli(env, ["harness", "log", id, ...flags]);
+    const requests = readFileSync(log, "utf8")
+      .slice(before)
+      .split("\n")
+      .filter((line) => line.includes(" exec sh "));
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(requests).toHaveLength(flags.includes("--full") ? 3 : 4);
+    expect(result.stdout).toBe(
+      flags.includes("--full")
+        ? raw
+        : `${events.map((_, i) => `2026-10-05T04:00:00Z step ${i + 1}`).join("\n")}\ndone\n`,
+    );
+  }
+});
+
 it("harness log before any prompt says no turn has run yet", async () => {
   // Given
   const env = makeEnv();
@@ -217,6 +251,35 @@ it("harness log --follow prints a step while the Turn still runs", async () => {
       "",
     ],
   });
+});
+
+it("harness log --follow never reads steps from a replacement Turn", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  let text = "";
+  let replacing: Promise<unknown> | undefined;
+  // When
+  const result = await runCli(env, ["harness", "log", id, "--follow"], {
+    onStdout: (chunk) => {
+      text += chunk;
+      if (text.includes("sleeping 30s") && replacing === undefined)
+        replacing = (async () => {
+          await runCli(env, ["harness", "stop", id]);
+          await runCli(env, ["harness", "prompt", id, "hello"]);
+        })();
+    },
+  });
+  await replacing;
+  // Then
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("sleeping 30s");
+  expect(result.stdout).not.toContain("did: hello");
+  expect(result.stdout.trimEnd().split("\n").at(-1)).toMatch(
+    /^(stopped|ended; a new Turn started)$/,
+  );
 });
 
 it("harness log --follow moves the Deadline while it runs and not after it is killed", async () => {
