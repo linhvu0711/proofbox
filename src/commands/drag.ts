@@ -10,8 +10,6 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
   readonly glide?: string | undefined;
-  readonly letter?: string | undefined;
-  readonly typeMax?: string | undefined;
   readonly settle?: string | undefined;
 }) {
   const pace = yield* resolvePace(options);
