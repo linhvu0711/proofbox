@@ -20,34 +20,97 @@ import { takeScreenshot } from "./commands/screenshot.ts";
 import { scrollAt } from "./commands/scroll.ts";
 import { typeText } from "./commands/type.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
+import { KNOWN_REGIONS } from "./namespace/regions.ts";
 import { parseMaxSize } from "./upload/max-size.ts";
 
-const create = Command.make(
-  "create",
-  {
-    os: Options.choice("os", ["linux", "macos"]),
-    provider: Options.text("provider").pipe(Options.optional),
-    idle: Options.text("idle").pipe(Options.optional),
-    maxLife: Options.text("max-life").pipe(Options.optional),
-    work: Options.text("work").pipe(Options.optional),
-    setup: Options.text("setup").pipe(Options.optional),
-    envFile: Options.text("env-file").pipe(Options.optional),
-    maxSize: Options.text("max-size").pipe(Options.optional),
-    size: Options.text("size").pipe(Options.optional),
-  },
-  ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
-    createSandbox({
-      os,
-      provider: Option.getOrUndefined(provider),
-      idle: Option.getOrUndefined(idle),
-      maxLife: Option.getOrUndefined(maxLife),
-      work: Option.getOrUndefined(work),
-      setup: Option.getOrUndefined(setup),
-      envFile: Option.getOrUndefined(envFile),
-      maxSize: Option.getOrUndefined(maxSize),
-      size: Option.getOrUndefined(size),
-    }),
-);
+export const makeCommand = (providers: ReadonlyArray<string>) => {
+  const providerArg = Args.choice(
+    providers.map((name): [string, string] => [name, name]),
+    { name: "provider" },
+  );
+
+  const create = Command.make(
+    "create",
+    {
+      os: Options.choice("os", ["linux", "macos"]),
+      provider: Options.choice("provider", providers).pipe(Options.optional),
+      idle: Options.text("idle").pipe(Options.optional),
+      maxLife: Options.text("max-life").pipe(Options.optional),
+      work: Options.text("work").pipe(Options.optional),
+      setup: Options.text("setup").pipe(Options.optional),
+      envFile: Options.text("env-file").pipe(Options.optional),
+      maxSize: Options.text("max-size").pipe(Options.optional),
+      size: Options.text("size").pipe(Options.optional),
+    },
+    ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
+      createSandbox({
+        os,
+        provider: Option.getOrUndefined(provider),
+        idle: Option.getOrUndefined(idle),
+        maxLife: Option.getOrUndefined(maxLife),
+        work: Option.getOrUndefined(work),
+        setup: Option.getOrUndefined(setup),
+        envFile: Option.getOrUndefined(envFile),
+        maxSize: Option.getOrUndefined(maxSize),
+        size: Option.getOrUndefined(size),
+      }),
+  );
+
+  const authLogin = Command.make(
+    "login",
+    {
+      provider: providerArg,
+      token: Options.boolean("token"),
+      region: Options.choice("region", KNOWN_REGIONS).pipe(Options.optional),
+    },
+    ({ provider, token, region }) =>
+      loginToProvider({ provider, token, region }),
+  );
+
+  const authLogout = Command.make(
+    "logout",
+    { provider: providerArg },
+    ({ provider }) => logoutOfProvider(provider),
+  );
+
+  const authToken = Command.make(
+    "token",
+    {
+      provider: providerArg,
+      name: Options.text("name").pipe(Options.optional),
+      expires: Options.text("expires").pipe(Options.optional),
+    },
+    ({ provider, name, expires }) =>
+      makeRobotToken({ provider, name, expires }),
+  );
+
+  const auth = Command.make("auth").pipe(
+    Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
+  );
+
+  return Command.make("proofbox").pipe(
+    Command.withDescription(
+      "rent a disposable Sandbox, drive its screen, and bring back a Proof video",
+    ),
+    Command.withSubcommands([
+      create,
+      exec,
+      screenshot,
+      click,
+      type,
+      key,
+      scroll,
+      drag,
+      list,
+      del,
+      upload,
+      live,
+      record,
+      mark,
+      auth,
+    ]),
+  );
+};
 
 const exec = Command.make(
   "exec",
@@ -291,40 +354,8 @@ const record = Command.make("record").pipe(
   Command.withSubcommands([recordStart, recordStop]),
 );
 
-const authLogin = Command.make(
-  "login",
-  {
-    provider: Args.text({ name: "provider" }),
-    token: Options.boolean("token"),
-    region: Options.text("region").pipe(Options.optional),
-  },
-  ({ provider, token, region }) => loginToProvider({ provider, token, region }),
-);
-
 const authStatus = Command.make("status", { json }, ({ json }) =>
   showAuthStatus({ json }),
-);
-
-const authLogout = Command.make(
-  "logout",
-  {
-    provider: Args.text({ name: "provider" }),
-  },
-  ({ provider }) => logoutOfProvider(provider),
-);
-
-const authToken = Command.make(
-  "token",
-  {
-    provider: Args.text({ name: "provider" }),
-    name: Options.text("name").pipe(Options.optional),
-    expires: Options.text("expires").pipe(Options.optional),
-  },
-  ({ provider, name, expires }) => makeRobotToken({ provider, name, expires }),
-);
-
-const auth = Command.make("auth").pipe(
-  Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
 );
 
 const upload = Command.make(
@@ -355,30 +386,8 @@ const live = Command.make(
   ({ id, json }) => openLive(id, { json }),
 );
 
-const command = Command.make("proofbox").pipe(
-  Command.withDescription(
-    "rent a disposable Sandbox, drive its screen, and bring back a Proof video",
-  ),
-  Command.withSubcommands([
-    create,
-    exec,
-    screenshot,
-    click,
-    type,
-    key,
-    scroll,
-    drag,
-    list,
-    del,
-    upload,
-    live,
-    record,
-    mark,
-    auth,
-  ]),
-);
-
-export const cli = Command.run(command, {
-  name: "proofbox",
-  version: "0.0.0",
-});
+export const makeCli = (providers: ReadonlyArray<string>) =>
+  Command.run(makeCommand(providers), {
+    name: "proofbox",
+    version: "0.0.0",
+  });

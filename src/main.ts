@@ -2,24 +2,28 @@
 import { CliConfig, ValidationError } from "@effect/cli";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Effect, Exit, Layer } from "effect";
-import { cli } from "./cli.ts";
+import { makeCli } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
+import { Providers } from "./provider.ts";
 import { ProvidersLive } from "./provider-registry.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
-const dispatch = (argv: ReadonlyArray<string>) => {
+const dispatch = Effect.fn("main.dispatch")(function* (
+  argv: ReadonlyArray<string>,
+) {
   if (argv[2] === "exec") {
     const separator = argv.indexOf("--", 3);
     if (separator > 3 && separator < argv.length - 1) {
-      return execInSandbox(argv[3] as string, argv.slice(separator + 1));
+      return yield* execInSandbox(argv[3] as string, argv.slice(separator + 1));
     }
   }
-  return cli(argv);
-};
+  const providers = yield* Providers;
+  return yield* makeCli([...providers.keys()])(argv);
+});
 
 const providersLive = ProvidersLive.pipe(Layer.provide(NodeContext.layer));
 

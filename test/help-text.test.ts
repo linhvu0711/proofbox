@@ -4,6 +4,53 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 describe("Help text", () => {
   afterEach(cleanupEnvs);
 
+  it("create --help lists docker | namespace without the fake Provider", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["create", "--help"], {
+      unset: ["PROOFBOX_FAKE_ROOT"],
+    });
+    // Then
+    expect(result.stdout).toContain("--provider docker | namespace");
+    expect(result.stdout).not.toContain("| fake");
+  });
+
+  it("with PROOFBOX_FAKE_ROOT set, --provider also lists fake", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["create", "--help"]);
+    // Then
+    expect(result.stdout).toContain("--provider docker | namespace | fake");
+  });
+
+  it("auth login, logout, and token list the Providers", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const results = await Promise.all(
+      ["login", "logout", "token"].map((sub) =>
+        runCli(env, ["auth", sub, "--help"], { unset: ["PROOFBOX_FAKE_ROOT"] }),
+      ),
+    );
+    // Then
+    for (const result of results) {
+      expect(result.stdout).toContain(
+        "One of the following: docker, namespace",
+      );
+    }
+  });
+
+  it("auth login --help lists us | eu for --region", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["auth", "login", "--help"]);
+    // Then
+    expect(result.stdout).toContain("--region us | eu");
+  });
+
   it("help pages no longer list the built-in options", async () => {
     // Given
     const env = makeEnv();
