@@ -299,7 +299,9 @@ export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
     const logins = yield* Effect.cached(readLogins);
     const output = yield* CliOutput;
     const now = yield* Clock.currentTimeMillis;
-    const statuses: { provider: string; status: LoginStatus }[] = [];
+    // The JSON needs every Provider first; a plain line goes out as soon
+    // as its Provider is checked, so a later failure keeps it.
+    const items: ReturnType<typeof statusJson>[] = [];
     for (const entry of providers.values()) {
       const provider = yield* entry.load;
       const part = provider.login;
@@ -397,18 +399,16 @@ export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
           }
         }
       }
-      statuses.push({ provider: provider.name, status });
+      if (options.json) {
+        items.push(statusJson(provider.name, status));
+      } else {
+        yield* output.out(
+          `${provider.name}  ${statusLine(provider.name, status)}\n`,
+        );
+      }
     }
     if (options.json) {
-      yield* output.out(
-        `${JSON.stringify(
-          statuses.map(({ provider, status }) => statusJson(provider, status)),
-        )}\n`,
-      );
-      return;
-    }
-    for (const { provider, status } of statuses) {
-      yield* output.out(`${provider}  ${statusLine(provider, status)}\n`);
+      yield* output.out(`${JSON.stringify(items)}\n`);
     }
   },
 );

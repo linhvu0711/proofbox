@@ -859,6 +859,22 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("auth status keeps the lines it printed when a later Provider cannot be reached", async () => {
+    // Given: a Namespace env token, and Namespace cannot be reached
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home, PROOFBOX_NAMESPACE_TOKEN: TOKEN },
+    });
+    // Then
+    expect(result.stdout).toBe("docker  no login needed\n");
+    expect(result.stderr).toBe(
+      "Could not reach Namespace. Check your network and try again.\n",
+    );
+    expect(result.exitCode).toBe(125);
+  });
+
   it("auth status --json with no logins lists each Provider as not-needed or none", async () => {
     // Given
     const env = makeEnv();
