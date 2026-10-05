@@ -96,12 +96,14 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `mark <id> <label> --wait` | Sets a Wait mark: the Still part it falls in, or the next one in its step, keeps its "» N s later" label with the reason after it. It starts no step (ADR 0018). |
 | `record start <id>` | Starts a Recording. |
 | `record stop <id> --out <file> [--json]` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. Each Proof screenshot is at the size the Caller clicks in, as `screenshot` gives. `--max-size 10MB` sets the Size limit. `--json` prints `{"video":…,"screenshots":[{"step":1,"label":…,"path":…}]}`; each label is the text given to `mark`. |
-| `record stop <id> --discard` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). |
+| `record stop <id> --discard [--json]` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). `--json` prints `{"discarded":true,"raw":…}`. |
 | `live <id> [--json]` | Prints the address and password of a Live view, so a person can watch and control the screen. `--json` prints `{"address":…,"password":…}` once, then stays open until Ctrl-C. |
 | `list [--json]` | Lists your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. `--json` prints one line of JSON: an array of `{id, os, base, deadline, maxLife}`, `base` only when set. |
 | `delete <id>` | Deletes a Sandbox. |
 
 Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`.
+
+`--json` on `list`, `auth status`, `record stop`, and `live` prints one line of JSON on stdout. On a failure stdout stays empty, the error goes to stderr, and proofbox exits 125.
 
 A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
 

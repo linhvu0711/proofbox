@@ -413,6 +413,41 @@ describe("Recording and the Proof video", () => {
     expect(log.stdout).toContain('"kind":"click"');
   });
 
+  it("record stop --discard --json names the raw Recording it kept", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--discard",
+      "--json",
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      '{"discarded":true,"raw":"/run/proofbox/recordings/1/raw.mkv"}\n',
+    );
+    expect(result.stderr).toBe(
+      "proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv\n",
+    );
+  });
+
   it("a Still part that a click ends has no label in the Proof video", async () => {
     // Given
     const env = makeEnv({ docker: true });
