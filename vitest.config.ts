@@ -7,6 +7,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       "test/**/*.docker.test.ts",
       "test/**/*.namespace.test.ts",
+      "test/**/*.harness.test.ts",
     ],
     // Many tests start CLI processes. On all cores, or with two suites at
     // once, the machine overloads and these run several times slower. Half
