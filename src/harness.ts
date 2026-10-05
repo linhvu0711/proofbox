@@ -1,14 +1,40 @@
+import type { CommandExecutor } from "@effect/platform";
 import { Context, type Duration, type Effect, type Option } from "effect";
-import type { HarnessError } from "./errors.ts";
+import type { CliOutput } from "./cli-output.ts";
+import type { HarnessError, HarnessLoginError } from "./errors.ts";
 
-// What login and status need without loading the Harness. envName is
-// the environment variable the Harness reads in the Sandbox.
-export interface HarnessLogin {
+export type HarnessLogin = HarnessEnvLogin | HarnessFileLogin;
+
+export interface HarnessEnvLogin {
+  readonly _tag: "Env";
   readonly envName: string;
   readonly what: "token" | "API key";
   readonly placeholder: "<token>" | "<key>";
   readonly howToMake: string;
   readonly lifetime: Option.Option<Duration.Duration>;
+}
+
+export interface HarnessFileLogin {
+  readonly _tag: "File";
+  readonly what: string;
+  readonly file: string;
+  readonly howToMake: string;
+  readonly renewAfter: Duration.Duration;
+  readonly load: Effect.Effect<FileLoginTool, HarnessError>;
+}
+
+export interface FileLoginTool {
+  readonly login: (
+    home: string,
+  ) => Effect.Effect<
+    void,
+    HarnessLoginError,
+    CommandExecutor.CommandExecutor | CliOutput
+  >;
+  readonly renew: (
+    home: string,
+  ) => Effect.Effect<void, HarnessLoginError, CommandExecutor.CommandExecutor>;
+  readonly renewedAt: (text: string) => Option.Option<Date>;
 }
 
 export type TurnEnd =

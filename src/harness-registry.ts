@@ -24,6 +24,7 @@ export const HarnessesLive = Layer.effect(
         {
           name: "claude",
           login: {
+            _tag: "Env",
             envName: "CLAUDE_CODE_OAUTH_TOKEN",
             what: "token",
             placeholder: "<token>",
@@ -43,6 +44,7 @@ export const HarnessesLive = Layer.effect(
         {
           name: "codex",
           login: {
+            _tag: "Env",
             envName: "CODEX_API_KEY",
             what: "API key",
             placeholder: "<key>",
@@ -68,12 +70,13 @@ export const HarnessesLive = Layer.effect(
     if (Option.isSome(fakeRoot)) {
       const fake = yield* Effect.cached(
         importFor("fake", () => import("./fake/fake-harness.ts")).pipe(
-          Effect.map((module) => module.makeFakeHarness()),
+          Effect.map((module) => module.makeFakeHarness("fake")),
         ),
       );
       harnesses.set("fake", {
         name: "fake",
         login: {
+          _tag: "Env",
           envName: "PROOFBOX_FAKE_HARNESS_TOKEN",
           what: "token",
           placeholder: "<token>",
@@ -86,6 +89,28 @@ export const HarnessesLive = Layer.effect(
           leftOut: "settings",
         },
         load: fake,
+      });
+      const fakeFile = yield* Effect.cached(
+        importFor("fake-file", () => import("./fake/fake-harness.ts")),
+      );
+      harnesses.set("fake-file", {
+        name: "fake-file",
+        login: {
+          _tag: "File",
+          what: "fake plan login",
+          file: "auth.json",
+          howToMake: "It runs a fake login",
+          renewAfter: Duration.days(7),
+          load: Effect.map(fakeFile, (module) => module.makeFakeFileLogin()),
+        },
+        profile: {
+          home: ".fake-harness",
+          parts: ["AGENTS.md", "skills/"],
+          leftOut: "settings",
+        },
+        load: Effect.map(fakeFile, (module) =>
+          module.makeFakeHarness("fake-file"),
+        ),
       });
     }
     return harnesses;

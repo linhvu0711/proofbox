@@ -42,6 +42,35 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
+  it("harness login fake-file runs the file login and saves it owner-only", async () => {
+    const env = makeEnv();
+    const home = makeHome();
+    const result = await runCli(env, ["harness", "login", "fake-file"], {
+      set: { HOME: home },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Open https://example.invalid/device and enter FAKE-CODE\nSaved Harness login for fake-file with fake plan login.\n",
+    );
+    const dir = join(
+      home,
+      ".config",
+      "proofbox",
+      "harness-logins",
+      "fake-file",
+    );
+    const path = join(dir, "auth.json");
+    expect(readFileSync(path, "utf8")).toBe(
+      '{"last_refresh":"2026-10-05T00:00:00Z","renewals":0}\n',
+    );
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(readdirSync(join(home, ".config", "proofbox"))).toEqual([
+      "harness-logins",
+    ]);
+  });
+
   it("harness login with a blocked config directory names the Harness logins file", async () => {
     // Given
     const env = makeEnv();
@@ -95,7 +124,7 @@ describe("Harness logins", () => {
     });
     // Then
     expect(result.stderr).toBe(
-      'No Harness named "foo". Harnesses: claude, codex, fake.\n',
+      'No Harness named "foo". Harnesses: claude, codex, fake, fake-file.\n',
     );
     expect(result.exitCode).toBe(125);
   });

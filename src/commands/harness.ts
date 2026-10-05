@@ -6,6 +6,7 @@ import { parseSpan } from "../deadline.ts";
 import {
   EmptyPromptError,
   HarnessError,
+  HarnessLoginError,
   HarnessProfileExistsError,
   NoHarnessTokenError,
   NoSuchHarnessError,
@@ -17,7 +18,11 @@ import {
 import { formatTime } from "../format-time.ts";
 import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
-import { changeHarnessLogins } from "../login/logins-file.ts";
+import {
+  changeHarnessLogins,
+  makeHarnessLoginHome,
+  saveHarnessLoginFile,
+} from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
 import {
   readTurn,
@@ -43,13 +48,21 @@ export const harnessEntryFor = Effect.fn("harness.harnessEntryFor")(function* (
 
 export const saveHarnessLogin = Effect.fn("harness.saveHarnessLogin")(
   function* (entry: HarnessEntry, raw: string) {
+    if (entry.login._tag !== "Env") {
+      return yield* new HarnessLoginError({
+        harness: entry.name,
+        reason: `${entry.name} needs a file login; run proofbox harness login ${entry.name}`,
+        nothing: "saved",
+      });
+    }
+    const login = entry.login;
     const token = raw.trim();
     if (token === "") {
       return yield* new NoHarnessTokenError({
         harness: entry.name,
-        what: entry.login.what,
-        placeholder: entry.login.placeholder,
-        howToMake: entry.login.howToMake,
+        what: login.what,
+        placeholder: login.placeholder,
+        howToMake: login.howToMake,
       });
     }
     const now = yield* Clock.currentTimeMillis;
@@ -57,10 +70,10 @@ export const saveHarnessLogin = Effect.fn("harness.saveHarnessLogin")(
       ...logins,
       [entry.name]: {
         token: Redacted.make(token),
-        ...(Option.isSome(entry.login.lifetime)
+        ...(Option.isSome(login.lifetime)
           ? {
               expiresAt: new Date(
-                now + Duration.toMillis(entry.login.lifetime.value),
+                now + Duration.toMillis(login.lifetime.value),
               ),
             }
           : {}),
@@ -77,8 +90,31 @@ export const loginToHarness = Effect.fn("harness.loginToHarness")(function* (
   name: string,
 ) {
   const entry = yield* harnessEntryFor(name);
-  const raw = yield* readStdinText();
-  yield* saveHarnessLogin(entry, raw);
+  const login = entry.login;
+  if (login._tag === "Env") {
+    const raw = yield* readStdinText();
+    yield* saveHarnessLogin(entry, raw);
+    return;
+  }
+  yield* Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const tool = yield* login.load;
+    const home = yield* makeHarnessLoginHome(name);
+    yield* tool.login(home);
+    const text = yield* fs.readFileString(join(home, login.file)).pipe(
+      Effect.mapError(
+        () =>
+          new HarnessLoginError({
+            harness: name,
+            reason: `${name} login ended without a login`,
+            nothing: "saved",
+          }),
+      ),
+    );
+    yield* saveHarnessLoginFile(name, login.file, text);
+    const output = yield* CliOutput;
+    yield* output.err(`Saved Harness login for ${name} with ${login.what}.\n`);
+  }).pipe(Effect.scoped);
 });
 
 export const promptHarness = Effect.fn("harness.promptHarness")(function* (

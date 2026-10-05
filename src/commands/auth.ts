@@ -311,6 +311,7 @@ export const showAuthStatus = Effect.gen(function* () {
     Effect.catchAll(() => Effect.succeed<HarnessLoginsFile>({})),
   );
   for (const [name, entry] of harnesses) {
+    if (entry.login._tag !== "Env") continue;
     const saved = savedHarnesses[name];
     if (saved === undefined) continue;
     const expiresAt = saved.expiresAt;

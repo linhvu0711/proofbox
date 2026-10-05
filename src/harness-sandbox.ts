@@ -75,6 +75,13 @@ export const checkHarnessCreate = Effect.fn(
 )(function* (name: string, folder: string) {
   const entry = yield* harnessEntryFor(name);
   const repo = yield* readGithubRepo(folder);
+  if (entry.login._tag !== "Env") {
+    return yield* new NoHarnessLoginError({
+      harness: name,
+      expired: false,
+      howToMake: entry.login.howToMake,
+    });
+  }
   const harnessLogin = (yield* readHarnessLogins)[name];
   const expired =
     harnessLogin?.expiresAt !== undefined &&
@@ -94,7 +101,7 @@ export const checkHarnessCreate = Effect.fn(
     });
   }
   return {
-    entry,
+    entry: { ...entry, login: entry.login },
     repo,
     harnessToken: harnessLogin.token,
     githubToken: githubLogin.token,
