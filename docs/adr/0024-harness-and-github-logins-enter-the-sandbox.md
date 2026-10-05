@@ -8,6 +8,8 @@ A Harness needs a model login, and it needs a GitHub login to push and open pull
 
 Sources: Claude Code auth, https://code.claude.com/docs/en/iam; deleting the token, https://support.anthropic.com/en/articles/10310342-how-do-i-log-out-of-all-active-sessions; Codex auth, https://developers.openai.com/codex/auth; single-use Codex refresh tokens, https://github.com/openai/codex/issues/15410. Checked 2026-10-02. ChatGPT plan login for Codex, https://learn.chatgpt.com/docs/auth and https://learn.chatgpt.com/docs/auth/ci-cd-auth, checked 2026-10-04.
 
+Before create sends a Codex login, proofbox renews it when its last renewal (`last_refresh`) is older than 7 days, through `codex app-server` (`account/read` with `refreshToken`), and saves the renewed file. Codex renews by itself only near its access token's end or after a 401, so a Sandbox (3 hours at most) normally never renews.
+
 ## Considered options
 
 - Copy the Caller's laptop `~/.codex/auth.json`: rejected. Its refresh token works one time only, so when one copy renews, the Caller's laptop login and every other copy break.

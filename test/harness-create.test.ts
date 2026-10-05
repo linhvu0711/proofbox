@@ -32,6 +32,76 @@ const git = (folder: string, ...args: string[]) =>
 
 afterEach(cleanupEnvs);
 
+it("create renews a file login older than 7 days and sends the renewed one", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  harnessLoginFile(
+    env,
+    "fake-file",
+    '{"last_refresh":"2020-01-01T00:00:00Z","renewals":0}',
+  );
+  const created = await runCli(env, createArgs(folder, "fake-file"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const saved = readFileSync(
+    join(
+      env.env.HOME ?? "",
+      ".config",
+      "proofbox",
+      "harness-logins",
+      "fake-file",
+      "auth.json",
+    ),
+    "utf8",
+  );
+  const file = await runCli(env, [
+    "exec",
+    created.stdout.trim(),
+    "--",
+    "cat",
+    ".fake-harness/auth.json",
+  ]);
+  const login: unknown = JSON.parse(saved);
+  expect({
+    code: created.exitCode,
+    login,
+    same: saved === file.stdout,
+  }).toMatchObject({ code: 0, login: { renewals: 1 }, same: true });
+});
+
+it("a file login that cannot be renewed stops create before the Provider", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const text =
+    '{"last_refresh":"2020-01-01T00:00:00Z","renewals":0,"fail_renew":true}';
+  harnessLoginFile(env, "fake-file", text);
+  const result = await runCli(env, createArgs(folder, "fake-file"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr:
+      "could not renew the Harness login for fake-file; run proofbox harness login fake-file. Nothing was created.\n",
+  });
+  expect(readdirSync(env.root)).toEqual([]);
+  expect(
+    readFileSync(
+      join(
+        env.env.HOME ?? "",
+        ".config",
+        "proofbox",
+        "harness-logins",
+        "fake-file",
+        "auth.json",
+      ),
+      "utf8",
+    ),
+  ).toBe(text);
+});
+
 it("create --harness with a file login writes it owner-only and out of git", async () => {
   const env = makeEnv();
   const { folder, github } = makeGithub();

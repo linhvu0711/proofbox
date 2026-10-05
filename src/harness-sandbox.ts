@@ -4,7 +4,15 @@ import {
   FileSystem,
   type Error as PlatformError,
 } from "@effect/platform";
-import { Clock, Config, Effect, Option, Redacted, Stream } from "effect";
+import {
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Option,
+  Redacted,
+  Stream,
+} from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { runKeepingTail } from "./command-tail.ts";
 import { harnessEntryFor } from "./commands/harness.ts";
@@ -13,6 +21,7 @@ import { withDeadlinePush } from "./deadline.ts";
 import {
   CloneRefusedError,
   HarnessInstallFailedError,
+  HarnessLoginError,
   NoGithubLoginError,
   NoHarnessLoginError,
   ProviderError,
@@ -20,13 +29,16 @@ import {
   UploadFailedError,
 } from "./errors.ts";
 import { type GithubRepo, readGithubRepo } from "./github-repo.ts";
-import type { Harness } from "./harness.ts";
+import type { Harness, HarnessEntry, HarnessFileLogin } from "./harness.ts";
 import { harnessProfilePath } from "./harness-profile.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { readGithubLogins } from "./login/github-logins.ts";
 import {
+  makeHarnessLoginHome,
   readHarnessLoginFile,
   readHarnessLogins,
+  saveHarnessLoginFileLocked,
+  withLoginsLock,
 } from "./login/logins-file.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
@@ -75,6 +87,56 @@ export const copyHarnessProfile = Effect.fn(
   );
 });
 
+export const renewHarnessLoginFile = Effect.fn(
+  "harnessSandbox.renewHarnessLoginFile",
+)((entry: HarnessEntry & { readonly login: HarnessFileLogin }) =>
+  Effect.scoped(
+    withLoginsLock(
+      Effect.gen(function* () {
+        const { login, name } = entry;
+        const saved = yield* readHarnessLoginFile(name, login.file);
+        if (Option.isNone(saved))
+          return yield* new NoHarnessLoginError({
+            harness: name,
+            expired: false,
+            howToMake: login.howToMake,
+          });
+        const tool = yield* login.load;
+        const before = tool.renewedAt(saved.value);
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          Option.isSome(before) &&
+          before.value.getTime() >= now - Duration.toMillis(login.renewAfter)
+        )
+          return saved.value;
+        const bad = () =>
+          new HarnessLoginError({
+            harness: name,
+            reason: `could not renew the Harness login for ${name}; run proofbox harness login ${name}`,
+            nothing: "created",
+          });
+        return yield* Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const home = yield* makeHarnessLoginHome(name);
+          const path = join(home, login.file);
+          yield* fs.writeFileString(path, saved.value, { mode: 0o600 });
+          yield* tool.renew(home);
+          const text = yield* fs.readFileString(path);
+          const after = tool.renewedAt(text);
+          if (
+            Option.isNone(after) ||
+            (Option.isSome(before) &&
+              after.value.getTime() <= before.value.getTime())
+          )
+            return yield* bad();
+          yield* saveHarnessLoginFileLocked(name, login.file, text);
+          return text;
+        }).pipe(Effect.mapError(bad));
+      }),
+    ),
+  ),
+);
+
 export const checkHarnessCreate = Effect.fn(
   "harnessSandbox.checkHarnessCreate",
 )(function* (name: string, folder: string) {
@@ -84,15 +146,10 @@ export const checkHarnessCreate = Effect.fn(
     | { readonly _tag: "Env"; readonly token: Redacted.Redacted<string> }
     | { readonly _tag: "File"; readonly text: string };
   if (entry.login._tag === "File") {
-    const text = yield* readHarnessLoginFile(name, entry.login.file);
-    if (Option.isNone(text)) {
-      return yield* new NoHarnessLoginError({
-        harness: name,
-        expired: false,
-        howToMake: entry.login.howToMake,
-      });
-    }
-    harnessLogin = { _tag: "File", text: text.value };
+    harnessLogin = {
+      _tag: "File",
+      text: yield* renewHarnessLoginFile({ ...entry, login: entry.login }),
+    };
   } else {
     const saved = (yield* readHarnessLogins)[name];
     const expired =
