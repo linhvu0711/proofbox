@@ -290,7 +290,9 @@ const authLogin = Command.make(
   ({ provider, token, region }) => loginToProvider({ provider, token, region }),
 );
 
-const authStatus = Command.make("status", {}, () => showAuthStatus);
+const authStatus = Command.make("status", { json }, ({ json }) =>
+  showAuthStatus({ json }),
+);
 
 const authLogout = Command.make(
   "logout",
