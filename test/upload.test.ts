@@ -23,6 +23,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import {
   type CliEnv,
   cleanupEnvs,
@@ -80,6 +81,7 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
         hint: () => Effect.void,
       }),
     ),
+    Style.Default.pipe(Layer.provide(CliOutput.Test)),
   );
   return (
     keeper === "socket" ? KeeperClient.Default : KeeperClient.Direct

@@ -1,11 +1,10 @@
 import { FileSystem } from "@effect/platform";
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Option } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   idleDefault,
   MAX_LIFE_DEFAULT,
   parseSpan,
-  pushedDeadline,
   withDeadlinePush,
 } from "../deadline.ts";
 import {
@@ -28,6 +27,7 @@ import { formatSandboxId } from "../sandbox-id.ts";
 import { readEnvFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
+import { Style } from "../style.ts";
 import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
@@ -213,17 +213,29 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       ),
     );
     yield* output.out(`${id}\n`);
-    // The steps above push the Deadline past info.deadline, so the time it
-    // ends if idle is the one a push sets now.
-    const deadline = yield* pushedDeadline(info);
-    const now = new Date(yield* Clock.currentTimeMillis);
+    // The hints are for a person only, and the end time costs a Provider
+    // call, so a program pays for none of it.
+    const style = yield* Style;
+    if (!style.look) {
+      return;
+    }
     yield* progress.hint(`run a command: proofbox exec ${id} -- <command>`);
     if (liveViewOn(provider, options.os) !== undefined) {
       yield* progress.hint(`watch the screen: proofbox live ${id}`);
     }
     yield* progress.hint(`delete it: proofbox delete ${id}`);
+    // The steps above push the Deadline past info.deadline, so the time it
+    // ends if idle is the one the Provider holds now. A failed read leaves
+    // out only that time.
+    const now = new Date(yield* Clock.currentTimeMillis);
+    const latest = formatClock(info.maxLifeAt, now);
+    const current = yield* provider.get(sandbox).pipe(Effect.option);
     yield* progress.hint(
-      `ends at ${formatClock(deadline, now)} if idle, at ${formatClock(info.maxLifeAt, now)} at the latest`,
+      Option.match(current, {
+        onNone: () => `ends at ${latest} at the latest`,
+        onSome: (held) =>
+          `ends at ${formatClock(held.deadline, now)} if idle, at ${latest} at the latest`,
+      }),
     );
   },
   Effect.scoped,

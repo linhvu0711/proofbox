@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatClock } from "../src/format-time.ts";
 import {
   cleanupEnvs,
   keeperCannotStart,
@@ -243,6 +244,24 @@ describe("create", () => {
     const id = result.stdout.trim();
     expect(steady(result.stderr)).toBe(
       `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
+    );
+  });
+
+  it("with FORCE_COLOR=1 create says it ends at the Deadline the Provider holds", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    // Then: the idle end is the fake's own deadline file, in local time
+    const name = result.stdout.trim().replace(/^fake:/, "");
+    const seconds = readFileSync(join(env.root, name, "deadline"), "utf8");
+    const held = new Date(Number(seconds.trim()) * 1000);
+    expect(result.stderr).toContain(
+      `  ends at ${formatClock(held, new Date())} if idle, at `,
     );
   });
 
