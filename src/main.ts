@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --
 import { ValidationError } from "@effect/cli";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { Effect, Exit, Layer } from "effect";
-import { cli } from "./cli.ts";
+import { Console, Effect, Exit, Layer } from "effect";
+import { cli, commandWords } from "./cli.ts";
 import { CliOutput } from "./cli-output.ts";
 import { execInSandbox } from "./commands/exec.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
@@ -27,7 +27,22 @@ const providersLive = ProvidersLive.pipe(Layer.provide(NodeContext.layer));
 const program = Effect.gen(function* () {
   const output = yield* CliOutput;
   const style = yield* Style;
+  const defaultConsole = yield* Console.consoleWith(Effect.succeed);
+  const command = commandWords(process.argv.slice(2));
+  const words = command === "" ? "" : `${command} `;
+  const parserConsole = {
+    ...defaultConsole,
+    error: (...args: ReadonlyArray<unknown>) => {
+      const text = args.join(" ");
+      return output.err(
+        style.look
+          ? `${style.mark("bad")} ${text.trimEnd()}\n${style.paint("dim", `  see proofbox ${words}--help`)}\n`
+          : `${text}\n`,
+      );
+    },
+  };
   yield* dispatch(process.argv).pipe(
+    Effect.withConsole(parserConsole),
     Effect.catchAll((error) =>
       (ValidationError.isValidationError(error)
         ? Effect.void
