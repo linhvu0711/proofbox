@@ -181,23 +181,13 @@ export const checkHarnessCreate = Effect.fn(
   };
 });
 
-export const saveBackHarnessLoginFile = Effect.fn(
-  "harnessSandbox.saveBackHarnessLoginFile",
-)(function* (rawId: string, entry: HarnessEntry) {
+export const keepNewerHarnessLoginFile = Effect.fn(
+  "harnessSandbox.keepNewerHarnessLoginFile",
+)(function* (entry: HarnessEntry, text: string) {
   if (entry.login._tag !== "File") return;
   const { login, name } = entry;
-  const harness = yield* entry.load;
-  const result = yield* runTurnScript(rawId, [
-    "sh",
-    "-c",
-    'cat "$HOME/$1/$2" 2>/dev/null',
-    "sh",
-    harness.home,
-    login.file,
-  ]);
-  if (result.code !== 0) return;
   const tool = yield* login.load;
-  const renewed = tool.renewedAt(result.out);
+  const renewed = tool.renewedAt(text);
   if (Option.isNone(renewed)) return;
   yield* withLoginsLock(
     Effect.gen(function* () {
@@ -206,19 +196,36 @@ export const saveBackHarnessLoginFile = Effect.fn(
       if (
         !Option.getEquivalence(StringEquivalence.Equivalence)(
           tool.accountOf(saved.value),
-          tool.accountOf(result.out),
+          tool.accountOf(text),
         )
       )
         return;
       const before = Option.flatMap(saved, (text) => tool.renewedAt(text));
       if (
-        Option.isNone(before) ||
+        Option.isSome(before) &&
         renewed.value.getTime() > before.value.getTime()
       ) {
-        yield* saveHarnessLoginFileLocked(name, login.file, result.out);
+        yield* saveHarnessLoginFileLocked(name, login.file, text);
       }
     }),
   );
+});
+
+export const saveBackHarnessLoginFile = Effect.fn(
+  "harnessSandbox.saveBackHarnessLoginFile",
+)(function* (rawId: string, entry: HarnessEntry) {
+  if (entry.login._tag !== "File") return;
+  const harness = yield* entry.load;
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    'cat "$HOME/$1/$2" 2>/dev/null',
+    "sh",
+    harness.home,
+    entry.login.file,
+  ]);
+  if (result.code !== 0) return;
+  yield* keepNewerHarnessLoginFile(entry, result.out);
 });
 
 export const sendHarnessLoginFile = Effect.fn(

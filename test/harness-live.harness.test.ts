@@ -8,11 +8,10 @@ import { ConfigProvider, Effect, Either, Option, Redacted } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { Harnesses } from "../src/harness.ts";
 import { HarnessesLive } from "../src/harness-registry.ts";
+import { keepNewerHarnessLoginFile } from "../src/harness-sandbox.ts";
 import {
-  lastRefreshOf,
   readHarnessLoginFile,
   readHarnessLogins,
-  saveHarnessLoginFile,
 } from "../src/login/logins-file.ts";
 import { cleanupEnvs, runCli } from "./support/cli.ts";
 import { containers, docker, fixture } from "./support/harness.ts";
@@ -45,28 +44,6 @@ const registered = await Effect.runPromise(
     );
   }).pipe(Effect.provide(HarnessesLive), Effect.provide(NodeContext.layer)),
 );
-
-const copyBackFileLogin = Effect.fn("harnessLive.copyBackFileLogin")(function* (
-  name: string,
-  file: string,
-  home: string,
-) {
-  const fixture = yield* readHarnessLoginFile(name, file).pipe(
-    Effect.withConfigProvider(
-      ConfigProvider.fromMap(new Map([["HOME", home]])),
-    ),
-  );
-  const real = yield* readHarnessLoginFile(name, file);
-  if (Option.isNone(fixture) || Option.isNone(real)) return;
-  const newer = lastRefreshOf(fixture.value);
-  const older = lastRefreshOf(real.value);
-  if (
-    Option.isSome(newer) &&
-    Option.isSome(older) &&
-    newer.value.getTime() > older.value.getTime()
-  )
-    yield* saveHarnessLoginFile(name, file, fixture.value);
-});
 
 afterEach(() => {
   for (const container of containers.splice(0)) docker("rm", "-f", container);
@@ -114,11 +91,18 @@ for (const { entry, loaded, login } of registered) {
         code: wait.exitCode,
       }).toEqual({ firstLine: "done", code: 0 });
     } finally {
-      if (entry.login._tag === "File")
+      const login = entry.login;
+      if (login._tag === "File")
         await Effect.runPromise(
-          copyBackFileLogin(name, entry.login.file, settings.set.HOME).pipe(
-            Effect.provide(NodeContext.layer),
-          ),
+          Effect.gen(function* () {
+            const fixture = yield* readHarnessLoginFile(name, login.file).pipe(
+              Effect.withConfigProvider(
+                ConfigProvider.fromMap(new Map([["HOME", settings.set.HOME]])),
+              ),
+            );
+            if (Option.isSome(fixture))
+              yield* keepNewerHarnessLoginFile(entry, fixture.value);
+          }).pipe(Effect.provide(NodeContext.layer)),
         );
     }
   });
