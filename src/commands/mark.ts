@@ -1,6 +1,7 @@
 import { Duration, Effect } from "effect";
 import { BadMarkError, NoRecordingError, ProviderError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
+import { Progress } from "../progress.ts";
 import { RECORD_HELPER } from "./record.ts";
 
 export const setMark = Effect.fn("mark.setMark")(function* (options: {
@@ -36,4 +37,10 @@ export const setMark = Effect.fn("mark.setMark")(function* (options: {
       reason: `Recording helper failed: ${marked.stderr}`,
     });
   }
+  const progress = yield* Progress;
+  yield* progress.done(
+    options.wait
+      ? `Wait mark "${options.label}"`
+      : `Step mark "${options.label}"`,
+  );
 }, Effect.scoped);

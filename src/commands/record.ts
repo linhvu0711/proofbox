@@ -74,6 +74,11 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
       reason: `Recording helper failed: ${started.stderr}`,
     });
   }
+  const progress = yield* Progress;
+  yield* progress.done("Recording started");
+  yield* progress.hint(
+    `stop it with proofbox record stop ${id} --out proof.mp4`,
+  );
 }, Effect.scoped);
 
 // A Step mark's label, as the Caller gave it to `mark`: the helper keeps it
