@@ -101,7 +101,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `list [--json]` | Lists your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. |
 | `delete <id>` | Deletes a Sandbox. |
 
-Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`.
+Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`. `click`, `scroll`, and `drag` take `--glide` and `--settle`; `type` takes `--letter`, `--type-max`, and `--settle`; and `key` takes `--settle`. Each overrides that part of `--pace`.
 
 A screenshot shows what the app draws, not what a field holds. Chromium can draw a ligature pair such as `//` or `::` wrong when a ligature font (JetBrains Mono, Fira Code) is used and the pair is typed at human pace: `https://x.com` shows as `https: /x.com` while the field holds the right text. Before you report a typing bug, check the value the app got (a saved row, the request, the DOM).
 

@@ -6,9 +6,6 @@ export const pressKey = Effect.fn("key.pressKey")(function* (options: {
   readonly keys: string;
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
-  readonly glide?: string | undefined;
-  readonly letter?: string | undefined;
-  readonly typeMax?: string | undefined;
   readonly settle?: string | undefined;
 }) {
   const pace = yield* resolvePace(options);
