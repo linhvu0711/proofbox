@@ -18,6 +18,11 @@ export const HarnessesLive = Layer.effect(
         Effect.map((module) => module.makeClaudeHarness()),
       ),
     );
+    const codex = yield* Effect.cached(
+      importFor("codex", () => import("./codex-harness.ts")).pipe(
+        Effect.map((module) => module.makeCodexHarness()),
+      ),
+    );
     const codexLogin = yield* Effect.cached(
       importFor("codex", () => import("./codex-login.ts")).pipe(
         Effect.map((module) => module.makeCodexLogin("codex")),
@@ -61,13 +66,7 @@ export const HarnessesLive = Layer.effect(
             parts: ["AGENTS.md", "skills/"],
             leftOut: "config.toml, hooks, plugins, and MCP config",
           },
-          // Stand-in replaced by #194.
-          load: Effect.fail(
-            new HarnessError({
-              harness: "codex",
-              reason: "not built yet (#194)",
-            }),
-          ),
+          load: codex,
         },
       ],
     ]);

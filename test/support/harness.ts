@@ -69,6 +69,18 @@ export const docker = (...args: string[]) =>
   execFileSync("docker", args, { encoding: "utf8" });
 export const containers: string[] = [];
 
+export const fakeCodexLogin = () => {
+  const now = new Date();
+  const header = Buffer.from('{"alg":"none","typ":"JWT"}').toString(
+    "base64url",
+  );
+  const payload = Buffer.from(
+    `{"email":"x@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"plus","chatgpt_account_id":"acct"},"exp":${Math.floor(now.getTime() / 1000) + 86400}}`,
+  ).toString("base64url");
+  const token = `${header}.${payload}.`;
+  return `{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"${token}","access_token":"${token}","refresh_token":"bogus","account_id":"acct"},"last_refresh":"${now.toISOString()}"}`;
+};
+
 export const fixture = (
   harness = "claude",
   login: { token: string } | { file: string } = { token: "sk-ant-oat01-test" },

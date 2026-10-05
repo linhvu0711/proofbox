@@ -79,7 +79,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 This section is `feat/harness` work: it is not in `main` yet. A Sandbox made without `--harness` stays verify-only, as above.
 
-With `--harness`, proofbox installs a Harness in the Sandbox: Claude Code now, Codex later (#194). The Harness runs there with all permissions, writes code, commits, and pushes. The Caller still drives it from outside (ADR 0023, ADR 0024).
+With `--harness`, proofbox installs a Harness in the Sandbox: Claude Code or Codex. The Harness runs there with all permissions, writes code, commits, and pushes. The Caller still drives it from outside (ADR 0023, ADR 0024).
 
 Save the logins once per laptop:
 
