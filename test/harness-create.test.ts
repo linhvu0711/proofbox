@@ -123,17 +123,60 @@ it("create --harness prints a step for the clone and one for the install", async
   });
 });
 
-const profileFile = (env: CliEnv, path: string, content: string) => {
+const profileFile = (
+  env: CliEnv,
+  path: string,
+  content: string,
+  harness = "fake",
+) => {
   const root = join(
     env.env.HOME ?? "",
     ".config",
     "proofbox",
     "harness",
-    "fake",
+    harness,
   );
   mkdirSync(join(root, "skills", "s"), { recursive: true });
   writeFileSync(join(root, path), content);
 };
+
+it("a Harness profile auth.json never overwrites the login file", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const text = `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0}`;
+  harnessLoginFile(env, "fake-file", text);
+  profileFile(
+    env,
+    "auth.json",
+    '{"last_refresh":"2999-01-01T00:00:00Z","renewals":99}',
+    "fake-file",
+  );
+  profileFile(env, "AGENTS.md", "# rules\n", "fake-file");
+  const created = await runCli(env, createArgs(folder, "fake-file"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  const id = created.stdout.trim();
+  const file = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "cat",
+    ".fake-harness/auth.json",
+  ]);
+  const rules = await runCli(env, [
+    "exec",
+    id,
+    "--",
+    "cat",
+    ".fake-harness/AGENTS.md",
+  ]);
+  expect({
+    code: created.exitCode,
+    file: file.stdout,
+    rules: rules.stdout,
+  }).toEqual({ code: 0, file: text, rules: "# rules\n" });
+});
 
 it("create --harness copies the Harness profile into the Harness home", async () => {
   // Given

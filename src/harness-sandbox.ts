@@ -36,7 +36,7 @@ import { packFiles } from "./upload/pack.ts";
 
 export const copyHarnessProfile = Effect.fn(
   "harnessSandbox.copyHarnessProfile",
-)(function* (rawId: string, harness: Harness) {
+)(function* (rawId: string, harness: Harness, leaveOut: ReadonlyArray<string>) {
   const dir = yield* harnessProfilePath(harness.name);
   const fs = yield* FileSystem.FileSystem;
   const local = (error: PlatformError.PlatformError) =>
@@ -44,7 +44,9 @@ export const copyHarnessProfile = Effect.fn(
   if (!(yield* fs.exists(dir).pipe(Effect.mapError(local)))) return;
   const paths = (yield* fs
     .readDirectory(dir, { recursive: true })
-    .pipe(Effect.mapError(local))).sort();
+    .pipe(Effect.mapError(local)))
+    .filter((path) => !leaveOut.includes(path))
+    .sort();
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const info = yield* id.provider.get(id);

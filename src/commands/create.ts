@@ -265,7 +265,11 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           harness,
           Option.fromNullable(options.harnessVersion),
         );
-        yield* copyHarnessProfile(id, harness);
+        yield* copyHarnessProfile(
+          id,
+          harness,
+          check?.entry.login._tag === "File" ? [check.entry.login.file] : [],
+        );
         const code = yield* writeSandboxFile(
           id,
           sandboxFiles(provider, sandbox.name, options.os).harness,
