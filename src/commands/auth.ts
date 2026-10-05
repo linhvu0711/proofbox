@@ -25,6 +25,7 @@ import {
 } from "../login/logins-file.ts";
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
+import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
@@ -405,6 +406,12 @@ export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
         yield* output.out(
           `${provider.name}  ${statusLine(provider.name, status)}\n`,
         );
+        // An expired login already says what to run; a rejected env token
+        // is fixed in the env var, not by a login.
+        if (status.login === "none") {
+          const progress = yield* Progress;
+          yield* progress.hint(`log in: proofbox auth login ${provider.name}`);
+        }
       }
     }
     if (options.json) {

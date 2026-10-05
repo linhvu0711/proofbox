@@ -684,6 +684,34 @@ describe("auth", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("with FORCE_COLOR=1 auth status says how to log in to each Provider with no login", async () => {
+    // Given
+    const env = makeEnv();
+    const home = makeHome();
+    // When
+    const result = await runCli(env, ["auth", "status"], {
+      set: {
+        HOME: home,
+        FORCE_COLOR: "1",
+        NO_COLOR: "1",
+        NODE_NO_WARNINGS: "1",
+      },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    // Then
+    expect({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    }).toEqual({
+      stdout:
+        "docker  no login needed\nnamespace  not logged in\nfake  not logged in\n",
+      stderr:
+        "  log in: proofbox auth login namespace\n  log in: proofbox auth login fake\n",
+      exitCode: 0,
+    });
+  });
+
   it("auth status shows the saved login", async () => {
     // Given
     const env = makeEnv();
