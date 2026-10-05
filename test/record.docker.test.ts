@@ -642,8 +642,8 @@ describe("Recording and the Proof video", () => {
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
     await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
-    // The closing Step mark ends the mark's step at once, so the still
-    // after the Escape stays under 3 s and cannot take the Wait mark.
+    // When Step marks follow, step 0 keeps no tail Still part, so the
+    // still after the click cannot take the Wait mark.
     await runCli(env, ["mark", id, "step 1: done"]);
     await wait(1000);
     // When
