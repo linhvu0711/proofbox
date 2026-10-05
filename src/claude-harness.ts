@@ -1,6 +1,6 @@
 import { Either, Option, Schema } from "effect";
 import { formatTime } from "./format-time.ts";
-import type { Harness } from "./harness.ts";
+import type { Harness, HarnessStep } from "./harness.ts";
 import { shellJoin } from "./shell.ts";
 
 const Result = Schema.Struct({
@@ -110,21 +110,24 @@ export const makeClaudeHarness = (): Harness => ({
     }
     return { _tag: "NoEnd" };
   },
-  readStep: (event) => {
+  readSteps: (event) => {
     const decoded = Schema.decodeUnknownEither(
       Schema.parseJson(Schema.Union(Assistant, Init, ApiRetry, User)),
     )(event);
-    if (Either.isLeft(decoded)) return Option.none();
+    if (Either.isLeft(decoded)) return [];
     const message = decoded.right;
     if (message.type === "system")
-      return Option.some({
-        kind: "other",
-        text:
-          message.subtype === "init"
-            ? `started: ${message.model}`
-            : `API retry ${message.attempt}: ${message.error}`,
-      });
-    for (const value of [...message.message.content].reverse()) {
+      return [
+        {
+          kind: "other",
+          text:
+            message.subtype === "init"
+              ? `started: ${message.model}`
+              : `API retry ${message.attempt}: ${message.error}`,
+        },
+      ];
+    const steps: HarnessStep[] = [];
+    for (const value of message.message.content) {
       if (message.type === "user") {
         const block = Schema.decodeUnknownEither(ToolResult)(value);
         if (Either.isLeft(block)) continue;
@@ -140,24 +143,27 @@ export const makeClaudeHarness = (): Harness => ({
                     : [];
                 })
                 .join("\n");
-        return Option.some({
+        steps.push({
           kind: "result",
           text: `${tool.isError === true ? "error" : "result"}: ${content}`,
         });
+        continue;
       }
       const block = Schema.decodeUnknownEither(ActivityBlock)(value);
       if (Either.isLeft(block)) continue;
-      if (block.right.type === "text")
-        return Option.some({ kind: "said", text: block.right.text });
+      if (block.right.type === "text") {
+        steps.push({ kind: "said", text: block.right.text });
+        continue;
+      }
       const tool = block.right;
       const detail = ["command", "file_path", "pattern", "url", "description"]
         .map((key) => tool.input[key])
         .find((value): value is string => typeof value === "string");
-      return Option.some({
+      steps.push({
         kind: "tool",
         text: detail === undefined ? tool.name : `${tool.name}: ${detail}`,
       });
     }
-    return Option.none();
+    return steps;
   },
 });

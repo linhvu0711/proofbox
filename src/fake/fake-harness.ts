@@ -102,15 +102,14 @@ export const makeFakeHarness = (): Harness => ({
       return { _tag: "NoEnd" };
     }
   },
-  readStep: (event) => {
+  readSteps: (event) => {
     const said = Schema.decodeUnknownEither(Schema.parseJson(Said))(event);
-    if (Either.isRight(said))
-      return Option.some({ kind: "said", text: said.right.text });
+    if (Either.isRight(said)) return [{ kind: "said", text: said.right.text }];
     const activity = Schema.decodeUnknownEither(Schema.parseJson(Activity))(
       event,
     );
     return Either.isRight(activity)
-      ? Option.some({ kind: "tool", text: activity.right.text })
-      : Option.none();
+      ? [{ kind: "tool", text: activity.right.text }]
+      : [];
   },
 });

@@ -64,8 +64,8 @@ export interface Harness {
   }) => ReadonlyArray<string>;
   // Reads the whole JSON output, one event per line.
   readonly readEnd: (output: string) => TurnEnd;
-  // One line of the Harness's JSON output as one step; none when the line is no step.
-  readonly readStep: (event: string) => Option.Option<HarnessStep>;
+  // One line of the Harness's JSON output as its steps, in order; none when the line holds no step.
+  readonly readSteps: (event: string) => ReadonlyArray<HarnessStep>;
 }
 
 // What profile init copies from the Caller's laptop. home is relative to

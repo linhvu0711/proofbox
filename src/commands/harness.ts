@@ -150,12 +150,11 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       const harness = yield* entry.load;
       let last = "nothing yet";
       for (const line of turn.state.output.trimEnd().split("\n").reverse()) {
-        const step = harness.readStep(line);
-        if (
-          Option.isSome(step) &&
-          (step.value.kind === "said" || step.value.kind === "tool")
-        ) {
-          last = stepLine(step.value.text);
+        const step = [...harness.readSteps(line)]
+          .reverse()
+          .find((step) => step.kind === "said" || step.kind === "tool");
+        if (step !== undefined) {
+          last = stepLine(step.text);
           break;
         }
       }
@@ -209,9 +208,8 @@ export const logTurn = Effect.fn("harness.logTurn")(function* (
         yield* output.out(`${event}\n`);
         continue;
       }
-      const step = harness.readStep(event);
-      if (Option.isSome(step))
-        yield* output.out(`${formatTime(at)} ${stepLine(step.value.text)}\n`);
+      for (const step of harness.readSteps(event))
+        yield* output.out(`${formatTime(at)} ${stepLine(step.text)}\n`);
     }
     from += steps.events.length;
     if (steps.more) {
