@@ -18,6 +18,7 @@ import {
 import { formatTime } from "../format-time.ts";
 import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
+import { saveBackHarnessLoginFile } from "../harness-sandbox.ts";
 import {
   changeHarnessLogins,
   makeHarnessLoginHome,
@@ -195,6 +196,14 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
       return;
     }
     if (turn.state._tag === "Stopped") {
+      const entry = yield* harnessEntryFor(turn.harness.value);
+      yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+        Effect.catchAll((error) =>
+          output.err(
+            `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+          ),
+        ),
+      );
       yield* output.out("stopped\n");
       yield* output.setExitCode(TURN_EXIT.stopped);
       return;
@@ -204,6 +213,13 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
     const entry = yield* harnessEntryFor(turn.harness.value);
     const harness = yield* entry.load;
     const result = yield* settleTurn(rawId, turn.files, harness, turn.state);
+    yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+      Effect.catchAll((error) =>
+        output.err(
+          `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+        ),
+      ),
+    );
     yield* output.out(result.text);
     yield* output.setExitCode(result.code);
     return;

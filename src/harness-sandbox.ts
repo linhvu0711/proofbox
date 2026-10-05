@@ -43,6 +43,7 @@ import {
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
+import { runTurnScript } from "./turn.ts";
 import { MAX_SIZE_DEFAULT } from "./upload/max-size.ts";
 import { packFiles } from "./upload/pack.ts";
 
@@ -177,6 +178,38 @@ export const checkHarnessCreate = Effect.fn(
     harnessLogin,
     githubToken: githubLogin.token,
   };
+});
+
+export const saveBackHarnessLoginFile = Effect.fn(
+  "harnessSandbox.saveBackHarnessLoginFile",
+)(function* (rawId: string, entry: HarnessEntry) {
+  if (entry.login._tag !== "File") return;
+  const { login, name } = entry;
+  const harness = yield* entry.load;
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    'cat "$HOME/$1/$2" 2>/dev/null',
+    "sh",
+    harness.home,
+    login.file,
+  ]);
+  if (result.code !== 0) return;
+  const tool = yield* login.load;
+  const renewed = tool.renewedAt(result.out);
+  if (Option.isNone(renewed)) return;
+  yield* withLoginsLock(
+    Effect.gen(function* () {
+      const saved = yield* readHarnessLoginFile(name, login.file);
+      const before = Option.flatMap(saved, (text) => tool.renewedAt(text));
+      if (
+        Option.isNone(before) ||
+        renewed.value.getTime() > before.value.getTime()
+      ) {
+        yield* saveHarnessLoginFileLocked(name, login.file, result.out);
+      }
+    }),
+  );
 });
 
 export const sendHarnessLoginFile = Effect.fn(

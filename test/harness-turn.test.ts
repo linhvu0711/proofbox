@@ -8,7 +8,13 @@ import {
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { createArgs, fakeLogins, makeGithub } from "./support/harness.ts";
+import {
+  createArgs,
+  fakeLogins,
+  harnessLoginFile,
+  loginFile,
+  makeGithub,
+} from "./support/harness.ts";
 
 afterEach(cleanupEnvs);
 
@@ -23,6 +29,105 @@ const sandbox = async (env: CliEnv, extra: string[] = []) => {
   if (created.exitCode !== 0) throw new Error(created.stderr);
   return created.stdout.trim();
 };
+
+const fileSandbox = async (env: CliEnv) => {
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const text = `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0}`;
+  harnessLoginFile(env, "fake-file", text);
+  const created = await runCli(env, createArgs(folder, "fake-file"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  if (created.exitCode !== 0) throw new Error(created.stderr);
+  const saved = join(
+    env.env.HOME ?? "",
+    ".config",
+    "proofbox",
+    "harness-logins",
+    "fake-file",
+    "auth.json",
+  );
+  return { id: created.stdout.trim(), saved, text };
+};
+
+const setSandboxLogin = (env: CliEnv, id: string, text: string) =>
+  runCli(env, [
+    "exec",
+    id,
+    "--",
+    "sh",
+    "-c",
+    'printf %s "$1" > .fake-harness/auth.json',
+    "sh",
+    text,
+  ]);
+
+it("harness wait saves back a newer Sandbox login file", async () => {
+  const env = makeEnv();
+  const { id, saved } = await fileSandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":5}';
+  await setSandboxLogin(env, id, text);
+  const result = await runCli(env, ["harness", "wait", id]);
+  expect({ code: result.exitCode, saved: readFileSync(saved, "utf8") }).toEqual(
+    { code: 0, saved: text },
+  );
+});
+
+it("harness wait keeps the saved login when the Sandbox one is older", async () => {
+  const env = makeEnv();
+  const { id, saved, text } = await fileSandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  await setSandboxLogin(
+    env,
+    id,
+    '{"last_refresh":"2000-01-01T00:00:00Z","renewals":7}',
+  );
+  const result = await runCli(env, ["harness", "wait", id]);
+  expect({ code: result.exitCode, saved: readFileSync(saved, "utf8") }).toEqual(
+    { code: 0, saved: text },
+  );
+});
+
+it("harness wait after harness stop saves back a newer login file", async () => {
+  const env = makeEnv();
+  const { id, saved } = await fileSandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 30"]);
+  const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":6}';
+  await setSandboxLogin(env, id, text);
+  await runCli(env, ["harness", "stop", id]);
+  const result = await runCli(env, ["harness", "wait", id]);
+  expect({
+    code: result.exitCode,
+    stdout: result.stdout,
+    saved: readFileSync(saved, "utf8"),
+  }).toEqual({ code: 20, stdout: "stopped\n", saved: text });
+});
+
+it("two Sandboxes ending at once keep the newest login file", async () => {
+  const env = makeEnv();
+  const a = await fileSandbox(env);
+  const b = await fileSandbox(env);
+  await Promise.all(
+    [a.id, b.id].map((id) =>
+      runCli(env, ["harness", "prompt", id, "make hello.txt"]),
+    ),
+  );
+  const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":2}';
+  await setSandboxLogin(
+    env,
+    a.id,
+    '{"last_refresh":"2998-01-01T00:00:00Z","renewals":1}',
+  );
+  await setSandboxLogin(env, b.id, text);
+  const results = await Promise.all(
+    [a.id, b.id].map((id) => runCli(env, ["harness", "wait", id])),
+  );
+  expect({
+    codes: results.map((result) => result.exitCode),
+    saved: readFileSync(a.saved, "utf8"),
+  }).toEqual({ codes: [0, 0], saved: text });
+});
 
 it("harness wait prints done and the last message", async () => {
   // Given
