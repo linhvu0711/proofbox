@@ -218,10 +218,13 @@ const screenshot = Command.make(
   ({ id, out }) => takeScreenshot(id, out),
 );
 
-const list = Command.make(
-  "list",
-  { json: Options.boolean("json") },
-  ({ json }) => listSandboxes({ json }),
+// One `--json` for every command whose stdout has more than one field.
+const json = Options.boolean("json").pipe(
+  Options.withDescription("print JSON for scripts"),
+);
+
+const list = Command.make("list", { json }, ({ json }) =>
+  listSandboxes({ json }),
 );
 
 const del = Command.make(
