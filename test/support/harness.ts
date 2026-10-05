@@ -69,7 +69,10 @@ export const docker = (...args: string[]) =>
   execFileSync("docker", args, { encoding: "utf8" });
 export const containers: string[] = [];
 
-export const fixture = (harness = "claude") => {
+export const fixture = (
+  harness = "claude",
+  login: { token: string } | { file: string } = { token: "sk-ant-oat01-test" },
+) => {
   const env = makeEnv({ docker: true });
   const home = mkdtempSync(join(tmpdir(), "proofbox-harness-home-"));
   const folder = mkdtempSync(join(tmpdir(), "proofbox-harness-work-"));
@@ -77,11 +80,18 @@ export const fixture = (harness = "claude") => {
   trackTempDir(folder);
   const config = join(home, ".config", "proofbox");
   mkdirSync(join(config, "harness", harness), { recursive: true });
-  writeFileSync(
-    join(config, "harness-logins.json"),
-    JSON.stringify({ [harness]: { token: "sk-ant-oat01-test" } }),
-    { mode: 0o600 },
-  );
+  if ("file" in login)
+    harnessLoginFile(
+      { ...env, env: { ...env.env, HOME: home } },
+      harness,
+      login.file,
+    );
+  else
+    writeFileSync(
+      join(config, "harness-logins.json"),
+      JSON.stringify({ [harness]: { token: login.token } }),
+      { mode: 0o600 },
+    );
   writeFileSync(
     join(config, "github-logins.json"),
     JSON.stringify({ octocat: { token: "github_pat_test" } }),
