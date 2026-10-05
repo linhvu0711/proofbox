@@ -39,6 +39,27 @@ const readSaved = (home: string): unknown =>
   JSON.parse(readFileSync(loginsFile(home), "utf8"));
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const codexLoginText =
+  '{"auth_mode":"chatgpt","last_refresh":"2026-10-01T10:00:00Z"}';
+const savedCodexPath = (home: string) =>
+  join(home, ".config", "proofbox", "harness-logins", "codex", "auth.json");
+const makeCodex = (script?: string) => {
+  const bin = mkdtempSync(join(tmpdir(), "proofbox-codex-"));
+  trackTempDir(bin);
+  writeFileSync(
+    join(bin, "codex"),
+    script ??
+      `#!/bin/sh
+set -eu
+printf '%s\\n%s\\n' "$*" "$CODEX_HOME" >> "${bin}/log"
+printf '\\033[94mhttps://auth.openai.com/codex/device\\033[0m\\n\\n\\033[94mABCD-12345\\033[0m\\n'
+printf '%s' '${codexLoginText}' > "$CODEX_HOME/auth.json"
+`,
+    { mode: 0o755 },
+  );
+  return { bin, path: `${bin}:${process.env.PATH}` };
+};
+
 afterEach(cleanupEnvs);
 
 describe("Harness logins", () => {
@@ -133,7 +154,7 @@ describe("Harness logins", () => {
     // Given
     const env = makeEnv();
     const home = makeHome(
-      '{"claude":{"token":"sk-ant-oat01-abcd","expiresAt":"2999-01-01T00:00:00.000Z"},"codex":{"token":"sk-proj-wxyz"}}',
+      '{"claude":{"token":"sk-ant-oat01-abcd","expiresAt":"2999-01-01T00:00:00.000Z"}}',
     );
     // When
     const result = await runCli(env, ["auth", "status"], {
@@ -142,7 +163,7 @@ describe("Harness logins", () => {
     });
     // Then
     expect(result.stdout).toBe(
-      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness claude  token …abcd, expires 2999-01-01T00:00:00Z, saved login\nharness codex  API key …wxyz, saved login\n",
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness claude  token …abcd, expires 2999-01-01T00:00:00Z, saved login\n",
     );
     expect(result.exitCode).toBe(0);
   });
@@ -169,6 +190,7 @@ describe("Harness logins", () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
+    const binary = makeCodex();
     const claude = join(home, ".claude");
     const codex = join(home, ".codex");
     mkdirSync(claude);
@@ -184,8 +206,7 @@ describe("Harness logins", () => {
         set: { HOME: home },
       });
       const loginCodex = await runCli(env, ["harness", "login", "codex"], {
-        input: "sk-proj-wxyz\n",
-        set: { HOME: home },
+        set: { HOME: home, PATH: binary.path },
       });
       const status = await runCli(env, ["auth", "status"], {
         set: { HOME: home },
@@ -198,9 +219,7 @@ describe("Harness logins", () => {
         status.exitCode,
       ]).toEqual([0, 0, 0]);
       expect(status.stdout).toContain("harness claude  token …abcd, expires ");
-      expect(status.stdout).toContain(
-        "harness codex  API key …wxyz, saved login\n",
-      );
+      expect(readFileSync(savedCodexPath(home), "utf8")).toBe(codexLoginText);
       expect(statSync(claude).mode & 0o777).toBe(0o000);
       expect(statSync(codex).mode & 0o777).toBe(0o000);
     } finally {
@@ -230,39 +249,66 @@ describe("Harness logins", () => {
     expect(existsSync(join(home, ".config", "proofbox"))).toBe(false);
   });
 
-  it("harness login codex with nothing on stdin names the OpenAI API keys page and saves nothing", async () => {
+  it("harness login codex with no codex on the PATH says how to install it and saves nothing", async () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
     // When
     const result = await runCli(env, ["harness", "login", "codex"], {
-      input: "",
-      set: { HOME: home },
+      set: { HOME: home, PATH: "/usr/bin:/bin" },
     });
     // Then
     expect(result.stderr).toBe(
-      "No API key on stdin. Make one at https://platform.openai.com/api-keys, then run: echo <key> | proofbox harness login codex\n",
+      "codex is not installed on this machine; install it with: curl -fsSL https://chatgpt.com/codex/install.sh | sh. Nothing was saved.\n",
     );
     expect(result.exitCode).toBe(125);
-    expect(existsSync(join(home, ".config", "proofbox"))).toBe(false);
+    expect(
+      existsSync(join(home, ".config", "proofbox", "harness-logins")),
+    ).toBe(false);
   });
 
-  it("harness login codex saves the API key, owner-only", async () => {
+  it("harness login codex shows the code and the link and saves auth.json owner-only", async () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
+    const binary = makeCodex();
     // When
     const result = await runCli(env, ["harness", "login", "codex"], {
       input: "sk-proj-wxyz\n",
-      set: { HOME: home },
+      set: { HOME: home, PATH: binary.path },
     });
     // Then
     expect(result.stderr).toBe(
-      "Saved Harness login for codex with API key …wxyz.\n",
+      "https://auth.openai.com/codex/device\nABCD-12345\nSaved Harness login for codex with ChatGPT plan login.\n",
     );
     expect(result.exitCode).toBe(0);
-    expect(statSync(loginsFile(home)).mode & 0o777).toBe(0o600);
-    expect(readSaved(home)).toEqual({ codex: { token: "sk-proj-wxyz" } });
+    expect(statSync(savedCodexPath(home)).mode & 0o777).toBe(0o600);
+    expect(readFileSync(savedCodexPath(home), "utf8")).toBe(codexLoginText);
+    const [args, homeUsed] = readFileSync(join(binary.bin, "log"), "utf8")
+      .trimEnd()
+      .split("\n");
+    expect(args).toBe(
+      '-c cli_auth_credentials_store="file" login --device-auth',
+    );
+    expect(homeUsed).toMatch(
+      new RegExp(`^${home}/.config/proofbox/codex-login-`),
+    );
+    expect(existsSync(homeUsed ?? "")).toBe(false);
+    expect(existsSync(loginsFile(home))).toBe(false);
+  });
+
+  it("harness login codex that fails saves nothing", async () => {
+    const env = makeEnv();
+    const home = makeHome();
+    const binary = makeCodex("#!/bin/sh\nexit 1\n");
+    const result = await runCli(env, ["harness", "login", "codex"], {
+      set: { HOME: home, PATH: binary.path },
+    });
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "codex login failed (exit code 1). Nothing was saved.\n",
+    );
+    expect(existsSync(savedCodexPath(home))).toBe(false);
   });
 
   it("harness login foo names the known Harnesses", async () => {
@@ -303,6 +349,7 @@ describe("Harness logins", () => {
     // Given
     const env = makeEnv();
     const home = makeHome();
+    const binary = makeCodex();
     // When
     const results = await Promise.all([
       runCli(env, ["harness", "login", "claude"], {
@@ -310,16 +357,16 @@ describe("Harness logins", () => {
         set: { HOME: home },
       }),
       runCli(env, ["harness", "login", "codex"], {
-        input: "sk-proj-wxyz\n",
-        set: { HOME: home },
+        set: { HOME: home, PATH: binary.path },
       }),
     ]);
     // Then
     expect(results.map((result) => result.exitCode)).toEqual([0, 0]);
     expect(readSaved(home)).toMatchObject({
       claude: { token: "sk-ant-oat01-abcd" },
-      codex: { token: "sk-proj-wxyz" },
     });
+    expect(readSaved(home)).not.toHaveProperty("codex");
+    expect(existsSync(savedCodexPath(home))).toBe(true);
   });
 
   it("harness login claude saves the token, owner-only", async () => {

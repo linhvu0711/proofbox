@@ -57,7 +57,7 @@ What proofbox keeps on the Caller's machine so it can act for one Provider accou
 _Avoid_: credential, auth, session, API key
 
 **Harness login**:
-The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token` or a Codex API key. It goes into a Sandbox made with `--harness`, after any Snapshot is saved, the same way a Secret does, so no Snapshot holds it. Not the Caller's own laptop login of that Harness, which proofbox never touches.
+The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token`, sent as an env value, or a Codex ChatGPT plan login, an `auth.json` file sent into the Harness home. It goes into a Sandbox made with `--harness`, after any Snapshot is saved, the same way a Secret does, so no Snapshot holds it. proofbox renews a Codex login older than 7 days before it sends it, and keeps a newer one the Sandbox renewed when a Turn ends or on delete. Not the Caller's own laptop login of that Harness, which proofbox never touches.
 _Avoid_: model key, credential, auth file
 
 **GitHub login**:

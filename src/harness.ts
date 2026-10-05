@@ -8,8 +8,8 @@ export type HarnessLogin = HarnessEnvLogin | HarnessFileLogin;
 export interface HarnessEnvLogin {
   readonly _tag: "Env";
   readonly envName: string;
-  readonly what: "token" | "API key";
-  readonly placeholder: "<token>" | "<key>";
+  readonly what: "token";
+  readonly placeholder: "<token>";
   readonly howToMake: string;
   readonly lifetime: Option.Option<Duration.Duration>;
 }

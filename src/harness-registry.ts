@@ -18,6 +18,11 @@ export const HarnessesLive = Layer.effect(
         Effect.map((module) => module.makeClaudeHarness()),
       ),
     );
+    const codexLogin = yield* Effect.cached(
+      importFor("codex", () => import("./codex-login.ts")).pipe(
+        Effect.map((module) => module.makeCodexLogin("codex")),
+      ),
+    );
     const harnesses = new Map<string, HarnessEntry>([
       [
         "claude",
@@ -44,12 +49,12 @@ export const HarnessesLive = Layer.effect(
         {
           name: "codex",
           login: {
-            _tag: "Env",
-            envName: "CODEX_API_KEY",
-            what: "API key",
-            placeholder: "<key>",
-            howToMake: "Make one at https://platform.openai.com/api-keys",
-            lifetime: Option.none(),
+            _tag: "File",
+            what: "ChatGPT plan login",
+            file: "auth.json",
+            howToMake: "It signs in with your ChatGPT plan",
+            renewAfter: Duration.days(7),
+            load: codexLogin,
           },
           profile: {
             home: ".codex",

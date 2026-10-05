@@ -712,8 +712,8 @@ export class NoHarnessTokenError extends Data.TaggedError(
   "NoHarnessTokenError",
 )<{
   readonly harness: string;
-  readonly what: "token" | "API key";
-  readonly placeholder: "<token>" | "<key>";
+  readonly what: "token";
+  readonly placeholder: "<token>";
   readonly howToMake: string;
 }> {
   get message() {
