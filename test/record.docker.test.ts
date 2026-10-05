@@ -6,7 +6,7 @@ import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { startNoise } from "./support/noise.ts";
+import { startFlicker, startNoise } from "./support/noise.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -455,18 +455,10 @@ describe("Recording and the Proof video", () => {
     const created = await create(env);
     const id = created.stdout.trim();
     const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    const flicker = await startFlicker(env, id);
+    expect(flicker.exitCode).toBe(0);
     await runCli(env, ["record", "start", id]);
     await runCli(env, ["mark", id, "step 1: open the menu"]);
-    await runCli(env, [
-      "click",
-      id,
-      "720",
-      "450",
-      "--button",
-      "right",
-      "--pace",
-      "fast",
-    ]);
     await wait(1000);
     const marked = await runCli(env, [
       "mark",
@@ -475,9 +467,8 @@ describe("Recording and the Proof video", () => {
       "--wait",
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
-    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
-    // The closing Step mark ends step 1 at once, so the still after the
-    // Escape stays under 3 s and cannot take the Wait mark.
+    // The flicker page changes the screen every frame, so step 1 has no
+    // Still part, however slow the calls are.
     await runCli(env, ["mark", id, "step 2: done"]);
     await wait(1000);
     // When
@@ -521,8 +512,8 @@ describe("Recording and the Proof video", () => {
     ]);
     expect(marked.exitCode, marked.stderr).toBe(0);
     await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
-    // The closing Step mark ends the mark's step at once, so the still
-    // after the Escape stays under 3 s and cannot take the Wait mark.
+    // When Step marks follow, step 0 keeps no tail Still part, so the
+    // still after the click cannot take the Wait mark.
     await runCli(env, ["mark", id, "step 1: done"]);
     await wait(1000);
     // When
