@@ -79,29 +79,31 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 | Command | What it does |
 | --- | --- |
-| `auth login <provider>` | Logs in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
-| `auth status [--json]` | Shows each Provider's login: account, region, expiry, and where it comes from. `--json` prints one line: an array with one item per Provider, `{"provider":…,"login":…}`, where `login` is `not-needed`, `none`, `ok`, `expired`, or `rejected`, plus `from`, `account`, `region`, `expires`, `env`, and `tokenEnd` when known. |
-| `auth logout <provider>` | Deletes the Sandboxes this machine started, prints their ids, then removes the saved login. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
-| `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
-| `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
-| `upload <id> <folder>` | Sends the Work folder again. Only changed and new files go; deleted files are removed. `--max-size` as on `create`. |
-| `exec <id> -- <command>...` | Runs a command and passes its exit code through unchanged. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
-| `screenshot <id> --out <file>` | Saves a PNG of the screen at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |
-| `click <id> <x> <y>` | Clicks. `--button left\|middle\|right`. |
-| `type <id> <text>` | Types text. |
-| `key <id> <keys>` | Presses keys, for example `ctrl+s` or `Return`. |
-| `scroll <id> <x> <y> <up\|down\|left\|right> [steps]` | Scrolls. |
-| `drag <id> <x1> <y1> <x2> <y2>` | Drags. |
-| `mark <id> <label>` | Sets a Step mark during a Recording. |
-| `mark <id> <label> --wait` | Sets a Wait mark: the Still part it falls in, or the next one in its step, keeps its "» N s later" label with the reason after it. It starts no step (ADR 0018). |
-| `record start <id>` | Starts a Recording. |
-| `record stop <id> --out <file> [--json]` | Builds the Proof video and a Proof screenshot per Step mark, and downloads them. Each Proof screenshot is at the size the Caller clicks in, as `screenshot` gives. `--max-size 10MB` sets the Size limit. `--json` prints `{"video":…,"screenshots":[{"step":1,"label":…,"path":…}]}`; each label is the text given to `mark`. |
-| `record stop <id> --discard [--json]` | Ends a Recording with no Proof video, so a failed run never becomes proof (ADR 0013). `--json` prints `{"discarded":true,"raw":…}`. |
-| `live <id> [--json]` | Prints the address and password of a Live view, so a person can watch and control the screen. `--json` prints `{"address":…,"password":…}` once, then stays open until Ctrl-C. |
-| `list [--json]` | Lists your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. `--json` prints one line of JSON: an array of `{id, os, base, deadline, maxLife}`, `base` only when set. |
-| `delete <id>` | Deletes a Sandbox. |
+| `auth login <provider>` | Log in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
+| `auth status [--json]` | Show each Provider's login. It includes the account, region, expiry, and where it comes from. `--json` prints one line: an array with one item per Provider, `{"provider":…,"login":…}`, where `login` is `not-needed`, `none`, `ok`, `expired`, or `rejected`, plus `from`, `account`, `region`, `expires`, `env`, and `tokenEnd` when known. |
+| `auth logout <provider>` | Delete this machine's Sandboxes on a Provider, then remove its login. Prints their ids. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
+| `auth token <provider>` | Make a token for CI from the browser login and print it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
+| `create --os linux\|macos` | Create a Sandbox and print its Sandbox id. Flags: `--provider docker\|namespace`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
+| `upload <id> <folder>` | Send the Work folder to a Sandbox again; only changed and new files go. Deleted files are removed. `--max-size` as on `create`. |
+| `exec <id> -- <command>...` | Run a command in a Sandbox and pass its exit code through. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
+| `screenshot <id> --out <file>` | Save a PNG of the Sandbox screen. It is at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |
+| `click <id> <x> <y>` | Click at a spot on the Sandbox screen. `--button left\|middle\|right`. |
+| `type <id> <text>` | Type text on the Sandbox screen. |
+| `key <id> <keys>` | Press keys on the Sandbox screen. For example `ctrl+s` or `Return`. |
+| `scroll <id> <x> <y> <up\|down\|left\|right> [steps]` | Scroll at a spot on the Sandbox screen. |
+| `drag <id> <x1> <y1> <x2> <y2>` | Drag from one spot on the Sandbox screen to another. |
+| `mark <id> <label>` | Set a Step mark, or a Wait mark with --wait, during a Recording. |
+| `mark <id> <label> --wait` | Set a Step mark, or a Wait mark with --wait, during a Recording. The Still part it falls in, or the next one in its step, keeps its "» N s later" label with the reason after it. It starts no step (ADR 0018). |
+| `record start <id>` | Start a Recording of the Sandbox screen. |
+| `record stop <id> --out <file> [--json]` | End the Recording and download its Proof video, or discard it. Also builds and downloads a Proof screenshot per Step mark. Each Proof screenshot is at the size the Caller clicks in, as `screenshot` gives. `--max-size 10MB` sets the Size limit. `--json` prints `{"video":…,"screenshots":[{"step":1,"label":…,"path":…}]}`; each label is the text given to `mark`. |
+| `record stop <id> --discard [--json]` | End the Recording and download its Proof video, or discard it. With `--discard` there is no Proof video, so a failed run never becomes proof (ADR 0013). `--json` prints `{"discarded":true,"raw":…}`. |
+| `live <id> [--json]` | Print the address and password of a Sandbox's Live view. A person can watch and control the screen. `--json` prints `{"address":…,"password":…}` once, then stays open until Ctrl-C. |
+| `list [--json]` | List your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. `--json` prints one line of JSON: an array of `{id, os, base, deadline, maxLife}`, `base` only when set. |
+| `delete <id>` | Delete a Sandbox. |
 
-Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`. `click`, `scroll`, and `drag` take `--glide` and `--settle`; `type` takes `--letter`, `--type-max`, and `--settle`; and `key` takes `--settle`. Each overrides that part of `--pace`.
+`proofbox <command> --help` describes each argument and option, with its format, default, and an example.
+
+Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`. `click`, `scroll`, and `drag` take `--glide` and `--settle`; `type` takes `--letter`, `--type-max`, and `--settle`; and `key` takes `--settle`. Each overrides that part of `--pace`. With `--pace human` the defaults are `--glide 400ms`, `--letter 80ms`, `--type-max 3000ms`, `--settle 700ms`.
 
 `--json` on `list`, `auth status`, `record stop`, and `live` prints one line of JSON on stdout. On a failure stdout stays empty, the error goes to stderr, and proofbox exits 125.
 

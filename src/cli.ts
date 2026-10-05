@@ -23,6 +23,16 @@ import { uploadWorkFolder } from "./commands/upload.ts";
 import { KNOWN_REGIONS } from "./namespace/regions.ts";
 import { parseMaxSize } from "./upload/max-size.ts";
 
+const sandboxId = Args.text({ name: "id" }).pipe(
+  Args.withDescription("a Sandbox id, for example ns:us:abc123"),
+);
+const workMaxSize = Options.text("max-size").pipe(
+  Options.withDescription(
+    "the most the Work folder upload may send, MB or GB, for example 800MB; default 500MB",
+  ),
+  Options.optional,
+);
+
 export const makeCommand = (providers: ReadonlyArray<string>) => {
   const providerArg = Args.choice(
     providers.map((name): [string, string] => [name, name]),
@@ -32,15 +42,52 @@ export const makeCommand = (providers: ReadonlyArray<string>) => {
   const create = Command.make(
     "create",
     {
-      os: Options.choice("os", ["linux", "macos"]),
-      provider: Options.choice("provider", providers).pipe(Options.optional),
-      idle: Options.text("idle").pipe(Options.optional),
-      maxLife: Options.text("max-life").pipe(Options.optional),
-      work: Options.text("work").pipe(Options.optional),
-      setup: Options.text("setup").pipe(Options.optional),
-      envFile: Options.text("env-file").pipe(Options.optional),
-      maxSize: Options.text("max-size").pipe(Options.optional),
-      size: Options.text("size").pipe(Options.optional),
+      os: Options.choice("os", ["linux", "macos"]).pipe(
+        Options.withDescription("the OS of the Sandbox"),
+      ),
+      provider: Options.choice("provider", providers).pipe(
+        Options.withDescription(
+          "the Provider that makes the Sandbox; default from ~/.config/proofbox/config, else namespace",
+        ),
+        Options.optional,
+      ),
+      idle: Options.text("idle").pipe(
+        Options.withDescription(
+          "delete the Sandbox after this long with no command, for example 15m; default 15m on Linux, 5m on macOS",
+        ),
+        Options.optional,
+      ),
+      maxLife: Options.text("max-life").pipe(
+        Options.withDescription(
+          "the Max life: delete the Sandbox this long after create, with s, m, or h, for example 2h; default 3h",
+        ),
+        Options.optional,
+      ),
+      work: Options.text("work").pipe(
+        Options.withDescription(
+          "the folder to upload as the Work folder, for example .; default none",
+        ),
+        Options.optional,
+      ),
+      setup: Options.text("setup").pipe(
+        Options.withDescription(
+          "the Setup script to run after the upload, for example setup-linux.sh; needs --work",
+        ),
+        Options.optional,
+      ),
+      envFile: Options.text("env-file").pipe(
+        Options.withDescription(
+          "a file of NAME=VALUE lines to send as Secrets, for example app.env; default none",
+        ),
+        Options.optional,
+      ),
+      maxSize: workMaxSize,
+      size: Options.text("size").pipe(
+        Options.withDescription(
+          "the Sandbox size as CPUxRAM_GB, for example 8x16; default 4x8 on Linux, 4x7 on macOS on namespace, no limit on docker",
+        ),
+        Options.optional,
+      ),
     },
     ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
       createSandbox({
@@ -54,37 +101,69 @@ export const makeCommand = (providers: ReadonlyArray<string>) => {
         maxSize: Option.getOrUndefined(maxSize),
         size: Option.getOrUndefined(size),
       }),
-  );
+  ).pipe(Command.withDescription("create a Sandbox and print its Sandbox id"));
 
   const authLogin = Command.make(
     "login",
     {
-      provider: providerArg,
-      token: Options.boolean("token"),
-      region: Options.choice("region", KNOWN_REGIONS).pipe(Options.optional),
+      provider: providerArg.pipe(
+        Args.withDescription("the Provider to log in to"),
+      ),
+      token: Options.boolean("token").pipe(
+        Options.withDescription(
+          "read a token from stdin instead of opening the browser",
+        ),
+      ),
+      region: Options.choice("region", KNOWN_REGIONS).pipe(
+        Options.withDescription("where new Sandboxes go; default us"),
+        Options.optional,
+      ),
     },
     ({ provider, token, region }) =>
       loginToProvider({ provider, token, region }),
-  );
+  ).pipe(Command.withDescription("log in to a Provider"));
 
   const authLogout = Command.make(
     "logout",
-    { provider: providerArg },
+    {
+      provider: providerArg.pipe(
+        Args.withDescription("the Provider to log out of"),
+      ),
+    },
     ({ provider }) => logoutOfProvider(provider),
+  ).pipe(
+    Command.withDescription(
+      "delete this machine's Sandboxes on a Provider, then remove its login",
+    ),
   );
 
   const authToken = Command.make(
     "token",
     {
-      provider: providerArg,
-      name: Options.text("name").pipe(Options.optional),
-      expires: Options.text("expires").pipe(Options.optional),
+      provider: providerArg.pipe(
+        Args.withDescription("the Provider that makes the token"),
+      ),
+      name: Options.text("name").pipe(
+        Options.withDescription("the token's name, for example ci; required"),
+        Options.optional,
+      ),
+      expires: Options.text("expires").pipe(
+        Options.withDescription(
+          "when the token ends, with h, d, or y, at most 1y, for example 30d; required",
+        ),
+        Options.optional,
+      ),
     },
     ({ provider, name, expires }) =>
       makeRobotToken({ provider, name, expires }),
+  ).pipe(
+    Command.withDescription(
+      "make a token for CI from the browser login and print it once",
+    ),
   );
 
   const auth = Command.make("auth").pipe(
+    Command.withDescription("log in to Providers and manage their logins"),
     Command.withSubcommands([authLogin, authStatus, authLogout, authToken]),
   );
 
@@ -115,30 +194,67 @@ export const makeCommand = (providers: ReadonlyArray<string>) => {
 const exec = Command.make(
   "exec",
   {
-    id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
+    id: sandboxId,
+    command: Args.text({ name: "command" }).pipe(
+      Args.withDescription(
+        "the command and its arguments after --, for example -- npm test",
+      ),
+      Args.atLeast(1),
     ),
-    command: Args.text({ name: "command" }).pipe(Args.atLeast(1)),
   },
   ({ id, command }) => execInSandbox(id, command),
+).pipe(
+  Command.withDescription(
+    "run a command in a Sandbox and pass its exit code through",
+  ),
 );
 
 const actionOptions = {
-  screenshot: Options.text("screenshot").pipe(Options.optional),
+  screenshot: Options.text("screenshot").pipe(
+    Options.withDescription(
+      "save the screen after the action to this PNG file, for example after.png; default none",
+    ),
+    Options.optional,
+  ),
   pace: Options.choice("pace", ["human", "fast"]).pipe(
     Options.withDefault("human" as const),
+    Options.withDescription(
+      "how fast the action moves: human like a person, fast at once; default human",
+    ),
   ),
 };
 
-const glide = Options.text("glide").pipe(Options.optional);
-const letter = Options.text("letter").pipe(Options.optional);
-const typeMax = Options.text("type-max").pipe(Options.optional);
-const settle = Options.text("settle").pipe(Options.optional);
+const glide = Options.text("glide").pipe(
+  Options.withDescription(
+    "how long the pointer takes to move, ms or s, for example 200ms; default 400ms with --pace human, 0ms with fast",
+  ),
+  Options.optional,
+);
+const letter = Options.text("letter").pipe(
+  Options.withDescription(
+    "the wait between letters, ms or s, for example 40ms; default 80ms with --pace human, 12ms with fast",
+  ),
+  Options.optional,
+);
+const typeMax = Options.text("type-max").pipe(
+  Options.withDescription(
+    "the most time all the typing may take, ms or s, for example 5s; default 3000ms",
+  ),
+  Options.optional,
+);
+const settle = Options.text("settle").pipe(
+  Options.withDescription(
+    "the wait after the action, ms or s, for example 1s; default 700ms with --pace human, 0ms with fast",
+  ),
+  Options.optional,
+);
 
 // @effect/cli gives unknown flags to optional [steps]; use its unknown-argument line.
 // The schema is the one Args.integer uses.
 const scrollSteps = Args.text({ name: "steps" }).pipe(
-  Args.withDescription("An integer, 3 by default."),
+  Args.withDescription(
+    "how many wheel steps, a whole number, for example 5; default 3",
+  ),
   Args.mapEffect((value) =>
     Schema.decodeUnknown(Schema.compose(Schema.NumberFromString, Schema.Int))(
       value,
@@ -158,11 +274,20 @@ const scrollSteps = Args.text({ name: "steps" }).pipe(
 const click = Command.make(
   "click",
   {
-    id: Args.text({ name: "id" }),
-    x: Args.integer({ name: "x" }),
-    y: Args.integer({ name: "y" }),
+    id: sandboxId,
+    x: Args.integer({ name: "x" }).pipe(
+      Args.withDescription(
+        "pixels from the left edge, as in a screenshot, for example 640",
+      ),
+    ),
+    y: Args.integer({ name: "y" }).pipe(
+      Args.withDescription(
+        "pixels from the top edge, as in a screenshot, for example 360",
+      ),
+    ),
     button: Options.choice("button", ["left", "middle", "right"]).pipe(
       Options.withDefault("left"),
+      Options.withDescription("the mouse button; default left"),
     ),
     ...actionOptions,
     glide,
@@ -179,13 +304,15 @@ const click = Command.make(
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),
-);
+).pipe(Command.withDescription("click at a spot on the Sandbox screen"));
 
 const type = Command.make(
   "type",
   {
-    id: Args.text({ name: "id" }),
-    text: Args.text({ name: "text" }),
+    id: sandboxId,
+    text: Args.text({ name: "text" }).pipe(
+      Args.withDescription("the text to type, for example Hello"),
+    ),
     ...actionOptions,
     letter,
     typeMax,
@@ -201,13 +328,17 @@ const type = Command.make(
       typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
-);
+).pipe(Command.withDescription("type text on the Sandbox screen"));
 
 const key = Command.make(
   "key",
   {
-    id: Args.text({ name: "id" }),
-    keys: Args.text({ name: "keys" }),
+    id: sandboxId,
+    keys: Args.text({ name: "keys" }).pipe(
+      Args.withDescription(
+        "the keys, with + between keys held together, for example ctrl+s or Return",
+      ),
+    ),
     ...actionOptions,
     settle,
   },
@@ -219,14 +350,22 @@ const key = Command.make(
       pace,
       settle: Option.getOrUndefined(settle),
     }),
-);
+).pipe(Command.withDescription("press keys on the Sandbox screen"));
 
 const scroll = Command.make(
   "scroll",
   {
-    id: Args.text({ name: "id" }),
-    x: Args.integer({ name: "x" }),
-    y: Args.integer({ name: "y" }),
+    id: sandboxId,
+    x: Args.integer({ name: "x" }).pipe(
+      Args.withDescription(
+        "pixels from the left edge, as in a screenshot, for example 640",
+      ),
+    ),
+    y: Args.integer({ name: "y" }).pipe(
+      Args.withDescription(
+        "pixels from the top edge, as in a screenshot, for example 360",
+      ),
+    ),
     direction: Args.choice<"up" | "down" | "left" | "right">(
       [
         ["up", "up"],
@@ -235,7 +374,7 @@ const scroll = Command.make(
         ["right", "right"],
       ],
       { name: "direction" },
-    ),
+    ).pipe(Args.withDescription("the way to scroll")),
     steps: scrollSteps,
     ...actionOptions,
     glide,
@@ -253,16 +392,32 @@ const scroll = Command.make(
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),
-);
+).pipe(Command.withDescription("scroll at a spot on the Sandbox screen"));
 
 const drag = Command.make(
   "drag",
   {
-    id: Args.text({ name: "id" }),
-    x1: Args.integer({ name: "x1" }),
-    y1: Args.integer({ name: "y1" }),
-    x2: Args.integer({ name: "x2" }),
-    y2: Args.integer({ name: "y2" }),
+    id: sandboxId,
+    x1: Args.integer({ name: "x1" }).pipe(
+      Args.withDescription(
+        "where the drag starts, pixels from the left edge, for example 100",
+      ),
+    ),
+    y1: Args.integer({ name: "y1" }).pipe(
+      Args.withDescription(
+        "where the drag starts, pixels from the top edge, for example 200",
+      ),
+    ),
+    x2: Args.integer({ name: "x2" }).pipe(
+      Args.withDescription(
+        "where the drag ends, pixels from the left edge, for example 400",
+      ),
+    ),
+    y2: Args.integer({ name: "y2" }).pipe(
+      Args.withDescription(
+        "where the drag ends, pixels from the top edge, for example 200",
+      ),
+    ),
     ...actionOptions,
     glide,
     settle,
@@ -279,16 +434,24 @@ const drag = Command.make(
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),
+).pipe(
+  Command.withDescription(
+    "drag from one spot on the Sandbox screen to another",
+  ),
 );
 
 const screenshot = Command.make(
   "screenshot",
   {
-    id: Args.text({ name: "id" }),
-    out: Options.text("out"),
+    id: sandboxId,
+    out: Options.text("out").pipe(
+      Options.withDescription(
+        "the PNG file to write, for example shot.png; required",
+      ),
+    ),
   },
   ({ id, out }) => takeScreenshot(id, out),
-);
+).pipe(Command.withDescription("save a PNG of the Sandbox screen"));
 
 // One `--json` for every command whose stdout has more than one field.
 const json = Options.boolean("json").pipe(
@@ -297,41 +460,61 @@ const json = Options.boolean("json").pipe(
 
 const list = Command.make("list", { json }, ({ json }) =>
   listSandboxes({ json }),
-);
+).pipe(Command.withDescription("list your Sandboxes"));
 
 const del = Command.make(
   "delete",
   {
-    id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
-    ),
+    id: sandboxId,
   },
   ({ id }) => deleteSandbox(id),
-);
+).pipe(Command.withDescription("delete a Sandbox"));
 
 const mark = Command.make(
   "mark",
   {
-    id: Args.text({ name: "id" }),
-    label: Args.text({ name: "label" }),
-    wait: Options.boolean("wait"),
+    id: sandboxId,
+    label: Args.text({ name: "label" }).pipe(
+      Args.withDescription(
+        "the mark's text, 1 to 60 characters, for example step 1: open the app",
+      ),
+    ),
+    wait: Options.boolean("wait").pipe(
+      Options.withDescription(
+        "make it a Wait mark: the reason for a Still part",
+      ),
+    ),
   },
   ({ id, label, wait }) => setMark({ id, label, wait }),
+).pipe(
+  Command.withDescription(
+    "set a Step mark, or a Wait mark with --wait, during a Recording",
+  ),
 );
 
-const recordStart = Command.make(
-  "start",
-  { id: Args.text({ name: "id" }) },
-  ({ id }) => startRecording(id),
-);
+const recordStart = Command.make("start", { id: sandboxId }, ({ id }) =>
+  startRecording(id),
+).pipe(Command.withDescription("start a Recording of the Sandbox screen"));
 
 const recordStop = Command.make(
   "stop",
   {
-    id: Args.text({ name: "id" }),
-    out: Options.text("out").pipe(Options.optional),
-    discard: Options.boolean("discard"),
-    maxSize: Options.text("max-size").pipe(Options.optional),
+    id: sandboxId,
+    out: Options.text("out").pipe(
+      Options.withDescription(
+        "the Proof video file to write, for example proof.mp4; Proof screenshots go next to it",
+      ),
+      Options.optional,
+    ),
+    discard: Options.boolean("discard").pipe(
+      Options.withDescription("end the Recording with no Proof video"),
+    ),
+    maxSize: Options.text("max-size").pipe(
+      Options.withDescription(
+        "the Size limit for the Proof video, MB or GB, for example 20MB; default 10MB",
+      ),
+      Options.optional,
+    ),
     json,
   },
   ({ id, out, discard, maxSize, json }) =>
@@ -348,22 +531,31 @@ const recordStop = Command.make(
         json,
       });
     }),
+).pipe(
+  Command.withDescription(
+    "end the Recording and download its Proof video, or discard it",
+  ),
 );
 
 const record = Command.make("record").pipe(
+  Command.withDescription("start and stop a Recording of the Sandbox screen"),
   Command.withSubcommands([recordStart, recordStop]),
 );
 
 const authStatus = Command.make("status", { json }, ({ json }) =>
   showAuthStatus({ json }),
-);
+).pipe(Command.withDescription("show each Provider's login"));
 
 const upload = Command.make(
   "upload",
   {
-    id: Args.text({ name: "id" }),
-    folder: Args.text({ name: "folder" }),
-    maxSize: Options.text("max-size").pipe(Options.optional),
+    id: sandboxId,
+    folder: Args.text({ name: "folder" }).pipe(
+      Args.withDescription(
+        "the folder to send as the Work folder, for example .",
+      ),
+    ),
+    maxSize: workMaxSize,
   },
   ({ id, folder, maxSize }) =>
     Effect.gen(function* () {
@@ -373,17 +565,23 @@ const upload = Command.make(
       );
       yield* uploadWorkFolder({ id, folder, maxSize: limit });
     }),
+).pipe(
+  Command.withDescription(
+    "send the Work folder to a Sandbox again; only changed and new files go",
+  ),
 );
 
 const live = Command.make(
   "live",
   {
-    id: Args.text({ name: "id" }).pipe(
-      Args.withDescription("a Sandbox id, for example ns:us:abc123"),
-    ),
+    id: sandboxId,
     json,
   },
   ({ id, json }) => openLive(id, { json }),
+).pipe(
+  Command.withDescription(
+    "print the address and password of a Sandbox's Live view",
+  ),
 );
 
 export const makeCli = (providers: ReadonlyArray<string>) =>
