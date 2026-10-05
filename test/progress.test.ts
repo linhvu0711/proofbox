@@ -16,6 +16,32 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 describe("Progress", () => {
   afterEach(cleanupEnvs);
 
+  it.effect("Ctrl-C during a live line clears it", () => {
+    const terminal = CliOutput.TestTerminal(80);
+    return Effect.gen(function* () {
+      const progress = yield* Progress;
+      const fiber = yield* Effect.fork(
+        progress.step("booting", Effect.sleep("40 seconds")),
+      );
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.interrupt(fiber);
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
+      ).toBe("\r\u001b[2K");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          terminal,
+          Progress.Default.pipe(Layer.provide(terminal)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+      ),
+    );
+  });
+
   it.effect(
     "on a terminal a running step is one live line with a spinner and a timer",
     () => {

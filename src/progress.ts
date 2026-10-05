@@ -82,7 +82,11 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
           writes.withPermits(1)(
             Effect.gen(function* () {
               if (style.live) yield* Ref.set(running, Option.none());
-              if (!style.look || Exit.isInterrupted(exit)) return;
+              if (Exit.isInterrupted(exit)) {
+                if (style.live) yield* output.err(clear);
+                return;
+              }
+              if (!style.look) return;
               const elapsed = Duration.millis(
                 (yield* Clock.currentTimeMillis) - started,
               );
