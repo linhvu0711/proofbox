@@ -8,6 +8,7 @@ import { execInSandbox } from "./commands/exec.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { Progress } from "./progress.ts";
 import { ProvidersLive } from "./provider-registry.ts";
+import { Style } from "./style.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
@@ -25,11 +26,16 @@ const providersLive = ProvidersLive.pipe(Layer.provide(NodeContext.layer));
 
 const program = Effect.gen(function* () {
   const output = yield* CliOutput;
+  const style = yield* Style;
   yield* dispatch(process.argv).pipe(
     Effect.catchAll((error) =>
       (ValidationError.isValidationError(error)
         ? Effect.void
-        : output.err(`${error.message}\n`)
+        : output.err(
+            style.look
+              ? `${style.mark("bad")} ${error.message}\n`
+              : `${error.message}\n`,
+          )
       ).pipe(Effect.zipRight(output.setExitCode(125))),
     ),
   );
@@ -39,6 +45,7 @@ const program = Effect.gen(function* () {
     Layer.mergeAll(
       NodeContext.layer,
       CliOutput.Default,
+      Style.Default.pipe(Layer.provide(CliOutput.Default)),
       providersLive,
       KeeperClient.Default.pipe(
         Layer.provide(
