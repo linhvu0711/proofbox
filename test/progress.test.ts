@@ -16,6 +16,118 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 describe("Progress", () => {
   afterEach(cleanupEnvs);
 
+  it.effect(
+    "on a terminal a running step is one live line with a spinner and a timer",
+    () => {
+      const terminal = CliOutput.TestTerminal(80);
+      return Effect.gen(function* () {
+        const progress = yield* Progress;
+        const fiber = yield* Effect.fork(
+          progress.step("booting", Effect.sleep("40 seconds")),
+        );
+        yield* TestClock.adjust("40 seconds");
+        yield* Fiber.join(fiber);
+        const output = yield* CliOutput;
+        const chunks = Chunk.toReadonlyArray(
+          yield* Ref.get(output.captured.err),
+        );
+        expect(chunks[0]).toBe("\r\u001b[2K⠋ booting  0s");
+        expect(chunks.at(-1)).toBe("\r\u001b[2K✔ booting  40s\n");
+        expect(chunks.some((chunk) => chunk.includes("still"))).toBe(false);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            terminal,
+            Progress.Default.pipe(Layer.provide(terminal)),
+          ),
+        ),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+        ),
+      );
+    },
+  );
+
+  it.effect("a warning during a live step prints above the live line", () => {
+    const terminal = CliOutput.TestTerminal(80);
+    return Effect.gen(function* () {
+      const progress = yield* Progress;
+      const fiber = yield* Effect.fork(
+        progress.step(
+          "booting",
+          Effect.sleep("1 second").pipe(
+            Effect.zipRight(progress.warn("disk is slow")),
+            Effect.zipRight(Effect.sleep("1 second")),
+          ),
+        ),
+      );
+      yield* TestClock.adjust("2 seconds");
+      yield* Fiber.join(fiber);
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)),
+      ).toContain("\r\u001b[2K! disk is slow\n\r\u001b[2K⠹ booting  1s");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          terminal,
+          Progress.Default.pipe(Layer.provide(terminal)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+      ),
+    );
+  });
+
+  it.effect("a failed live step prints ✘", () => {
+    const terminal = CliOutput.TestTerminal(80);
+    return Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.step("booting", Effect.fail("no")).pipe(Effect.flip);
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
+      ).toBe("\r\u001b[2K✘ booting\n");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          terminal,
+          Progress.Default.pipe(Layer.provide(terminal)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+      ),
+    );
+  });
+
+  it.effect("a live line wider than the terminal is cut with …", () => {
+    const terminal = CliOutput.TestTerminal(20);
+    return Effect.gen(function* () {
+      const progress = yield* Progress;
+      const fiber = yield* Effect.fork(
+        progress.step("creating fake Sandbox", Effect.sleep("1 second")),
+      );
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(fiber);
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err))[0],
+      ).toBe("\r\u001b[2K⠋ creating fak…  0s");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          terminal,
+          Progress.Default.pipe(Layer.provide(terminal)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["NO_COLOR", "1"]])),
+      ),
+    );
+  });
+
   it.effect("with FORCE_COLOR=1 a note prints dim with two spaces", () =>
     Effect.gen(function* () {
       const progress = yield* Progress;

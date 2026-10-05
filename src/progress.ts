@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Exit, Ref } from "effect";
+import { Clock, Duration, Effect, Exit, Option, Ref, Schedule } from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { formatElapsed } from "./format-time.ts";
 import { Style } from "./style.ts";
@@ -8,11 +8,49 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
   effect: Effect.gen(function* () {
     const output = yield* CliOutput;
     const style = yield* Style;
+    const running = yield* Ref.make<
+      Option.Option<{ readonly label: string; readonly started: number }>
+    >(Option.none());
+    const writes = yield* Effect.makeSemaphore(1);
+    const clear = "\r\u001b[2K";
+    const line = (step: { readonly label: string; readonly started: number }) =>
+      Effect.gen(function* () {
+        const ms = (yield* Clock.currentTimeMillis) - step.started;
+        const time = formatElapsed(Duration.millis(ms));
+        const frame = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[Math.floor(ms / 80) % 10] ?? "⠋";
+        const label = style.cut(
+          step.label,
+          style.columns - 1 - 4 - time.length,
+        );
+        return `${style.paint("spin", frame)} ${label}  ${style.paint("dim", time)}`;
+      });
+    const draw = writes.withPermits(1)(
+      Effect.gen(function* () {
+        const step = yield* Ref.get(running);
+        if (Option.isSome(step))
+          yield* output.err(clear + (yield* line(step.value)));
+      }),
+    );
+    const message = (text: string) =>
+      writes.withPermits(1)(
+        Effect.gen(function* () {
+          const step = yield* Ref.get(running);
+          yield* output.err(
+            Option.isSome(step)
+              ? `${clear}${text}${clear}${yield* line(step.value)}`
+              : text,
+          );
+        }),
+      );
     const step = Effect.fn("Progress.step")(function* <A, E, R>(
       label: string,
       effect: Effect.Effect<A, E, R>,
     ) {
       const started = yield* Clock.currentTimeMillis;
+      if (style.live) {
+        yield* Ref.set(running, Option.some({ label, started }));
+        yield* draw;
+      }
       if (!style.look) yield* output.err(`proofbox: ${label}\n`);
       const seconds = yield* Ref.make(0);
       const heartbeat = Effect.forever(
@@ -28,30 +66,43 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
         ),
       );
       return yield* effect.pipe(
-        Effect.raceFirst(heartbeat),
+        Effect.raceFirst(
+          style.live
+            ? Effect.sleep("80 millis").pipe(
+                Effect.zipRight(
+                  draw.pipe(
+                    Effect.repeat(Schedule.spaced("80 millis")),
+                    Effect.forever,
+                  ),
+                ),
+              )
+            : heartbeat,
+        ),
         Effect.onExit((exit) =>
-          Effect.gen(function* () {
-            if (!style.look || Exit.isInterrupted(exit)) return;
-            const elapsed = Duration.millis(
-              (yield* Clock.currentTimeMillis) - started,
-            );
-            yield* output.err(
-              Exit.isSuccess(exit)
+          writes.withPermits(1)(
+            Effect.gen(function* () {
+              if (style.live) yield* Ref.set(running, Option.none());
+              if (!style.look || Exit.isInterrupted(exit)) return;
+              const elapsed = Duration.millis(
+                (yield* Clock.currentTimeMillis) - started,
+              );
+              const completed = Exit.isSuccess(exit)
                 ? `${style.mark("ok")} ${label}  ${style.paint("dim", formatElapsed(elapsed))}\n`
-                : `${style.mark("bad")} ${label}\n`,
-            );
-          }),
+                : `${style.mark("bad")} ${label}\n`;
+              yield* output.err((style.live ? clear : "") + completed);
+            }),
+          ),
         ),
       );
     });
     // A warning: something went wrong, and the command goes on without it.
     const warn = Effect.fn("Progress.warn")((text: string) =>
-      output.err(
+      message(
         style.look ? `${style.mark("warn")} ${text}\n` : `proofbox: ${text}\n`,
       ),
     );
     const note = Effect.fn("Progress.note")((text: string) =>
-      output.err(
+      message(
         style.look
           ? `${style.paint("dim", `  ${text}`)}\n`
           : `proofbox: ${text}\n`,
