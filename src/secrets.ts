@@ -1,6 +1,5 @@
 import { FileSystem, type Error as PlatformError } from "@effect/platform";
 import { Effect, Redacted, Schema } from "effect";
-import { CliOutput } from "./cli-output.ts";
 import { withDeadlinePush } from "./deadline.ts";
 import {
   EnvFileLineError,
@@ -104,9 +103,9 @@ export const readEnvFile = Effect.fn("secrets.readEnvFile")(function* (
     .readFileString(path)
     .pipe(Effect.mapError((error) => onError(error)));
   if ((info.mode & 0o077) !== 0) {
-    const output = yield* CliOutput;
-    yield* output.err(
-      `proofbox: env file ${path} is mode ${(info.mode & 0o777).toString(8)}, so other users can read it; run chmod 600 ${path}\n`,
+    const progress = yield* Progress;
+    yield* progress.warn(
+      `env file ${path} is mode ${(info.mode & 0o777).toString(8)}, so other users can read it; run chmod 600 ${path}`,
     );
   }
   return yield* parseEnvFile(path, text);

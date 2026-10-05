@@ -60,6 +60,7 @@ const keeperPid = (env: { runtime: string }, name: string) =>
 const noProgress = new Progress({
   step: (_label, effect) => effect,
   warn: () => Effect.void,
+  note: () => Effect.void,
 });
 
 const alive = (pid: number) => {

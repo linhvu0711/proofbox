@@ -1,5 +1,5 @@
 import { Args, Command, HelpDoc, Options } from "@effect/cli";
-import { Effect, Option, Schema } from "effect";
+import { Effect, HashMap, Option, Schema } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -374,6 +374,26 @@ const command = Command.make("proofbox").pipe(
     auth,
   ]),
 );
+
+export const commandWords = (args: ReadonlyArray<string>): string => {
+  const first = args[0];
+  if (
+    first === undefined ||
+    !HashMap.has(Command.getSubcommands(command), first)
+  )
+    return "";
+  const groups = new Map([
+    ["auth", Command.getSubcommands(auth)],
+    ["record", Command.getSubcommands(record)],
+  ]);
+  const group = groups.get(first);
+  const second = args[1];
+  return group !== undefined &&
+    second !== undefined &&
+    HashMap.has(group, second)
+    ? `${first} ${second}`
+    : first;
+};
 
 export const cli = Command.run(command, {
   name: "proofbox",

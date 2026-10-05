@@ -1,6 +1,5 @@
 import { FileSystem } from "@effect/platform";
 import { Config, Duration, Effect, Exit, Stream } from "effect";
-import { CliOutput } from "./cli-output.ts";
 import { parseSpan } from "./deadline.ts";
 import {
   type AnswerTimeoutError,
@@ -17,6 +16,7 @@ import {
   type KeeperExecOptions,
 } from "./keeper/keeper-client.ts";
 import { keeperPaths } from "./keeper/paths.ts";
+import { Progress } from "./progress.ts";
 import { type Feature, lacksFeature, type Os, Providers } from "./provider.ts";
 import {
   fileStem,
@@ -129,14 +129,14 @@ const withHelperLimit = Effect.fn("helper.withHelperLimit")(function* <A, E, R>(
     case "Download": {
       const answer: AnswerLimit =
         limit._tag === "Read" ? { whole: wait } : { idle: wait };
-      const output = yield* CliOutput;
+      const progress = yield* Progress;
       const again =
         limit._tag === "Read"
-          ? `proofbox: the ${limit.name} did not answer in ${formatWait(wait)}; trying once more\n`
-          : `proofbox: the ${limit.name} sent no bytes for ${formatWait(wait)}; trying once more\n`;
+          ? `the ${limit.name} did not answer in ${formatWait(wait)}; trying once more`
+          : `the ${limit.name} sent no bytes for ${formatWait(wait)}; trying once more`;
       return yield* attempt(answer).pipe(
         Effect.catchTag("AnswerTimeoutError", () =>
-          output.err(again).pipe(Effect.zipRight(attempt(answer))),
+          progress.warn(again).pipe(Effect.zipRight(attempt(answer))),
         ),
         Effect.catchTag("AnswerTimeoutError", () =>
           Effect.fail(

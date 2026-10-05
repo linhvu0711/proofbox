@@ -90,4 +90,22 @@ describe("delete", () => {
     expect(result.stderr).toBe(`Sandbox ${id} is gone\n`);
     expect(result.exitCode).toBe(125);
   });
+
+  it("with FORCE_COLOR=1 exec after delete prints ✘ and the message", async () => {
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    await runCli(env, ["delete", id]);
+    const result = await runCli(env, ["exec", id, "--", "true"], {
+      set: { FORCE_COLOR: "1" },
+    });
+    expect(result.stderr).toBe(`\u001b[31m✘\u001b[0m Sandbox ${id} is gone\n`);
+    expect(result.exitCode).toBe(125);
+  });
 });

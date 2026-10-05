@@ -5,6 +5,7 @@ import { runKeeper } from "../../src/keeper/keeper.ts";
 import { KeeperClient } from "../../src/keeper/keeper-client.ts";
 import { keeperAnswers } from "../../src/keeper/lifecycle.ts";
 import { keeperPaths } from "../../src/keeper/paths.ts";
+import { Progress } from "../../src/progress.ts";
 import {
   type Provider,
   type ProviderEntry,
@@ -20,7 +21,7 @@ export const keeperClientLayers = (provider: Provider) =>
   KeeperClient.Default.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        CliOutput.Test,
+        Progress.Default.pipe(Layer.provideMerge(CliOutput.Test)),
         Layer.succeed(
           Providers,
           new Map<string, ProviderEntry>([

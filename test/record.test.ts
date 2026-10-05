@@ -138,6 +138,7 @@ const layers = (mac: Provider) => {
       new Progress({
         step: (_label, effect) => effect,
         warn: () => Effect.void,
+        note: () => Effect.void,
       }),
     ),
   );

@@ -1,6 +1,5 @@
 import { dirname, join, resolve } from "node:path";
 import { Duration, Effect, Schema, Stream } from "effect";
-import { CliOutput } from "../cli-output.ts";
 import { withDeadlinePush } from "../deadline.ts";
 import {
   ProviderError,
@@ -117,7 +116,6 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
   const id = yield* resolveSandboxId(rawId, providers);
   const provider = id.provider;
   const progress = yield* Progress;
-  const output = yield* CliOutput;
   const keeper = yield* KeeperClient;
   const info = yield* provider.get(id);
   const listPath = sandboxFiles(provider, id.name, info.os).hashList;
@@ -243,8 +241,8 @@ export const sendWorkFolder = Effect.fn("upload.sendWorkFolder")(function* (
       ),
     ),
   );
-  yield* output.err(
-    `proofbox: sent ${diff.send.length} ${diff.send.length === 1 ? "file" : "files"}, removed ${diff.remove.length} ${diff.remove.length === 1 ? "file" : "files"}\n`,
+  yield* progress.note(
+    `sent ${diff.send.length} ${diff.send.length === 1 ? "file" : "files"}, removed ${diff.remove.length} ${diff.remove.length === 1 ? "file" : "files"}`,
   );
 });
 

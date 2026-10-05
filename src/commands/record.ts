@@ -163,8 +163,9 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     }
     if (options.discard === true) {
       const output = yield* CliOutput;
-      yield* output.err(
-        `proofbox: discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv\n`,
+      const progress = yield* Progress;
+      yield* progress.note(
+        `discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv`,
       );
       if (options.json === true) {
         yield* output.out(

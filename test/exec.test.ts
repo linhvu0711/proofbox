@@ -11,6 +11,26 @@ import {
 describe("exec", () => {
   afterEach(cleanupEnvs);
 
+  it("exec output passes through unchanged with FORCE_COLOR=1", async () => {
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const result = await runCli(
+      env,
+      ["exec", id, "--", "sh", "-c", "printf 'a\\nb'; printf err >&2; exit 3"],
+      { set: { FORCE_COLOR: "1" } },
+    );
+    expect(result.stdout).toBe("a\nb");
+    expect(result.stderr).toBe("err");
+    expect(result.exitCode).toBe(3);
+  });
+
   it("an exec with no Keeper warns once and still runs the command", async () => {
     // Given: a Sandbox whose Keeper cannot start
     const env = makeEnv();
