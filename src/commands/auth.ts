@@ -236,67 +236,182 @@ export const makeRobotToken = Effect.fn("auth.makeRobotToken")(
   },
 );
 
-export const showAuthStatus = Effect.gen(function* () {
-  const providers = yield* Providers;
-  const logins = yield* Effect.cached(readLogins);
-  const output = yield* CliOutput;
-  const now = yield* Clock.currentTimeMillis;
-  for (const entry of providers.values()) {
-    const provider = yield* entry.load;
-    const part = provider.login;
-    let line: string;
-    if (part._tag === "None") {
-      line = "no login needed";
-    } else {
-      // A regional Provider names the login's region, or its fallback
-      // when the login carries none.
-      const regions = provider.regions;
-      const regionOf = (region: Option.Option<string>) =>
-        regions === undefined
-          ? ""
-          : `, region ${Option.getOrElse(region, () => regions.fallback)}`;
-      const env = yield* envToken(provider.name);
-      if (Option.isSome(env)) {
-        const region = yield* envRegion(provider.name);
-        line = yield* part.checkToken(env.value, region).pipe(
-          Effect.map((account) =>
-            account.account !== undefined && account.expiresAt !== undefined
-              ? `logged in as ${account.account}${regionOf(region)}, expires ${formatTime(account.expiresAt)}, env token ${envTokenName(provider.name)}`
-              : `logged in with token …${Redacted.value(env.value).slice(-4)}${regionOf(region)}, expiry not known, env token ${envTokenName(provider.name)}`,
-          ),
-          Effect.catchTag("TokenRejectedError", () =>
-            Effect.succeed(
-              `${envTokenName(provider.name)} is set, but ${provider.name} did not accept it`,
-            ),
-          ),
-        );
+// One Provider's login as `auth status` reports it. An `ok` login names
+// its account and expiry when both are known, and otherwise only the
+// token's end, as the plain line does.
+type LoginStatus =
+  | { readonly login: "not-needed" | "none" }
+  | { readonly login: "rejected"; readonly from: "env"; readonly env: string }
+  | {
+      readonly login: "expired";
+      readonly from: "saved";
+      readonly expires: Date;
+    }
+  | ({
+      readonly login: "ok";
+      readonly region: string | undefined;
+    } & (
+      | { readonly from: "saved" }
+      | { readonly from: "env"; readonly env: string }
+    ) &
+      (
+        | { readonly account: string; readonly expires: Date }
+        | { readonly tokenEnd: string }
+      ));
+
+const statusLine = (provider: string, status: LoginStatus) => {
+  switch (status.login) {
+    case "not-needed":
+      return "no login needed";
+    case "none":
+      return "not logged in";
+    case "rejected":
+      return `${status.env} is set, but ${provider} did not accept it`;
+    case "expired":
+      return `expired ${formatTime(status.expires)}. Run: proofbox auth login ${provider}`;
+    case "ok": {
+      const region =
+        status.region === undefined ? "" : `, region ${status.region}`;
+      const from =
+        status.from === "env" ? `env token ${status.env}` : "saved login";
+      return "account" in status
+        ? `logged in as ${status.account}${region}, expires ${formatTime(status.expires)}, ${from}`
+        : `logged in with token …${status.tokenEnd}${region}, expiry not known, ${from}`;
+    }
+  }
+};
+
+// JSON.stringify leaves out the keys whose value is undefined.
+const statusJson = (provider: string, status: LoginStatus) => ({
+  provider,
+  login: status.login,
+  from: "from" in status ? status.from : undefined,
+  account: "account" in status ? status.account : undefined,
+  region: "region" in status ? status.region : undefined,
+  expires: "expires" in status ? formatTime(status.expires) : undefined,
+  env: "env" in status ? status.env : undefined,
+  tokenEnd: "tokenEnd" in status ? status.tokenEnd : undefined,
+});
+
+export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
+  function* (options: { readonly json: boolean }) {
+    const providers = yield* Providers;
+    const logins = yield* Effect.cached(readLogins);
+    const output = yield* CliOutput;
+    const now = yield* Clock.currentTimeMillis;
+    // The JSON needs every Provider first; a plain line goes out as soon
+    // as its Provider is checked, so a later failure keeps it.
+    const items: ReturnType<typeof statusJson>[] = [];
+    for (const entry of providers.values()) {
+      const provider = yield* entry.load;
+      const part = provider.login;
+      let status: LoginStatus;
+      if (part._tag === "None") {
+        status = { login: "not-needed" };
       } else {
-        // A logins file that cannot be read counts as no saved login.
-        const saved = (yield* logins.pipe(
-          Effect.catchAll(() => Effect.succeed<Record<string, SavedLogin>>({})),
-        ))[provider.name];
-        if (saved === undefined) {
-          line = "not logged in";
-        } else if (
-          saved.expiresAt !== undefined &&
-          saved.expiresAt.getTime() <= now
-        ) {
-          line = `expired ${formatTime(saved.expiresAt)}. Run: proofbox auth login ${provider.name}`;
-        } else if (saved.way === "browser") {
-          line = `logged in as ${saved.account}${regionOf(Option.fromNullable(saved.region))}, expires ${formatTime(saved.expiresAt)}, saved login`;
-        } else if (
-          saved.account !== undefined &&
-          saved.expiresAt !== undefined
-        ) {
-          line = `logged in as ${saved.account}${regionOf(Option.fromNullable(saved.region))}, expires ${formatTime(saved.expiresAt)}, saved login`;
+        // A regional Provider names the login's region, or its fallback
+        // when the login carries none.
+        const regions = provider.regions;
+        const regionOf = (region: Option.Option<string>) =>
+          regions === undefined
+            ? undefined
+            : Option.getOrElse(region, () => regions.fallback);
+        const env = yield* envToken(provider.name);
+        if (Option.isSome(env)) {
+          const name = envTokenName(provider.name);
+          const envRegionName = yield* envRegion(provider.name);
+          const region = regionOf(envRegionName);
+          status = yield* part.checkToken(env.value, envRegionName).pipe(
+            Effect.map(
+              (account): LoginStatus =>
+                account.account !== undefined && account.expiresAt !== undefined
+                  ? {
+                      login: "ok",
+                      from: "env",
+                      env: name,
+                      region,
+                      account: account.account,
+                      expires: account.expiresAt,
+                    }
+                  : {
+                      login: "ok",
+                      from: "env",
+                      env: name,
+                      region,
+                      tokenEnd: Redacted.value(env.value).slice(-4),
+                    },
+            ),
+            Effect.catchTag("TokenRejectedError", () =>
+              Effect.succeed<LoginStatus>({
+                login: "rejected",
+                from: "env",
+                env: name,
+              }),
+            ),
+          );
         } else {
-          line = `logged in with token …${Redacted.value(saved.token).slice(-4)}${regionOf(Option.fromNullable(saved.region))}, expiry not known, saved login`;
+          // A logins file that cannot be read counts as no saved login.
+          const saved = (yield* logins.pipe(
+            Effect.catchAll(() =>
+              Effect.succeed<Record<string, SavedLogin>>({}),
+            ),
+          ))[provider.name];
+          if (saved === undefined) {
+            status = { login: "none" };
+          } else if (
+            saved.expiresAt !== undefined &&
+            saved.expiresAt.getTime() <= now
+          ) {
+            status = {
+              login: "expired",
+              from: "saved",
+              expires: saved.expiresAt,
+            };
+          } else {
+            const region = regionOf(Option.fromNullable(saved.region));
+            if (saved.way === "browser") {
+              status = {
+                login: "ok",
+                from: "saved",
+                region,
+                account: saved.account,
+                expires: saved.expiresAt,
+              };
+            } else if (
+              saved.account !== undefined &&
+              saved.expiresAt !== undefined
+            ) {
+              status = {
+                login: "ok",
+                from: "saved",
+                region,
+                account: saved.account,
+                expires: saved.expiresAt,
+              };
+            } else {
+              status = {
+                login: "ok",
+                from: "saved",
+                region,
+                tokenEnd: Redacted.value(saved.token).slice(-4),
+              };
+            }
+          }
         }
       }
+      if (options.json) {
+        items.push(statusJson(provider.name, status));
+      } else {
+        yield* output.out(
+          `${provider.name}  ${statusLine(provider.name, status)}\n`,
+        );
+      }
     }
-    yield* output.out(`${provider.name}  ${line}\n`);
-  }
-});
+    if (options.json) {
+      yield* output.out(`${JSON.stringify(items)}\n`);
+    }
+  },
+);
 
 // Logout deletes the Sandboxes this machine started, then removes the
 // saved slot (ADR 0016), and says what it did on stderr. The deleted ids

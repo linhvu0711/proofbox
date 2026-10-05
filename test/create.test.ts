@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanupEnvs,
+  keeperCannotStart,
   makeEnv,
   makeGitFolder,
   runCli,
@@ -46,6 +47,66 @@ const envFile = (content: string, mode = 0o600) => {
 
 describe("create", () => {
   afterEach(cleanupEnvs);
+
+  it("with FORCE_COLOR=1 a create with no Keeper warns once through Progress", async () => {
+    const env = makeEnv();
+    const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
+    const script = setupScript("echo hi\n");
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { ...keeperCannotStart(env), FORCE_COLOR: "1" } },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
+    expect(
+      result.stderr
+        .split("\n")
+        .filter((line) => line.includes("Keeper did not start")),
+    ).toEqual([
+      "\u001b[33m!\u001b[0m Keeper did not start; commands still work, only slower",
+    ]);
+  });
+
+  it("a create with no Keeper prints only its own Keeper line", async () => {
+    // Given: a Work folder and Setup script with a Keeper that cannot start
+    const env = makeEnv();
+    const set = keeperCannotStart(env);
+    const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
+    const script = setupScript("echo hi\n");
+    // When
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set },
+    );
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
+    expect(result.stderr).toBe(
+      "proofbox: creating fake Sandbox\nproofbox: starting Keeper\nproofbox: Keeper did not start; commands still work, only slower\nproofbox: uploading Work folder\nproofbox: sent 1 file, removed 0 files\nproofbox: running Setup script\n",
+    );
+  });
 
   it("create prints a fake Sandbox id", async () => {
     // Given: fresh fake root and runtime dirs

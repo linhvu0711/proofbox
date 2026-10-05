@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  cleanupEnvs,
+  keeperCannotStart,
+  makeEnv,
+  runCli,
+} from "./support/cli.ts";
 
 describe("exec", () => {
   afterEach(cleanupEnvs);
@@ -24,6 +29,26 @@ describe("exec", () => {
     expect(result.stdout).toBe("a\nb");
     expect(result.stderr).toBe("err");
     expect(result.exitCode).toBe(3);
+  });
+
+  it("an exec with no Keeper warns once and still runs the command", async () => {
+    // Given: a Sandbox whose Keeper cannot start
+    const env = makeEnv();
+    const set = keeperCannotStart(env);
+    const created = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set },
+    );
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["exec", id, "--", "echo", "x"], { set });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("x\n");
+    expect(result.stderr).toBe(
+      "proofbox: Keeper did not start; running without it\n",
+    );
   });
 
   it("exec passes stdout, stderr, and exit code unchanged", async () => {

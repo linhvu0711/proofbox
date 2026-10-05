@@ -26,6 +26,7 @@ import {
 import {
   type CliEnv,
   cleanupEnvs,
+  keeperCannotStart,
   makeEnv,
   makeGitFolder,
   runCli,
@@ -101,6 +102,27 @@ const grownFolder = Effect.gen(function* () {
 
 describe("upload", () => {
   afterEach(cleanupEnvs);
+
+  it("an upload with no Keeper warns once and still sends the files", async () => {
+    // Given: a Sandbox whose Keeper cannot start and a one-file git folder
+    const env = makeEnv();
+    const set = keeperCannotStart(env);
+    const created = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set },
+    );
+    const id = created.stdout.trim();
+    const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
+    // When
+    const result = await runCli(env, ["upload", id, folder], { set });
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "proofbox: uploading Work folder\nproofbox: Keeper did not start; running without it\nproofbox: sent 1 file, removed 0 files\n",
+    );
+  });
 
   it("a first upload sends tracked and new files and skips git-ignored ones", async () => {
     // Given: a Sandbox and a git folder with committed, untracked, and

@@ -1,5 +1,5 @@
-import { Args, Command, Options } from "@effect/cli";
-import { Effect, HashMap, Option } from "effect";
+import { Args, Command, HelpDoc, Options } from "@effect/cli";
+import { Effect, HashMap, Option, Schema } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -65,11 +65,32 @@ const actionOptions = {
   pace: Options.choice("pace", ["human", "fast"]).pipe(
     Options.withDefault("human" as const),
   ),
-  glide: Options.text("glide").pipe(Options.optional),
-  letter: Options.text("letter").pipe(Options.optional),
-  typeMax: Options.text("type-max").pipe(Options.optional),
-  settle: Options.text("settle").pipe(Options.optional),
 };
+
+const glide = Options.text("glide").pipe(Options.optional);
+const letter = Options.text("letter").pipe(Options.optional);
+const typeMax = Options.text("type-max").pipe(Options.optional);
+const settle = Options.text("settle").pipe(Options.optional);
+
+// @effect/cli gives unknown flags to optional [steps]; use its unknown-argument line.
+// The schema is the one Args.integer uses.
+const scrollSteps = Args.text({ name: "steps" }).pipe(
+  Args.withDescription("An integer, 3 by default."),
+  Args.mapEffect((value) =>
+    Schema.decodeUnknown(Schema.compose(Schema.NumberFromString, Schema.Int))(
+      value,
+    ).pipe(
+      Effect.mapError(() =>
+        HelpDoc.p(
+          value.startsWith("-")
+            ? `Received unknown argument: '${value}'`
+            : `'${value}' is not a integer`,
+        ),
+      ),
+    ),
+  ),
+  Args.withDefault(3),
+);
 
 const click = Command.make(
   "click",
@@ -81,8 +102,10 @@ const click = Command.make(
       Options.withDefault("left"),
     ),
     ...actionOptions,
+    glide,
+    settle,
   },
-  ({ id, x, y, button, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, x, y, button, screenshot, pace, glide, settle }) =>
     clickAt({
       id,
       x,
@@ -91,8 +114,6 @@ const click = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -103,14 +124,16 @@ const type = Command.make(
     id: Args.text({ name: "id" }),
     text: Args.text({ name: "text" }),
     ...actionOptions,
+    letter,
+    typeMax,
+    settle,
   },
-  ({ id, text, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, text, screenshot, pace, letter, typeMax, settle }) =>
     typeText({
       id,
       text,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
-      glide: Option.getOrUndefined(glide),
       letter: Option.getOrUndefined(letter),
       typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
@@ -123,16 +146,14 @@ const key = Command.make(
     id: Args.text({ name: "id" }),
     keys: Args.text({ name: "keys" }),
     ...actionOptions,
+    settle,
   },
-  ({ id, keys, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, keys, screenshot, pace, settle }) =>
     pressKey({
       id,
       keys,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
-      glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -152,22 +173,12 @@ const scroll = Command.make(
       ],
       { name: "direction" },
     ),
-    steps: Args.integer({ name: "steps" }).pipe(Args.withDefault(3)),
+    steps: scrollSteps,
     ...actionOptions,
-  },
-  ({
-    id,
-    x,
-    y,
-    direction,
-    steps,
-    screenshot,
-    pace,
     glide,
-    letter,
-    typeMax,
     settle,
-  }) =>
+  },
+  ({ id, x, y, direction, steps, screenshot, pace, glide, settle }) =>
     scrollAt({
       id,
       x,
@@ -177,8 +188,6 @@ const scroll = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -192,8 +201,10 @@ const drag = Command.make(
     x2: Args.integer({ name: "x2" }),
     y2: Args.integer({ name: "y2" }),
     ...actionOptions,
+    glide,
+    settle,
   },
-  ({ id, x1, y1, x2, y2, screenshot, pace, glide, letter, typeMax, settle }) =>
+  ({ id, x1, y1, x2, y2, screenshot, pace, glide, settle }) =>
     dragFrom({
       id,
       x1,
@@ -203,8 +214,6 @@ const drag = Command.make(
       screenshot: Option.getOrUndefined(screenshot),
       pace,
       glide: Option.getOrUndefined(glide),
-      letter: Option.getOrUndefined(letter),
-      typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
     }),
 );
@@ -218,10 +227,13 @@ const screenshot = Command.make(
   ({ id, out }) => takeScreenshot(id, out),
 );
 
-const list = Command.make(
-  "list",
-  { json: Options.boolean("json") },
-  ({ json }) => listSandboxes({ json }),
+// One `--json` for every command whose stdout has more than one field.
+const json = Options.boolean("json").pipe(
+  Options.withDescription("print JSON for scripts"),
+);
+
+const list = Command.make("list", { json }, ({ json }) =>
+  listSandboxes({ json }),
 );
 
 const del = Command.make(
@@ -257,8 +269,9 @@ const recordStop = Command.make(
     out: Options.text("out").pipe(Options.optional),
     discard: Options.boolean("discard"),
     maxSize: Options.text("max-size").pipe(Options.optional),
+    json,
   },
-  ({ id, out, discard, maxSize }) =>
+  ({ id, out, discard, maxSize, json }) =>
     Effect.gen(function* () {
       const limit = yield* maxSize.pipe(
         Option.map((value) => parseMaxSize(value)),
@@ -269,6 +282,7 @@ const recordStop = Command.make(
         out: Option.getOrUndefined(out),
         discard,
         maxSize: limit,
+        json,
       });
     }),
 );
@@ -287,7 +301,9 @@ const authLogin = Command.make(
   ({ provider, token, region }) => loginToProvider({ provider, token, region }),
 );
 
-const authStatus = Command.make("status", {}, () => showAuthStatus);
+const authStatus = Command.make("status", { json }, ({ json }) =>
+  showAuthStatus({ json }),
+);
 
 const authLogout = Command.make(
   "logout",
@@ -334,8 +350,9 @@ const live = Command.make(
     id: Args.text({ name: "id" }).pipe(
       Args.withDescription("a Sandbox id, for example ns:us:abc123"),
     ),
+    json,
   },
-  ({ id }) => openLive(id),
+  ({ id, json }) => openLive(id, { json }),
 );
 
 const command = Command.make("proofbox").pipe(
