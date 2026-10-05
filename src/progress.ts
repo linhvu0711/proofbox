@@ -50,6 +50,13 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
         style.look ? `${style.mark("warn")} ${text}\n` : `proofbox: ${text}\n`,
       ),
     );
-    return { step, warn };
+    const note = Effect.fn("Progress.note")((text: string) =>
+      output.err(
+        style.look
+          ? `${style.paint("dim", `  ${text}`)}\n`
+          : `proofbox: ${text}\n`,
+      ),
+    );
+    return { step, warn, note };
   }),
 }) {}

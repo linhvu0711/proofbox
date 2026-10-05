@@ -133,6 +133,31 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
+  it("with FORCE_COLOR=1 create --work prints the sent files as a dim line", async () => {
+    const env = makeEnv();
+    const folder = workFixture();
+    const script = setupScript("#!/bin/sh\ncat a.txt > setup-saw.txt\n");
+    const result = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+      ],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
+      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✔ running Setup script  <t>\n",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
   it("create --setup without --work makes nothing", async () => {
     // Given: a Setup script but no --work folder
     const env = makeEnv();

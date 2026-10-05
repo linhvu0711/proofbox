@@ -87,6 +87,7 @@ const stubMac = (root: string, answer: Answer) => {
 const noProgress = new Progress({
   step: (_label, effect) => effect,
   warn: () => Effect.void,
+  note: () => Effect.void,
 });
 
 const layers = (mac: Provider) => {
