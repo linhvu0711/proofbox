@@ -50,31 +50,126 @@ it("a Claude Turn resumes its session with the model it is given", () => {
   ]);
 });
 
-it("Claude's last activity names its last tool and what it ran on", () => {
+it("Claude's steps for an event with a message and a tool call come in order", () => {
   // Given
-  const output = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","name":"Bash","input":{"command":"pnpm test\\necho done"}}]}}\n{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","name":"Bash","input":{"command":"pnpm test\\necho done"}}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readSteps(event);
   // Then
-  expect(result).toEqual(Option.some("Bash: pnpm test"));
+  expect(result).toEqual([
+    { kind: "said", text: "Running the tests." },
+    { kind: "tool", text: "Bash: pnpm test\necho done" },
+  ]);
 });
 
-it("Claude's activity skips thinking and cuts long first lines", () => {
+it("Claude's step for a message is its text", () => {
   // Given
-  const output = `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "a".repeat(121) + "\nsecond line" }] } })}\n{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}\n{"type":"assist`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"text","text":"Running the tests."}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readSteps(event);
   // Then
-  expect(result).toEqual(Option.some("a".repeat(119) + "…"));
+  expect(result).toEqual([{ kind: "said", text: "Running the tests." }]);
 });
 
-it("Claude's activity has no entry when only thinking is present", () => {
+it("Claude has no step for thinking", () => {
   // Given
-  const output = `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}`;
+  const event = `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"private"}]}}`;
   // When
-  const result = makeClaudeHarness().readActivity(output);
+  const result = makeClaudeHarness().readSteps(event);
   // Then
-  expect(result).toEqual(Option.none());
+  expect(result).toEqual([]);
+});
+
+it("Claude has no step for a cut event", () => {
+  // Given
+  const event = '{"type":"assist';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([]);
+});
+
+it("Claude's step for the start names the model", () => {
+  // Given
+  const event =
+    '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s1","cwd":"/work","tools":[]}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([{ kind: "other", text: "started: claude-opus-5-5" }]);
+});
+
+it("Claude's step for a tool result is its output", () => {
+  // Given
+  const event =
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([{ kind: "result", text: "result: ok" }]);
+});
+
+it("Claude's steps for an event with two tool results come in order", () => {
+  // Given
+  const event =
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"},{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"not found"}]}}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([
+    { kind: "result", text: "result: ok" },
+    { kind: "result", text: "error: not found" },
+  ]);
+});
+
+it("Claude's step for a failed tool joins its text blocks", () => {
+  // Given
+  const event =
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"Exit code 1"},{"type":"text","text":"not found"}]}]}}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([
+    { kind: "result", text: "error: Exit code 1\nnot found" },
+  ]);
+});
+
+it("Claude's step for an API retry names the attempt and the error", () => {
+  // Given
+  const event =
+    '{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":4000,"error_status":529,"error":"overloaded"}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([{ kind: "other", text: "API retry 2: overloaded" }]);
+});
+
+it("Claude has no step for the result event", () => {
+  // Given
+  const event =
+    '{"type":"result","subtype":"success","is_error":false,"result":"Made hello.txt.","session_id":"s1"}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([]);
+});
+
+it("Claude has no step for the prompt it was sent", () => {
+  // Given
+  const event = '{"type":"user","message":{"role":"user","content":"hi"}}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([]);
+});
+
+it("Claude has no step for other system events", () => {
+  // Given
+  const event = '{"type":"system","subtype":"compact_boundary"}';
+  // When
+  const result = makeClaudeHarness().readSteps(event);
+  // Then
+  expect(result).toEqual([]);
 });
 
 it("a refused Claude login reads as a login failure", () => {

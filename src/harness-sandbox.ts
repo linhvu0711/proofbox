@@ -180,11 +180,41 @@ export const checkHarnessCreate = Effect.fn(
   };
 });
 
+export const keepNewerHarnessLoginFile = Effect.fn(
+  "harnessSandbox.keepNewerHarnessLoginFile",
+)(function* (entry: HarnessEntry, text: string) {
+  if (entry.login._tag !== "File") return;
+  const { login, name } = entry;
+  const tool = yield* login.load;
+  const renewed = tool.renewedAt(text);
+  if (Option.isNone(renewed)) return;
+  yield* withLoginsLock(
+    Effect.gen(function* () {
+      const saved = yield* readHarnessLoginFile(name, login.file);
+      if (Option.isNone(saved)) return;
+      const savedAccount = tool.accountOf(saved.value);
+      const sandboxAccount = tool.accountOf(text);
+      if (
+        Option.isNone(savedAccount) ||
+        Option.isNone(sandboxAccount) ||
+        savedAccount.value !== sandboxAccount.value
+      )
+        return;
+      const before = Option.flatMap(saved, (text) => tool.renewedAt(text));
+      if (
+        Option.isSome(before) &&
+        renewed.value.getTime() > before.value.getTime()
+      ) {
+        yield* saveHarnessLoginFileLocked(name, login.file, text);
+      }
+    }),
+  );
+});
+
 export const saveBackHarnessLoginFile = Effect.fn(
   "harnessSandbox.saveBackHarnessLoginFile",
 )(function* (rawId: string, entry: HarnessEntry) {
   if (entry.login._tag !== "File") return;
-  const { login, name } = entry;
   const harness = yield* entry.load;
   const result = yield* runTurnScript(rawId, [
     "sh",
@@ -192,24 +222,10 @@ export const saveBackHarnessLoginFile = Effect.fn(
     'cat "$HOME/$1/$2" 2>/dev/null',
     "sh",
     harness.home,
-    login.file,
+    entry.login.file,
   ]);
   if (result.code !== 0) return;
-  const tool = yield* login.load;
-  const renewed = tool.renewedAt(result.out);
-  if (Option.isNone(renewed)) return;
-  yield* withLoginsLock(
-    Effect.gen(function* () {
-      const saved = yield* readHarnessLoginFile(name, login.file);
-      const before = Option.flatMap(saved, (text) => tool.renewedAt(text));
-      if (
-        Option.isNone(before) ||
-        renewed.value.getTime() > before.value.getTime()
-      ) {
-        yield* saveHarnessLoginFileLocked(name, login.file, result.out);
-      }
-    }),
-  );
+  yield* keepNewerHarnessLoginFile(entry, result.out);
 });
 
 export const sendHarnessLoginFile = Effect.fn(

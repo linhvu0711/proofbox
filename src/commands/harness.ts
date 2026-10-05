@@ -16,7 +16,7 @@ import {
   TurnRunningError,
 } from "../errors.ts";
 import { formatTime } from "../format-time.ts";
-import { type HarnessEntry, Harnesses } from "../harness.ts";
+import { type HarnessEntry, Harnesses, stepLine } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { saveBackHarnessLoginFile } from "../harness-sandbox.ts";
 import {
@@ -26,7 +26,9 @@ import {
 } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
 import {
+  endText,
   readTurn,
+  readTurnSteps,
   settleTurn,
   startTurn,
   stopTurn,
@@ -130,12 +132,19 @@ export const promptHarness = Effect.fn("harness.promptHarness")(function* (
   if (turn.state._tag === "Running") return yield* new TurnRunningError();
   const entry = yield* harnessEntryFor(turn.harness.value);
   const harness = yield* entry.load;
+  const output = yield* CliOutput;
   let session = turn.session;
   if (turn.state._tag === "Ended") {
     yield* settleTurn(rawId, turn.files, harness, turn.state);
+    yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+      Effect.catchAll((error) =>
+        output.err(
+          `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+        ),
+      ),
+    );
     session = (yield* readTurn(rawId, 0)).session;
   }
-  const output = yield* CliOutput;
   const started = yield* startTurn(
     rawId,
     harness.turn({ prompt, model, session }),
@@ -183,14 +192,31 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
         continue;
       const entry = yield* harnessEntryFor(turn.harness.value);
       const harness = yield* entry.load;
-      const activity = harness.readActivity(turn.state.output);
+      let last = "nothing yet";
+      for (const line of turn.state.output.trimEnd().split("\n").reverse()) {
+        const step = [...harness.readSteps(line)]
+          .reverse()
+          .find((step) => step.kind === "said" || step.kind === "tool");
+        if (step !== undefined) {
+          last = stepLine(step.text);
+          break;
+        }
+      }
       yield* output.out(
-        `still running\nlast activity: ${formatTime(turn.state.activityAt)}\nlast: ${Option.getOrElse(activity, () => "nothing yet")}\n`,
+        `still running\nlast activity: ${formatTime(turn.state.activityAt)}\nlast: ${last}\n`,
       );
       yield* output.setExitCode(TURN_EXIT.stillRunning);
       return;
     }
     if (turn.state._tag === "Saved") {
+      const entry = yield* harnessEntryFor(turn.harness.value);
+      yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+        Effect.catchAll((error) =>
+          output.err(
+            `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+          ),
+        ),
+      );
       yield* output.out(turn.state.text);
       yield* output.setExitCode(turn.state.code);
       return;
@@ -223,6 +249,66 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
     yield* output.out(result.text);
     yield* output.setExitCode(result.code);
     return;
+  }
+}, Effect.scoped);
+
+export const logTurn = Effect.fn("harness.logTurn")(function* (
+  rawId: string,
+  options: { readonly follow: boolean; readonly full: boolean },
+) {
+  let from = 0;
+  let steps = yield* readTurnSteps(rawId, from, 0, 500);
+  if (steps._tag === "NoHarness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (steps._tag === "None") return yield* new NoTurnYetError({ id: rawId });
+  const pid = steps.pid;
+  const entry = yield* harnessEntryFor(steps.harness);
+  const harness = yield* entry.load;
+  const output = yield* CliOutput;
+  while (steps._tag === "Read") {
+    if (steps.pid !== pid)
+      return options.full
+        ? undefined
+        : yield* output.out("ended; a new Turn started\n");
+    for (const { at, event } of steps.events) {
+      if (options.full) {
+        yield* output.out(`${event}\n`);
+        continue;
+      }
+      for (const step of harness.readSteps(event))
+        yield* output.out(`${formatTime(at)} ${stepLine(step.text)}\n`);
+    }
+    from += steps.events.length;
+    if (steps.more) {
+      steps = yield* readTurnSteps(rawId, from, 0, 500);
+      continue;
+    }
+    if (!steps.running) break;
+    if (!options.follow)
+      return options.full ? undefined : yield* output.out("still running\n");
+    steps = yield* readTurnSteps(rawId, from, 5, 500);
+  }
+  if (steps._tag === "NoHarness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (steps._tag === "None")
+    return options.full
+      ? undefined
+      : yield* output.out("ended; a new Turn started\n");
+  if (options.full) return;
+  const turn = yield* readTurn(rawId, 0);
+  switch (turn.state._tag) {
+    case "Saved":
+      return yield* output.out(`${turn.state.text.split("\n")[0]}\n`);
+    case "Stopped":
+      return yield* output.out("stopped\n");
+    case "Ended":
+      return yield* output.out(
+        `${endText(harness, turn.state.exit, turn.state.output, turn.state.errLines).text.split("\n")[0]}\n`,
+      );
+    case "Running":
+      return yield* output.out("still running\n");
+    case "None":
+      return yield* new NoTurnYetError({ id: rawId });
   }
 }, Effect.scoped);
 

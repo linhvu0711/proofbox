@@ -10,7 +10,7 @@ Sources: Claude Code auth, https://code.claude.com/docs/en/iam; deleting the tok
 
 Before create sends a Codex login, proofbox renews it when its last renewal (`last_refresh`) is older than 7 days, through `codex app-server` (`account/read` with `refreshToken`), and saves the renewed file. Codex renews by itself only near its access token's end or after a 401, so a Sandbox (3 hours at most) normally never renews.
 
-When `harness wait` sees a Turn end, and on `delete`, proofbox reads the Sandbox's `auth.json` and keeps it when its last renewal is newer than the saved one, under the logins lock, so the newest refresh token wins when two Sandboxes end at once.
+When `harness wait` sees a Turn Ended, Saved, or Stopped, when the next `harness prompt` settles an ended Turn, and on `delete`, proofbox reads the Sandbox's `auth.json` and keeps it only when both files name the same account and its last renewal is strictly newer than the saved one. A missing account never matches. Compare and save run together under the logins lock, so the newest refresh token wins when two Sandboxes for the same account end at once. A copy-back failure prints one stderr line and changes no exit code; a later `harness wait` retries it.
 
 ## Considered options
 
