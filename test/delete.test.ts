@@ -1,10 +1,59 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  createArgs,
+  harnessLoginFile,
+  loginFile,
+  makeGithub,
+} from "./support/harness.ts";
 
 describe("delete", () => {
   afterEach(cleanupEnvs);
+
+  it("delete saves back a newer Sandbox login file", async () => {
+    const env = makeEnv();
+    const { folder, github } = makeGithub();
+    loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+    harnessLoginFile(
+      env,
+      "fake-file",
+      `{"last_refresh":"${new Date(Date.now() - 3_600_000).toISOString()}","renewals":0}`,
+    );
+    const created = await runCli(env, createArgs(folder, "fake-file"), {
+      set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+    });
+    const id = created.stdout.trim();
+    const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":8}';
+    await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      'printf %s "$1" > .fake-harness/auth.json',
+      "sh",
+      text,
+    ]);
+    const result = await runCli(env, ["delete", id]);
+    const saved = readFileSync(
+      join(
+        env.env.HOME ?? "",
+        ".config",
+        "proofbox",
+        "harness-logins",
+        "fake-file",
+        "auth.json",
+      ),
+      "utf8",
+    );
+    expect({ code: result.exitCode, stdout: result.stdout, saved }).toEqual({
+      code: 0,
+      stdout: `Deleted ${id}\n`,
+      saved: text,
+    });
+  });
 
   it("delete removes the Sandbox folder", async () => {
     // Given

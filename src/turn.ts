@@ -123,7 +123,7 @@ export const runTurnScript = Effect.fn("turn.runTurnScript")(function* (
   return { code, out: Buffer.concat(chunks).toString("utf8") };
 });
 
-const turnFiles = Effect.fn("turn.turnFiles")(function* (rawId: string) {
+export const turnFiles = Effect.fn("turn.turnFiles")(function* (rawId: string) {
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const keeper = yield* KeeperClient;
