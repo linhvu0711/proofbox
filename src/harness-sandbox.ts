@@ -24,7 +24,10 @@ import type { Harness } from "./harness.ts";
 import { harnessProfilePath } from "./harness-profile.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { readGithubLogins } from "./login/github-logins.ts";
-import { readHarnessLogins } from "./login/logins-file.ts";
+import {
+  readHarnessLoginFile,
+  readHarnessLogins,
+} from "./login/logins-file.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
@@ -75,23 +78,32 @@ export const checkHarnessCreate = Effect.fn(
 )(function* (name: string, folder: string) {
   const entry = yield* harnessEntryFor(name);
   const repo = yield* readGithubRepo(folder);
-  if (entry.login._tag !== "Env") {
-    return yield* new NoHarnessLoginError({
-      harness: name,
-      expired: false,
-      howToMake: entry.login.howToMake,
-    });
-  }
-  const harnessLogin = (yield* readHarnessLogins)[name];
-  const expired =
-    harnessLogin?.expiresAt !== undefined &&
-    harnessLogin.expiresAt.getTime() < (yield* Clock.currentTimeMillis);
-  if (harnessLogin === undefined || expired) {
-    return yield* new NoHarnessLoginError({
-      harness: name,
-      expired,
-      howToMake: entry.login.howToMake,
-    });
+  let harnessLogin:
+    | { readonly _tag: "Env"; readonly token: Redacted.Redacted<string> }
+    | { readonly _tag: "File"; readonly text: string };
+  if (entry.login._tag === "File") {
+    const text = yield* readHarnessLoginFile(name, entry.login.file);
+    if (Option.isNone(text)) {
+      return yield* new NoHarnessLoginError({
+        harness: name,
+        expired: false,
+        howToMake: entry.login.howToMake,
+      });
+    }
+    harnessLogin = { _tag: "File", text: text.value };
+  } else {
+    const saved = (yield* readHarnessLogins)[name];
+    const expired =
+      saved?.expiresAt !== undefined &&
+      saved.expiresAt.getTime() < (yield* Clock.currentTimeMillis);
+    if (saved === undefined || expired) {
+      return yield* new NoHarnessLoginError({
+        harness: name,
+        expired,
+        howToMake: entry.login.howToMake,
+      });
+    }
+    harnessLogin = { _tag: "Env", token: saved.token };
   }
   const githubLogin = (yield* readGithubLogins)[repo.owner.toLowerCase()];
   if (githubLogin === undefined) {
@@ -101,9 +113,9 @@ export const checkHarnessCreate = Effect.fn(
     });
   }
   return {
-    entry: { ...entry, login: entry.login },
+    entry,
     repo,
-    harnessToken: harnessLogin.token,
+    harnessLogin,
     githubToken: githubLogin.token,
   };
 });

@@ -285,13 +285,29 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             ? secrets
             : [
                 ...secrets,
-                { name: check.entry.login.envName, value: check.harnessToken },
+                ...(check.entry.login._tag === "Env" &&
+                check.harnessLogin._tag === "Env"
+                  ? [
+                      {
+                        name: check.entry.login.envName,
+                        value: check.harnessLogin.token,
+                      },
+                    ]
+                  : []),
                 { name: "GH_TOKEN", value: check.githubToken },
               ],
         );
       } else if (check !== undefined) {
         yield* sendSecrets(id, [
-          { name: check.entry.login.envName, value: check.harnessToken },
+          ...(check.entry.login._tag === "Env" &&
+          check.harnessLogin._tag === "Env"
+            ? [
+                {
+                  name: check.entry.login.envName,
+                  value: check.harnessLogin.token,
+                },
+              ]
+            : []),
           { name: "GH_TOKEN", value: check.githubToken },
         ]);
       }

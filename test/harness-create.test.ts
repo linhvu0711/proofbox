@@ -507,6 +507,22 @@ it("create --harness puts the Caller's unpushed commit on top of the branch from
   });
 });
 
+it("create --harness codex with no Codex login stops before the Provider", async () => {
+  const env = makeEnv();
+  const { folder, github } = makeGithub();
+  loginFile(env, "github", { acme: { token: "github_pat_fake1" } });
+  const result = await runCli(env, createArgs(folder, "codex"), {
+    set: { PROOFBOX_GITHUB_URL: `file://${github}` },
+  });
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr:
+      "No Harness login for codex; run proofbox harness login codex. It signs in with your ChatGPT plan. Nothing was created.\n",
+  });
+  expect(readdirSync(env.root)).toEqual([]);
+});
+
 it("create --harness claude with no Harness login stops before the Provider", async () => {
   // Given
   const env = makeEnv();
