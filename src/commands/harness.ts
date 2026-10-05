@@ -2,17 +2,30 @@ import { dirname, join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Clock, Config, Duration, Effect, Option, Redacted } from "effect";
 import { CliOutput } from "../cli-output.ts";
+import { parseSpan } from "../deadline.ts";
 import {
+  EmptyPromptError,
   HarnessError,
   HarnessProfileExistsError,
   NoHarnessTokenError,
   NoSuchHarnessError,
+  NoTurnYetError,
+  NotHarnessSandboxError,
   platformReason,
+  TurnRunningError,
 } from "../errors.ts";
+import { formatTime } from "../format-time.ts";
 import { type HarnessEntry, Harnesses } from "../harness.ts";
 import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
+import {
+  readTurn,
+  settleTurn,
+  startTurn,
+  stopTurn,
+  TURN_EXIT,
+} from "../turn.ts";
 
 export const harnessEntryFor = Effect.fn("harness.harnessEntryFor")(function* (
   name: string,
@@ -67,6 +80,113 @@ export const loginToHarness = Effect.fn("harness.loginToHarness")(function* (
   const raw = yield* readStdinText();
   yield* saveHarnessLogin(entry, raw);
 });
+
+export const promptHarness = Effect.fn("harness.promptHarness")(function* (
+  rawId: string,
+  prompt: string,
+  model: Option.Option<string>,
+) {
+  if (prompt.trim() === "") return yield* new EmptyPromptError();
+  const turn = yield* readTurn(rawId, 0);
+  if (Option.isNone(turn.harness))
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (turn.state._tag === "Running") return yield* new TurnRunningError();
+  const entry = yield* harnessEntryFor(turn.harness.value);
+  const harness = yield* entry.load;
+  let session = turn.session;
+  if (turn.state._tag === "Ended") {
+    yield* settleTurn(rawId, turn.files, harness, turn.state);
+    session = (yield* readTurn(rawId, 0)).session;
+  }
+  const output = yield* CliOutput;
+  const started = yield* startTurn(
+    rawId,
+    harness.turn({ prompt, model, session }),
+  ).pipe(
+    Effect.as(true),
+    Effect.catchTag("HarnessError", (error) =>
+      Effect.gen(function* () {
+        yield* output.err(`${error.reason}\n`);
+        yield* output.setExitCode(125);
+        return false;
+      }),
+    ),
+  );
+  if (!started) return;
+  yield* output.err(
+    `proofbox: turn started; run proofbox harness wait ${rawId}\n`,
+  );
+}, Effect.scoped);
+
+export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
+  rawId: string,
+  timeout: Option.Option<string>,
+) {
+  const span = Option.isSome(timeout)
+    ? yield* parseSpan("timeout", timeout.value)
+    : undefined;
+  const until =
+    span === undefined
+      ? undefined
+      : (yield* Clock.currentTimeMillis) + Duration.toMillis(span);
+  const output = yield* CliOutput;
+  while (true) {
+    const left =
+      until === undefined
+        ? 5
+        : Math.max(
+            0,
+            Math.floor((until - (yield* Clock.currentTimeMillis)) / 1000),
+          );
+    const turn = yield* readTurn(rawId, Math.min(5, left));
+    if (Option.isNone(turn.harness))
+      return yield* new NotHarnessSandboxError({ id: rawId });
+    if (turn.state._tag === "Running") {
+      if (until === undefined || (yield* Clock.currentTimeMillis) < until)
+        continue;
+      const entry = yield* harnessEntryFor(turn.harness.value);
+      const harness = yield* entry.load;
+      const activity = harness.readActivity(turn.state.output);
+      yield* output.out(
+        `still running\nlast activity: ${formatTime(turn.state.activityAt)}\nlast: ${Option.getOrElse(activity, () => "nothing yet")}\n`,
+      );
+      yield* output.setExitCode(TURN_EXIT.stillRunning);
+      return;
+    }
+    if (turn.state._tag === "Saved") {
+      yield* output.out(turn.state.text);
+      yield* output.setExitCode(turn.state.code);
+      return;
+    }
+    if (turn.state._tag === "Stopped") {
+      yield* output.out("stopped\n");
+      yield* output.setExitCode(TURN_EXIT.stopped);
+      return;
+    }
+    if (turn.state._tag !== "Ended")
+      return yield* new NoTurnYetError({ id: rawId });
+    const entry = yield* harnessEntryFor(turn.harness.value);
+    const harness = yield* entry.load;
+    const result = yield* settleTurn(rawId, turn.files, harness, turn.state);
+    yield* output.out(result.text);
+    yield* output.setExitCode(result.code);
+    return;
+  }
+}, Effect.scoped);
+
+export const stopHarnessTurn = Effect.fn("harness.stopHarnessTurn")(function* (
+  rawId: string,
+) {
+  const state = yield* stopTurn(rawId);
+  if (state === "no-harness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  const output = yield* CliOutput;
+  yield* output.err(
+    state === "stopped"
+      ? "proofbox: stopped the turn\n"
+      : "proofbox: no turn is running\n",
+  );
+}, Effect.scoped);
 
 export const initHarnessProfile = Effect.fn("harness.initHarnessProfile")(
   function* (name: string) {

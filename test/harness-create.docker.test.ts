@@ -1,91 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
+import { cleanupEnvs } from "./support/cli.ts";
+import { containers, docker, fixture } from "./support/harness.ts";
 
-const docker = (...args: string[]) =>
-  execFileSync("docker", args, { encoding: "utf8" });
-const containers: string[] = [];
 afterEach(() => {
   for (const container of containers.splice(0)) docker("rm", "-f", container);
   cleanupEnvs();
 });
-
-const fixture = () => {
-  const env = makeEnv({ docker: true });
-  const home = mkdtempSync(join(tmpdir(), "proofbox-harness-home-"));
-  const folder = mkdtempSync(join(tmpdir(), "proofbox-harness-work-"));
-  trackTempDir(home);
-  trackTempDir(folder);
-  const config = join(home, ".config", "proofbox");
-  mkdirSync(join(config, "harness", "claude"), { recursive: true });
-  writeFileSync(
-    join(config, "harness-logins.json"),
-    JSON.stringify({ claude: { token: "sk-ant-oat01-test" } }),
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(config, "github-logins.json"),
-    JSON.stringify({ octocat: { token: "github_pat_test" } }),
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(config, "harness", "claude", "CLAUDE.md"),
-    "# sandbox rules\n",
-  );
-  execFileSync("git", [
-    "clone",
-    "-q",
-    "https://github.com/octocat/Hello-World.git",
-    folder,
-  ]);
-  writeFileSync(join(folder, "note.txt"), "note\n");
-  execFileSync("git", ["add", "note.txt"], { cwd: folder });
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=proofbox",
-      "-c",
-      "user.email=test@proofbox.invalid",
-      "commit",
-      "-qm",
-      "local: add note.txt",
-    ],
-    { cwd: folder },
-  );
-  appendFileSync(join(folder, "README"), "changed\n");
-  const settings = {
-    set: { HOME: home, DOCKER_CONFIG: join(homedir(), ".docker") },
-  };
-  const create = async (extra: string[] = []) => {
-    const result = await runCli(
-      env,
-      [
-        "create",
-        "--os",
-        "linux",
-        "--provider",
-        "docker",
-        "--harness",
-        "claude",
-        "--work",
-        folder,
-        ...extra,
-      ],
-      settings,
-    );
-    const id = result.stdout.trim();
-    if (/^docker:[a-z0-9]{6}$/.test(id))
-      containers.push(`proofbox-${id.slice(7)}`);
-    return result;
-  };
-  const exec = (id: string, ...argv: string[]) =>
-    runCli(env, ["exec", id, "--", ...argv], settings);
-  return { create, exec };
-};
 
 it("create --harness claude on Docker clones the branch, keeps local work, and installs claude and gh", async () => {
   // Given

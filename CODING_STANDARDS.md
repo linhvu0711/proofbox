@@ -91,6 +91,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
   Node keeps 1, 3 to 14, and codes above 128 for its own failures, so 125 does not clash.
 - A command that runs out of memory exits `122`, with a message that names the Sandbox size and the next size up.
   At the largest size, the message says that it is the largest. With no size limit, it says the host has no free memory left.
+- `harness wait` exits with the Turn's end state: `done` 0, `still running` 124, `stopped` 20, login refused 21, usage limit 22, Harness crash 23. A refusal, such as no Turn yet, is a proofbox failure and exits `125`.
 - An error message says what went wrong and what to do next, for example `Sandbox ran out of memory (4x8). Try --size 8x16.`
 
 ## Formatting
