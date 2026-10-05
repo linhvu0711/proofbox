@@ -96,6 +96,10 @@ _Avoid_: brain, harness, driver, client
 A screen command that works the way a person does: screenshot, click, type, key, scroll, drag.
 _Avoid_: computer use, GUI action, input event
 
+**Pace**:
+How fast a Pixel action moves: the pointer glide, the wait between letters, and the settle time after the action. `human` is the default, so a Proof video is easy to follow; `fast` is for when no one will watch.
+_Avoid_: speed, delay, timing preset
+
 **Live view**:
 A remote screen of a Sandbox that a person opens to watch, click, and type.
 _Avoid_: stream, preview, VNC (the protocol, not the thing)
