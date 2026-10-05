@@ -24,7 +24,11 @@ const dispatch = Effect.fn("main.dispatch")(function* (
   }
   const providers = yield* Providers;
   // @effect/cli has no hook for the top help page, so proofbox prints its own.
-  if (argv.length === 3 && argv[2] === "--help") {
+  const args = argv.slice(2);
+  if (
+    args.length === 0 ||
+    (args.length === 1 && (args[0] === "--help" || args[0] === "-h"))
+  ) {
     const output = yield* CliOutput;
     return yield* output.out(commandList(makeCommand([...providers.keys()])));
   }

@@ -338,4 +338,22 @@ describe("Help text", () => {
       Math.max(...result.stdout.split("\n").map((line) => line.length)),
     ).toBe(85);
   });
+
+  it("proofbox -h prints the short command list", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["-h"]);
+    // Then
+    expect(result.stdout).toBe(shortList);
+  });
+
+  it("proofbox with no arguments prints the short command list", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, []);
+    // Then
+    expect(result.stdout).toBe(shortList);
+  });
 });
