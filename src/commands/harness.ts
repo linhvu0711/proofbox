@@ -20,7 +20,9 @@ import { copyResolved, harnessProfilePath } from "../harness-profile.ts";
 import { changeHarnessLogins } from "../login/logins-file.ts";
 import { readStdinText } from "../login/stdin-token.ts";
 import {
+  endText,
   readTurn,
+  readTurnSteps,
   settleTurn,
   startTurn,
   stopTurn,
@@ -181,6 +183,37 @@ export const waitForTurn = Effect.fn("harness.waitForTurn")(function* (
     yield* output.out(result.text);
     yield* output.setExitCode(result.code);
     return;
+  }
+}, Effect.scoped);
+
+export const logTurn = Effect.fn("harness.logTurn")(function* (rawId: string) {
+  const steps = yield* readTurnSteps(rawId, 0, 0);
+  if (steps._tag === "NoHarness")
+    return yield* new NotHarnessSandboxError({ id: rawId });
+  if (steps._tag === "None") return yield* new NoTurnYetError({ id: rawId });
+  const entry = yield* harnessEntryFor(steps.harness);
+  const harness = yield* entry.load;
+  const output = yield* CliOutput;
+  for (const { at, event } of steps.events) {
+    const step = harness.readStep(event);
+    if (Option.isSome(step))
+      yield* output.out(`${formatTime(at)} ${stepLine(step.value.text)}\n`);
+  }
+  if (steps.running) return yield* output.out("still running\n");
+  const turn = yield* readTurn(rawId, 0);
+  switch (turn.state._tag) {
+    case "Saved":
+      return yield* output.out(`${turn.state.text.split("\n")[0]}\n`);
+    case "Stopped":
+      return yield* output.out("stopped\n");
+    case "Ended":
+      return yield* output.out(
+        `${endText(harness, turn.state.exit, turn.state.output, turn.state.errLines).text.split("\n")[0]}\n`,
+      );
+    case "Running":
+      return yield* output.out("still running\n");
+    case "None":
+      return yield* new NoTurnYetError({ id: rawId });
   }
 }, Effect.scoped);
 

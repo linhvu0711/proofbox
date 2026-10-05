@@ -15,6 +15,7 @@ import { loginToGithub } from "./commands/github.ts";
 import {
   initHarnessProfile,
   loginToHarness,
+  logTurn,
   promptHarness,
   stopHarnessTurn,
   waitForTurn,
@@ -397,6 +398,12 @@ const harnessWait = Command.make(
   ({ id, timeout }) => waitForTurn(id, timeout),
 );
 
+const harnessLog = Command.make(
+  "log",
+  { id: Args.text({ name: "id" }) },
+  ({ id }) => logTurn(id),
+);
+
 const harnessStop = Command.make(
   "stop",
   { id: Args.text({ name: "id" }) },
@@ -409,6 +416,7 @@ const harness = Command.make("harness").pipe(
     harnessProfile,
     harnessPrompt,
     harnessWait,
+    harnessLog,
     harnessStop,
   ]),
 );

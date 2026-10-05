@@ -24,6 +24,146 @@ const sandbox = async (env: CliEnv, extra: string[] = []) => {
   return created.stdout.trim();
 };
 
+it("harness log after a Turn prints each step with its time and the end state last", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({
+    code: result.exitCode,
+    stderr: result.stderr,
+    lines: result.stdout.split("\n"),
+  }).toEqual({
+    code: 0,
+    stderr: "",
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
+it("harness log during a Turn prints the steps so far and still running", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "sleep 20"]);
+  // When
+  let result = await runCli(env, ["harness", "log", id]);
+  for (let n = 1; n < 40 && !result.stdout.includes("sleeping 20s"); n++) {
+    await sleep(250);
+    result = await runCli(env, ["harness", "log", id]);
+  }
+  await runCli(env, ["harness", "stop", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z sleeping 20s$/,
+      ),
+      "still running",
+      "",
+    ],
+  });
+});
+
+it("harness log before any prompt says no turn has run yet", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect(result).toEqual({
+    exitCode: 125,
+    stdout: "",
+    stderr: `no turn has run yet; run proofbox harness prompt ${id} "<prompt>"\n`,
+  });
+});
+
+it("harness log on a Sandbox made without --harness is refused", async () => {
+  // Given
+  const env = makeEnv();
+  const created = await runCli(env, [
+    "create",
+    "--os",
+    "linux",
+    "--provider",
+    "fake",
+  ]);
+  const id = created.stdout.trim();
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+    code: 125,
+    stderr: `Sandbox ${id} was made without --harness; make one with proofbox create --harness claude.\n`,
+  });
+});
+
+it("harness log after a failed Turn ends with the failure", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "fail login"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "failed: Harness login refused: 401 login refused",
+      "",
+    ],
+  });
+});
+
+it("harness log on an ended Turn that no wait has read prints done and saves nothing", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "hello"]);
+  // When
+  let result = await runCli(env, ["harness", "log", id]);
+  for (
+    let n = 1;
+    n < 40 && result.stdout.trimEnd().endsWith("still running");
+    n++
+  ) {
+    await sleep(250);
+    result = await runCli(env, ["harness", "log", id]);
+  }
+  // Then
+  expect({
+    lines: result.stdout.split("\n"),
+    saved: existsSync(join(env.root, id.slice(5), "state", "turn", "result")),
+  }).toEqual({
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      "done",
+      "",
+    ],
+    saved: false,
+  });
+});
+
 it("harness wait prints done and the last message", async () => {
   // Given
   const env = makeEnv();

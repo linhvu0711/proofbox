@@ -29,9 +29,10 @@ if [ -f "$t/pid" ] && [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$(
   exit 0
 fi
 rm -rf "$t"; mkdir -p "$t"
+stamp='open(my $times, ">", shift) or die; $times->autoflush(1); STDOUT->autoflush(1); while (my $line = <STDIN>) { print $line; print $times time(), "\\n"; }'
 (trap '' HUP; exec perl -MPOSIX -e 'POSIX::setsid() >= 0 or die; exec @ARGV or die' \\
-  sh -c 't=$1; shift; "$@" > "$t/out" 2> "$t/err"; echo "$?" > "$t/exit.tmp"; mv "$t/exit.tmp" "$t/exit"' \\
-  sh "$t" "$@") < /dev/null > /dev/null 2>&1 &
+  sh -c 't=$1; p=$2; shift 2; { "$@" 2> "$t/err"; echo "$?" > "$t/exit.tmp"; } | perl -e "$p" "$t/times" > "$t/out"; mv "$t/exit.tmp" "$t/exit"' \\
+  sh "$t" "$stamp" "$@") < /dev/null > /dev/null 2>&1 &
 echo "$!" > "$t/pid"
 `;
 
@@ -60,6 +61,26 @@ fi
 if [ -f "$t/out" ]; then tail -n 50 "$t/out" | tail -c 1048576; fi
 printf '%s\\n' "$marker"
 if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
+`;
+
+const STEPS = `set -eu
+h=$1; t=$2; from=$3; seconds=$4
+if [ ! -f "$h" ]; then echo no-harness; exit; fi
+head -n 1 "$h"
+if [ ! -f "$t/pid" ]; then echo none; exit; fi
+pid=$(cat "$t/pid")
+count() { if [ -f "$t/times" ]; then wc -l < "$t/times" | tr -d ' '; else echo 0; fi; }
+running() { [ ! -f "$t/exit" ] && [ ! -f "$t/stopped" ] && kill -0 "$pid" 2>/dev/null; }
+while [ "$seconds" -gt 0 ] && [ "$(count)" -le "$from" ] && running; do
+  sleep 1
+  seconds=$((seconds - 1))
+done
+if running; then echo running; else echo ended; fi
+n=$(count); echo "$n"
+if [ "$n" -gt "$from" ]; then
+  tail -n "+$((from + 1))" "$t/times" | head -n "$((n - from))"
+  tail -n "+$((from + 1))" "$t/out" | head -n "$((n - from))"
+fi
 `;
 
 const STOP = `set -eu
@@ -197,6 +218,42 @@ export const readTurn = Effect.fn("turn.readTurn")(function* (
     harness: name === "no-harness" ? Option.none<string>() : Option.some(name),
     session: session === "" ? Option.none<string>() : Option.some(session),
     state,
+  };
+});
+
+export const readTurnSteps = Effect.fn("turn.readTurnSteps")(function* (
+  rawId: string,
+  from: number,
+  waitSeconds: number,
+) {
+  const files = yield* turnFiles(rawId);
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    STEPS,
+    "sh",
+    files.harness,
+    files.turn,
+    String(from),
+    String(waitSeconds),
+  ]);
+  if (result.code !== 0)
+    return yield* new HarnessError({
+      harness: rawId,
+      reason: `could not read the Turn steps (exit code ${result.code})`,
+    });
+  const [name = "", status = "", count = "0", ...rest] = result.out.split("\n");
+  if (name === "no-harness") return { _tag: "NoHarness" } as const;
+  if (status === "none") return { _tag: "None" } as const;
+  const length = Math.max(0, Number(count) - from);
+  return {
+    _tag: "Read" as const,
+    harness: name,
+    running: status === "running",
+    events: rest.slice(length, length * 2).map((event, index) => ({
+      at: new Date(Number(rest[index]) * 1000),
+      event,
+    })),
   };
 });
 
