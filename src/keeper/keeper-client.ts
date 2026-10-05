@@ -182,6 +182,16 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       // File access for the Keeper's files, taken once when the client is
       // built.
       const fs = yield* FileSystem.FileSystem;
+      const warned = yield* Ref.make(false);
+
+      // One Keeper line per run, the first caller's.
+      const warnNotStarted = Effect.fn("KeeperClient.warnNotStarted")(
+        function* (line: string) {
+          if (!(yield* Ref.getAndSet(warned, true))) {
+            yield* output.err(line);
+          }
+        },
+      );
 
       const start = Effect.fn("KeeperClient.start")(
         function* (rawId: string) {
@@ -205,7 +215,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               : { exec: [...argv], stdin: true },
           );
           if (socket._tag === "None") {
-            yield* output.err(
+            yield* warnNotStarted(
               "proofbox: Keeper did not start; running without it\n",
             );
             return yield* execDirect(provider, id, argv, options);
@@ -416,7 +426,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         Effect.provideService(FileSystem.FileSystem, fs),
       );
 
-      return { start, exec, info, stop };
+      return { start, exec, info, stop, warnNotStarted };
     }),
   },
 ) {
@@ -426,6 +436,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       const providers = yield* Providers;
       return new KeeperClient({
         start: () => Effect.void,
+        warnNotStarted: () => Effect.void,
         stop: () => Effect.void,
         info: (rawId: string) =>
           Effect.flatMap(resolveSandboxId(rawId, providers), (id) =>
