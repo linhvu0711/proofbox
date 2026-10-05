@@ -130,12 +130,19 @@ export const promptHarness = Effect.fn("harness.promptHarness")(function* (
   if (turn.state._tag === "Running") return yield* new TurnRunningError();
   const entry = yield* harnessEntryFor(turn.harness.value);
   const harness = yield* entry.load;
+  const output = yield* CliOutput;
   let session = turn.session;
   if (turn.state._tag === "Ended") {
     yield* settleTurn(rawId, turn.files, harness, turn.state);
+    yield* saveBackHarnessLoginFile(rawId, entry).pipe(
+      Effect.catchAll((error) =>
+        output.err(
+          `proofbox: could not save the renewed Harness login back (${error.message})\n`,
+        ),
+      ),
+    );
     session = (yield* readTurn(rawId, 0)).session;
   }
-  const output = yield* CliOutput;
   const started = yield* startTurn(
     rawId,
     harness.turn({ prompt, model, session }),

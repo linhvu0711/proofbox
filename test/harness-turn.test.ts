@@ -111,6 +111,23 @@ it("a later harness wait saves back a login an earlier wait could not", async ()
   });
 });
 
+it("harness prompt saves back the login of the Turn it settles", async () => {
+  const env = makeEnv();
+  const { id, saved } = await fileSandbox(env);
+  await runCli(env, ["harness", "prompt", id, "make hello.txt"]);
+  const text = '{"last_refresh":"2999-01-01T00:00:00Z","renewals":3}';
+  await setSandboxLogin(env, id, text);
+  while (!existsSync(join(env.root, id.slice(5), "state", "turn", "exit")))
+    await sleep(10);
+  const result = await runCli(env, ["harness", "prompt", id, "recall"]);
+  expect({ code: result.exitCode, saved: readFileSync(saved, "utf8") }).toEqual(
+    {
+      code: 0,
+      saved: text,
+    },
+  );
+});
+
 it("harness wait saves back a newer Sandbox login file", async () => {
   const env = makeEnv();
   const { id, saved } = await fileSandbox(env);
