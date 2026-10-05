@@ -80,7 +80,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | Command | What it does |
 | --- | --- |
 | `auth login <provider>` | Logs in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
-| `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. Then one line per saved GitHub owner and saved Harness login, with the Claude token's end date. |
+| `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. Then one line per saved GitHub owner and saved Harness login, with the Claude token's end date and the Codex login's last renewal. |
 | `auth logout <provider>` | Deletes the Sandboxes this machine started, prints their ids, then removes the saved login. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
 | `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
 | `github login <owner>` | Saves a fine-grained GitHub token for one owner (a user or an org), read from stdin, so a Harness can push and open pull requests. One token per owner; saving the same owner again replaces it. Then says to protect `main` with a ruleset that needs a review. |

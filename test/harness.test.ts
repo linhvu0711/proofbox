@@ -186,6 +186,45 @@ describe("Harness logins", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("auth status shows the Codex login as a ChatGPT plan login with its last renewal", async () => {
+    const env = makeEnv();
+    const home = makeHome();
+    mkdirSync(join(home, ".config", "proofbox", "harness-logins", "codex"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      savedCodexPath(home),
+      '{"auth_mode":"chatgpt","last_refresh":"2026-10-01T10:00:00.123456Z"}',
+      { mode: 0o600 },
+    );
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+      unset: ["PROOFBOX_FAKE_TOKEN"],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      "docker  no login needed\nnamespace  not logged in\nfake  not logged in\nharness codex  ChatGPT plan login, renewed 2026-10-01T10:00:00Z, saved login\n",
+    );
+  });
+
+  it("auth status names an unreadable Codex login file", async () => {
+    const env = makeEnv();
+    const home = makeHome();
+    mkdirSync(join(home, ".config", "proofbox", "harness-logins", "codex"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(savedCodexPath(home), "not json", { mode: 0o600 });
+    const result = await runCli(env, ["auth", "status"], {
+      set: { HOME: home },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(
+      /harness codex {2}saved login unreadable\. Run: proofbox harness login codex\n$/,
+    );
+  });
+
   it("harness login and auth status leave ~/.claude and ~/.codex alone", async () => {
     // Given
     const env = makeEnv();
@@ -219,6 +258,9 @@ describe("Harness logins", () => {
         status.exitCode,
       ]).toEqual([0, 0, 0]);
       expect(status.stdout).toContain("harness claude  token …abcd, expires ");
+      expect(status.stdout).toContain(
+        "harness codex  ChatGPT plan login, renewed 2026-10-01T10:00:00Z, saved login\n",
+      );
       expect(readFileSync(savedCodexPath(home), "utf8")).toBe(codexLoginText);
       expect(statSync(claude).mode & 0o777).toBe(0o000);
       expect(statSync(codex).mode & 0o777).toBe(0o000);
