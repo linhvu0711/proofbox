@@ -22,6 +22,30 @@ const Assistant = Schema.Struct({
   message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }),
 });
 
+const Init = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("init"),
+  model: Schema.String,
+});
+
+const ApiRetry = Schema.Struct({
+  type: Schema.Literal("system"),
+  subtype: Schema.Literal("api_retry"),
+  attempt: Schema.Number,
+  error: Schema.String,
+});
+
+const User = Schema.Struct({
+  type: Schema.Literal("user"),
+  message: Schema.Struct({ content: Schema.Array(Schema.Unknown) }),
+});
+
+const ToolResult = Schema.Struct({
+  type: Schema.Literal("tool_result"),
+  content: Schema.Union(Schema.String, Schema.Array(Schema.Unknown)),
+  isError: Schema.optional(Schema.Boolean).pipe(Schema.fromKey("is_error")),
+});
+
 const ActivityBlock = Schema.Union(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
   Schema.Struct({
@@ -87,11 +111,40 @@ export const makeClaudeHarness = (): Harness => ({
     return { _tag: "NoEnd" };
   },
   readStep: (event) => {
-    const decoded = Schema.decodeUnknownEither(Schema.parseJson(Assistant))(
-      event,
-    );
+    const decoded = Schema.decodeUnknownEither(
+      Schema.parseJson(Schema.Union(Assistant, Init, ApiRetry, User)),
+    )(event);
     if (Either.isLeft(decoded)) return Option.none();
-    for (const value of [...decoded.right.message.content].reverse()) {
+    const message = decoded.right;
+    if (message.type === "system")
+      return Option.some({
+        kind: "other",
+        text:
+          message.subtype === "init"
+            ? `started: ${message.model}`
+            : `API retry ${message.attempt}: ${message.error}`,
+      });
+    for (const value of [...message.message.content].reverse()) {
+      if (message.type === "user") {
+        const block = Schema.decodeUnknownEither(ToolResult)(value);
+        if (Either.isLeft(block)) continue;
+        const tool = block.right;
+        const content =
+          typeof tool.content === "string"
+            ? tool.content
+            : tool.content
+                .flatMap((value) => {
+                  const text = Schema.decodeUnknownEither(ActivityBlock)(value);
+                  return Either.isRight(text) && text.right.type === "text"
+                    ? [text.right.text]
+                    : [];
+                })
+                .join("\n");
+        return Option.some({
+          kind: "result",
+          text: `${tool.isError === true ? "error" : "result"}: ${content}`,
+        });
+      }
       const block = Schema.decodeUnknownEither(ActivityBlock)(value);
       if (Either.isLeft(block)) continue;
       if (block.right.type === "text")

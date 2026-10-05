@@ -90,6 +90,80 @@ it("Claude has no step for a cut event", () => {
   expect(result).toEqual(Option.none());
 });
 
+it("Claude's step for the start names the model", () => {
+  // Given
+  const event =
+    '{"type":"system","subtype":"init","model":"claude-opus-5-5","session_id":"s1","cwd":"/work","tools":[]}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(
+    Option.some({ kind: "other", text: "started: claude-opus-5-5" }),
+  );
+});
+
+it("Claude's step for a tool result is its output", () => {
+  // Given
+  const event =
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(Option.some({ kind: "result", text: "result: ok" }));
+});
+
+it("Claude's step for a failed tool joins its text blocks", () => {
+  // Given
+  const event =
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"Exit code 1"},{"type":"text","text":"not found"}]}]}}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(
+    Option.some({ kind: "result", text: "error: Exit code 1\nnot found" }),
+  );
+});
+
+it("Claude's step for an API retry names the attempt and the error", () => {
+  // Given
+  const event =
+    '{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":4000,"error_status":529,"error":"overloaded"}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(
+    Option.some({ kind: "other", text: "API retry 2: overloaded" }),
+  );
+});
+
+it("Claude has no step for the result event", () => {
+  // Given
+  const event =
+    '{"type":"result","subtype":"success","is_error":false,"result":"Made hello.txt.","session_id":"s1"}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(Option.none());
+});
+
+it("Claude has no step for the prompt it was sent", () => {
+  // Given
+  const event = '{"type":"user","message":{"role":"user","content":"hi"}}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(Option.none());
+});
+
+it("Claude has no step for other system events", () => {
+  // Given
+  const event = '{"type":"system","subtype":"compact_boundary"}';
+  // When
+  const result = makeClaudeHarness().readStep(event);
+  // Then
+  expect(result).toEqual(Option.none());
+});
+
 it("a refused Claude login reads as a login failure", () => {
   // Given
   const output = `{"type":"system","subtype":"api_retry","attempt":1,"error_status":401,"error":"authentication_failed","session_id":"7f1c2d3e-0000-4000-8000-000000000001"}\n{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Failed to authenticate. API Error: 401 OAuth access token is invalid.","session_id":"7f1c2d3e-0000-4000-8000-000000000001"}`;
