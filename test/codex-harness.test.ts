@@ -291,6 +291,28 @@ it("Codex reads an MCP call start as a tool step", () => {
   expect(steps).toEqual([{ kind: "tool", text: "mcp_tool_call: docs/search" }]);
 });
 
+it("Codex reads an MCP tool result", () => {
+  // Given
+  const harness = makeCodexHarness();
+  const events = [
+    '{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{},"result":{"content":[{"type":"text","text":"first"},{"type":"image","data":"","mimeType":"image/png"},{"type":"text","text":"second"}]},"error":null,"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{},"result":null,"error":{"message":"tool failed"},"status":"failed"}}',
+    '{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{},"result":{"content":[{"type":"text","text":"ignored"}]},"error":{"message":"tool failed"},"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{},"result":null,"error":null,"status":"failed"}}',
+    '{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{},"result":{"content":[{"type":"image","data":"","mimeType":"image/png"}]},"error":null,"status":"completed"}}',
+  ];
+  // When
+  const steps = events.map((event) => harness.readSteps(event));
+  // Then
+  expect(steps).toEqual([
+    [{ kind: "result", text: "result: first\nsecond" }],
+    [{ kind: "result", text: "error: tool failed" }],
+    [{ kind: "result", text: "error: tool failed" }],
+    [{ kind: "result", text: "error: " }],
+    [{ kind: "result", text: "result: " }],
+  ]);
+});
+
 it("Codex reads a web search as a tool step", () => {
   // Given
   const harness = makeCodexHarness();

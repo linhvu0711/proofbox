@@ -69,6 +69,24 @@ const McpToolCall = Schema.Struct({
   }),
 });
 
+const McpToolResult = Schema.Struct({
+  type: Schema.Literal("item.completed"),
+  item: Schema.Struct({
+    type: Schema.Literal("mcp_tool_call"),
+    result: Schema.optional(
+      Schema.NullOr(Schema.Struct({ content: Schema.Array(Schema.Unknown) })),
+    ),
+    error: Schema.optional(
+      Schema.NullOr(Schema.Struct({ message: Schema.String })),
+    ),
+    status: Schema.optional(Schema.String),
+  }),
+});
+
+const decodeTextBlock = Schema.decodeUnknownEither(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+
 const WebSearch = Schema.Struct({
   type: Schema.Literal("item.completed"),
   item: Schema.Struct({
@@ -97,6 +115,7 @@ const StepEvent = Schema.Union(
   CommandCompleted,
   FileChange,
   McpToolCall,
+  McpToolResult,
   WebSearch,
   ErrorItem,
   ErrorEvent,
@@ -203,6 +222,24 @@ export const makeCodexHarness = (): Harness => ({
                 text: `file_change: ${item.changes.map((change) => change.path).join(", ")}`,
               },
             ];
+          case "mcp_tool_call": {
+            const failed =
+              item.error?.message !== undefined || item.status === "failed";
+            const text = failed
+              ? (item.error?.message ?? "")
+              : (item.result?.content ?? [])
+                  .flatMap((value) => {
+                    const block = decodeTextBlock(value);
+                    return Either.isRight(block) ? [block.right.text] : [];
+                  })
+                  .join("\n");
+            return [
+              {
+                kind: "result",
+                text: `${failed ? "error" : "result"}: ${text}`,
+              },
+            ];
+          }
           case "web_search":
             return [{ kind: "tool", text: `web_search: ${item.query}` }];
           case "error":
