@@ -271,6 +271,23 @@ describe("Capability", () => {
     expect(result.stderr).toContain("'x' is not a integer");
   });
 
+  it("scroll refuses a step count that is too large", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, [
+      "scroll",
+      "fake:none",
+      "10",
+      "10",
+      "down",
+      "99999999999999999999",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toContain("'99999999999999999999' is not a integer");
+  });
+
   it("key --help lists only the flags key uses", async () => {
     // Given
     const env = makeEnv();

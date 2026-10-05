@@ -1,5 +1,5 @@
 import { Args, Command, HelpDoc, Options } from "@effect/cli";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -73,18 +73,21 @@ const typeMax = Options.text("type-max").pipe(Options.optional);
 const settle = Options.text("settle").pipe(Options.optional);
 
 // @effect/cli gives unknown flags to optional [steps]; use its unknown-argument line.
+// The schema is the one Args.integer uses.
 const scrollSteps = Args.text({ name: "steps" }).pipe(
   Args.withDescription("An integer, 3 by default."),
   Args.mapEffect((value) =>
-    /^-?\d+$/.test(value)
-      ? Effect.succeed(Number(value))
-      : Effect.fail(
-          HelpDoc.p(
-            value.startsWith("-")
-              ? `Received unknown argument: '${value}'`
-              : `'${value}' is not a integer`,
-          ),
+    Schema.decodeUnknown(Schema.compose(Schema.NumberFromString, Schema.Int))(
+      value,
+    ).pipe(
+      Effect.mapError(() =>
+        HelpDoc.p(
+          value.startsWith("-")
+            ? `Received unknown argument: '${value}'`
+            : `'${value}' is not a integer`,
         ),
+      ),
+    ),
   ),
   Args.withDefault(3),
 );
