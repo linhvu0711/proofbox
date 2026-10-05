@@ -121,7 +121,7 @@ A Turn ends in one of these states. `harness wait` prints it on stdout and exits
 What costs money while a Turn runs:
 
 - The Sandbox bills its Provider for every minute it lives, also while the model thinks: about $1.20 to $1.80 for a 20-minute Turn on a Namespace Mac (ADR 0023). Docker costs nothing.
-- The Harness login pays for the model. Claude usage counts against the account behind `claude setup-token`. A Codex API key bills OpenAI.
+- The Harness login pays for the model. Claude usage counts against the account behind `claude setup-token`. A Codex login uses the Caller's ChatGPT plan.
 - `harness wait` keeps the Sandbox alive. When you are done, `harness stop` and `delete`.
 
 To check that a new Harness version still works, run `pnpm test:harness` (see Develop).
