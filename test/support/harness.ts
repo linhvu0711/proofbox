@@ -57,7 +57,7 @@ export const docker = (...args: string[]) =>
   execFileSync("docker", args, { encoding: "utf8" });
 export const containers: string[] = [];
 
-export const fixture = (harness = "claude") => {
+export const fixture = (harness = "claude", token = "sk-ant-oat01-test") => {
   const env = makeEnv({ docker: true });
   const home = mkdtempSync(join(tmpdir(), "proofbox-harness-home-"));
   const folder = mkdtempSync(join(tmpdir(), "proofbox-harness-work-"));
@@ -67,7 +67,7 @@ export const fixture = (harness = "claude") => {
   mkdirSync(join(config, "harness", harness), { recursive: true });
   writeFileSync(
     join(config, "harness-logins.json"),
-    JSON.stringify({ [harness]: { token: "sk-ant-oat01-test" } }),
+    JSON.stringify({ [harness]: { token } }),
     { mode: 0o600 },
   );
   writeFileSync(

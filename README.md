@@ -128,6 +128,7 @@ Windows, mobile, the accessibility tree, and an MCP server.
 pnpm test             # fake Provider, no cloud
 pnpm test:docker      # needs Docker
 pnpm test:namespace   # needs PROOFBOX_NAMESPACE_TOKEN (make one with `proofbox auth token namespace --name dev --expires 1d`); uses real Namespace minutes
+pnpm test:harness     # by hand: needs Docker and a Harness login; runs one real Turn per Harness and uses its tokens
 pnpm lint && pnpm typecheck
 ```
 
