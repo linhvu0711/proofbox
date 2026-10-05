@@ -149,6 +149,9 @@ export const runCli = (
       ...env.env,
       ...options.set,
     };
+    for (const key of ["FORCE_COLOR", "NO_COLOR"]) {
+      if (options.set?.[key] === undefined) delete childEnv[key];
+    }
     for (const key of options.unset ?? []) {
       delete childEnv[key];
     }

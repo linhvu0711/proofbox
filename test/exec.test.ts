@@ -6,6 +6,26 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 describe("exec", () => {
   afterEach(cleanupEnvs);
 
+  it("exec output passes through unchanged with FORCE_COLOR=1", async () => {
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const result = await runCli(
+      env,
+      ["exec", id, "--", "sh", "-c", "printf 'a\\nb'; printf err >&2; exit 3"],
+      { set: { FORCE_COLOR: "1" } },
+    );
+    expect(result.stdout).toBe("a\nb");
+    expect(result.stderr).toBe("err");
+    expect(result.exitCode).toBe(3);
+  });
+
   it("exec passes stdout, stderr, and exit code unchanged", async () => {
     // Given: a created Sandbox id
     const env = makeEnv();
