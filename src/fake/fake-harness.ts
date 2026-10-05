@@ -14,6 +14,11 @@ const Activity = Schema.Struct({
   text: Schema.String,
 });
 
+const Said = Schema.Struct({
+  type: Schema.Literal("said"),
+  text: Schema.String,
+});
+
 const FAKE_HARNESS_SCRIPT = String.raw`#!/bin/sh
 set -eu
 shift
@@ -45,6 +50,11 @@ case "$prompt" in
   crash) echo 'fake-harness: crashed on purpose' >&2; exit 3 ;;
   'done then exit 2') message="did: $prompt"; code=2 ;;
   'stderr marker') echo proofbox-turn-err >&2; message="did: $prompt" ;;
+  long)
+    x=$(printf '%200s' '' | tr ' ' x)
+    printf '{"type":"said","text":"%s\\nsecond line"}\n' "$x"
+    message="did: $prompt"
+    ;;
   *) message="did: $prompt" ;;
 esac
 perl -MJSON::PP -e 'print encode_json({type => "end", session => $ARGV[0], message => $ARGV[1]}), "\n"' "$session" "$message"
@@ -93,6 +103,9 @@ export const makeFakeHarness = (): Harness => ({
     }
   },
   readStep: (event) => {
+    const said = Schema.decodeUnknownEither(Schema.parseJson(Said))(event);
+    if (Either.isRight(said))
+      return Option.some({ kind: "said", text: said.right.text });
     const activity = Schema.decodeUnknownEither(Schema.parseJson(Activity))(
       event,
     );

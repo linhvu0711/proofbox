@@ -272,6 +272,30 @@ it("harness log --full prints the Harness's own JSON lines unchanged", async () 
   });
 });
 
+it("harness log cuts a long step to one line with its size", async () => {
+  // Given
+  const env = makeEnv();
+  const id = await sandbox(env);
+  await runCli(env, ["harness", "prompt", id, "long"]);
+  await runCli(env, ["harness", "wait", id]);
+  // When
+  const result = await runCli(env, ["harness", "log", id]);
+  // Then
+  expect({ code: result.exitCode, lines: result.stdout.split("\n") }).toEqual({
+    code: 0,
+    lines: [
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z read the prompt$/,
+      ),
+      expect.stringMatching(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z x{119}… \(212 B\)$/,
+      ),
+      "done",
+      "",
+    ],
+  });
+});
+
 it("harness wait prints done and the last message", async () => {
   // Given
   const env = makeEnv();
