@@ -4,11 +4,15 @@
 // `pnpm test` leaves it out; run it with `pnpm test:harness`.
 
 import { NodeContext } from "@effect/platform-node";
-import { Effect, Either, Option, Redacted } from "effect";
+import { ConfigProvider, Effect, Either, Option, Redacted } from "effect";
 import { afterEach, expect, it } from "vitest";
 import { Harnesses } from "../src/harness.ts";
 import { HarnessesLive } from "../src/harness-registry.ts";
-import { readHarnessLogins } from "../src/login/logins-file.ts";
+import { keepNewerHarnessLoginFile } from "../src/harness-sandbox.ts";
+import {
+  readHarnessLoginFile,
+  readHarnessLogins,
+} from "../src/login/logins-file.ts";
 import { cleanupEnvs, runCli } from "./support/cli.ts";
 import { containers, docker, fixture } from "./support/harness.ts";
 
@@ -21,13 +25,20 @@ const registered = await Effect.runPromise(
     const logins = yield* readHarnessLogins;
     const now = Date.now();
     return yield* Effect.forEach([...harnesses.values()], (entry) =>
-      Effect.map(Effect.either(entry.load), (loaded) => {
+      Effect.gen(function* () {
+        const loaded = yield* Effect.either(entry.load);
         const saved = logins[entry.name];
-        const login =
-          saved === undefined ||
-          (saved.expiresAt !== undefined && saved.expiresAt.getTime() < now)
-            ? Option.none()
-            : Option.some(saved.token);
+        const login: Option.Option<{ token: string } | { file: string }> =
+          entry.login._tag === "File"
+            ? Option.map(
+                yield* readHarnessLoginFile(entry.name, entry.login.file),
+                (file) => ({ file }),
+              )
+            : saved === undefined ||
+                (saved.expiresAt !== undefined &&
+                  saved.expiresAt.getTime() < now)
+              ? Option.none()
+              : Option.some({ token: Redacted.value(saved.token) });
         return { entry, loaded, login };
       }),
     );
@@ -48,34 +59,51 @@ for (const { entry, loaded, login } of registered) {
       return ctx.skip(line);
     }
     if (Option.isNone(login)) {
-      const line = `${name}: no Harness login; run: echo ${entry.login.placeholder} | proofbox harness login ${name}. ${entry.login.howToMake}.`;
+      const command =
+        entry.login._tag === "Env"
+          ? `echo ${entry.login.placeholder} | proofbox harness login ${name}`
+          : `proofbox harness login ${name}`;
+      const line = `${name}: no Harness login; run: ${command}. ${entry.login.howToMake}.`;
       console.warn(line);
       return ctx.skip(line);
     }
     // Given
-    const { env, settings, create } = fixture(
-      name,
-      Redacted.value(login.value),
-    );
-    const created = await create();
-    if (created.exitCode !== 0) throw new Error(created.stderr);
-    const id = created.stdout.trim();
-    // When
-    const prompt = await runCli(
-      env,
-      ["harness", "prompt", id, PROMPT],
-      settings,
-    );
-    if (prompt.exitCode !== 0) throw new Error(prompt.stderr);
-    const wait = await runCli(
-      env,
-      ["harness", "wait", id, "--timeout", "10m"],
-      settings,
-    );
-    // Then
-    expect({
-      firstLine: wait.stdout.split("\n")[0],
-      code: wait.exitCode,
-    }).toEqual({ firstLine: "done", code: 0 });
+    const { env, settings, create } = fixture(name, login.value);
+    try {
+      const created = await create();
+      if (created.exitCode !== 0) throw new Error(created.stderr);
+      const id = created.stdout.trim();
+      // When
+      const prompt = await runCli(
+        env,
+        ["harness", "prompt", id, PROMPT],
+        settings,
+      );
+      if (prompt.exitCode !== 0) throw new Error(prompt.stderr);
+      const wait = await runCli(
+        env,
+        ["harness", "wait", id, "--timeout", "10m"],
+        settings,
+      );
+      // Then
+      expect({
+        firstLine: wait.stdout.split("\n")[0],
+        code: wait.exitCode,
+      }).toEqual({ firstLine: "done", code: 0 });
+    } finally {
+      const login = entry.login;
+      if (login._tag === "File")
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const fixture = yield* readHarnessLoginFile(name, login.file).pipe(
+              Effect.withConfigProvider(
+                ConfigProvider.fromMap(new Map([["HOME", settings.set.HOME]])),
+              ),
+            );
+            if (Option.isSome(fixture))
+              yield* keepNewerHarnessLoginFile(entry, fixture.value);
+          }).pipe(Effect.provide(NodeContext.layer)),
+        );
+    }
   });
 }

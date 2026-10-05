@@ -1,14 +1,41 @@
+import type { CommandExecutor } from "@effect/platform";
 import { Context, type Duration, type Effect, type Option } from "effect";
-import type { HarnessError } from "./errors.ts";
+import type { CliOutput } from "./cli-output.ts";
+import type { HarnessError, HarnessLoginError } from "./errors.ts";
 
-// What login and status need without loading the Harness. envName is
-// the environment variable the Harness reads in the Sandbox.
-export interface HarnessLogin {
+export type HarnessLogin = HarnessEnvLogin | HarnessFileLogin;
+
+export interface HarnessEnvLogin {
+  readonly _tag: "Env";
   readonly envName: string;
-  readonly what: "token" | "API key";
-  readonly placeholder: "<token>" | "<key>";
+  readonly what: "token";
+  readonly placeholder: "<token>";
   readonly howToMake: string;
   readonly lifetime: Option.Option<Duration.Duration>;
+}
+
+export interface HarnessFileLogin {
+  readonly _tag: "File";
+  readonly what: string;
+  readonly file: string;
+  readonly howToMake: string;
+  readonly renewAfter: Duration.Duration;
+  readonly load: Effect.Effect<FileLoginTool, HarnessError>;
+}
+
+export interface FileLoginTool {
+  readonly login: (
+    home: string,
+  ) => Effect.Effect<
+    void,
+    HarnessLoginError,
+    CommandExecutor.CommandExecutor | CliOutput
+  >;
+  readonly renew: (
+    home: string,
+  ) => Effect.Effect<void, HarnessLoginError, CommandExecutor.CommandExecutor>;
+  readonly renewedAt: (text: string) => Option.Option<Date>;
+  readonly accountOf: (text: string) => Option.Option<string>;
 }
 
 export type TurnEnd =
@@ -62,7 +89,7 @@ export interface Harness {
     readonly model: Option.Option<string>;
     readonly session: Option.Option<string>;
   }) => ReadonlyArray<string>;
-  // Reads the whole JSON output, one event per line.
+  // Reads the first line and the last 50 lines of the JSON output, one event per line.
   readonly readEnd: (output: string) => TurnEnd;
   // One line of the Harness's JSON output as its steps, in order; none when the line holds no step.
   readonly readSteps: (event: string) => ReadonlyArray<HarnessStep>;

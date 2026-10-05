@@ -58,7 +58,10 @@ elif kill -0 "$pid" 2>/dev/null; then
 else
   echo 'ended none'
 fi
-if [ -f "$t/out" ]; then tail -n 50 "$t/out" | tail -c 1048576; fi
+if [ -f "$t/out" ]; then
+  if [ "$(wc -l < "$t/out")" -gt 50 ]; then head -n 1 "$t/out"; fi
+  tail -n 50 "$t/out" | tail -c 1048576
+fi
 printf '%s\\n' "$marker"
 if [ -f "$t/err" ]; then tail -n 20 "$t/err"; fi
 `;
@@ -150,7 +153,7 @@ export const runTurnScript = Effect.fn("turn.runTurnScript")(function* (
   return { code, out: Buffer.concat(chunks).toString("utf8") };
 });
 
-const turnFiles = Effect.fn("turn.turnFiles")(function* (rawId: string) {
+export const turnFiles = Effect.fn("turn.turnFiles")(function* (rawId: string) {
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const keeper = yield* KeeperClient;

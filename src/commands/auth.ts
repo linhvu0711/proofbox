@@ -25,6 +25,7 @@ import {
 import {
   changeLogins,
   type HarnessLoginsFile,
+  readHarnessLoginFile,
   readHarnessLogins,
   readLogins,
   type SavedLogin,
@@ -311,6 +312,20 @@ export const showAuthStatus = Effect.gen(function* () {
     Effect.catchAll(() => Effect.succeed<HarnessLoginsFile>({})),
   );
   for (const [name, entry] of harnesses) {
+    if (entry.login._tag === "File") {
+      const login = entry.login;
+      const text = yield* readHarnessLoginFile(name, login.file).pipe(
+        Effect.catchAll(() => Effect.succeed(Option.some(""))),
+      );
+      if (Option.isNone(text)) continue;
+      const tool = yield* login.load;
+      const renewed = tool.renewedAt(text.value);
+      const line = Option.isSome(renewed)
+        ? `${login.what}, renewed ${formatTime(renewed.value)}, saved login`
+        : `saved login unreadable. Run: proofbox harness login ${name}`;
+      yield* output.out(`harness ${name}  ${line}\n`);
+      continue;
+    }
     const saved = savedHarnesses[name];
     if (saved === undefined) continue;
     const expiresAt = saved.expiresAt;

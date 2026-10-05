@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { FileSystem } from "@effect/platform";
-import { Config, Duration, Effect, Schema } from "effect";
+import { Config, Duration, Effect, Option, Schema } from "effect";
 import { BadLoginsFileError, LoginsBusyError } from "../errors.ts";
 import { withFileLock } from "../file-lock.ts";
 
@@ -90,16 +90,12 @@ export const readHarnessLogins = Effect.flatMap(harnessLoginsPath, (path) =>
 // Write a unique temp file and rename it over the logins file, so a crash
 // never leaves half a file; the dir and file stay readable by the owner
 // only.
-export const writeOwnerOnlyFile = Effect.fn("loginsFile.writeOwnerOnlyFile")(
-  function* <A, I>(path: string, schema: Schema.Schema<A, I>, value: A) {
+export const writeOwnerOnlyText = Effect.fn("loginsFile.writeOwnerOnlyText")(
+  function* (path: string, text: string) {
     const fs = yield* FileSystem.FileSystem;
     const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     yield* Effect.gen(function* () {
-      yield* fs.writeFileString(
-        temp,
-        `${JSON.stringify(Schema.encodeSync(schema)(value))}\n`,
-        { mode: 0o600 },
-      );
+      yield* fs.writeFileString(temp, text, { mode: 0o600 });
       yield* fs.chmod(temp, 0o600);
       yield* fs.rename(temp, path);
     }).pipe(
@@ -112,6 +108,95 @@ export const writeOwnerOnlyFile = Effect.fn("loginsFile.writeOwnerOnlyFile")(
     );
   },
 );
+
+export const writeOwnerOnlyFile = Effect.fn("loginsFile.writeOwnerOnlyFile")(
+  <A, I>(path: string, schema: Schema.Schema<A, I>, value: A) =>
+    writeOwnerOnlyText(
+      path,
+      `${JSON.stringify(Schema.encodeSync(schema)(value))}\n`,
+    ),
+);
+
+export const harnessLoginFilePath = Effect.fn(
+  "loginsFile.harnessLoginFilePath",
+)((name: string, file: string) =>
+  Effect.map(Config.string("HOME"), (home) =>
+    join(home, ".config", "proofbox", "harness-logins", name, file),
+  ),
+);
+
+export const makeHarnessLoginHome = Effect.fn(
+  "loginsFile.makeHarnessLoginHome",
+)(function* (name: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = dirname(yield* loginsPath);
+  return yield* Effect.gen(function* () {
+    yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 });
+    yield* fs.chmod(dir, 0o700);
+    const home = yield* fs.makeTempDirectoryScoped({
+      directory: dir,
+      prefix: `${name}-login-`,
+    });
+    yield* fs.chmod(home, 0o700);
+    return home;
+  }).pipe(
+    Effect.mapError(
+      () =>
+        new BadLoginsFileError({ path: dir, reason: "could not be written" }),
+    ),
+  );
+});
+
+export const saveHarnessLoginFileLocked = Effect.fn(
+  "loginsFile.saveHarnessLoginFileLocked",
+)(function* (name: string, file: string, text: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* harnessLoginFilePath(name, file);
+  const dir = dirname(path);
+  yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 }).pipe(
+    Effect.zipRight(fs.chmod(dir, 0o700)),
+    Effect.mapError(
+      () => new BadLoginsFileError({ path, reason: "could not be written" }),
+    ),
+  );
+  yield* writeOwnerOnlyText(path, text);
+});
+
+export const saveHarnessLoginFile = Effect.fn(
+  "loginsFile.saveHarnessLoginFile",
+)((name: string, file: string, text: string) =>
+  withLoginsLock(saveHarnessLoginFileLocked(name, file, text)),
+);
+
+export const readHarnessLoginFile = Effect.fn(
+  "loginsFile.readHarnessLoginFile",
+)(function* (name: string, file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* harnessLoginFilePath(name, file);
+  return yield* fs.readFileString(path).pipe(
+    Effect.map((text) => Option.some(text)),
+    Effect.catchAll((error) =>
+      error._tag === "SystemError" && error.reason === "NotFound"
+        ? Effect.succeed(Option.none<string>())
+        : Effect.fail(
+            new BadLoginsFileError({ path, reason: "could not be read" }),
+          ),
+    ),
+  );
+});
+
+export const lastRefreshOf = (text: string): Option.Option<Date> =>
+  Option.map(
+    Schema.decodeUnknownOption(
+      Schema.parseJson(
+        Schema.Struct({
+          // biome-ignore lint/style/useNamingConvention: Codex auth.json field.
+          last_refresh: Schema.Date,
+        }),
+      ),
+    )(text),
+    (login) => login.last_refresh,
+  );
 
 const saveLogins = Effect.fn("loginsFile.saveLogins")((logins: LoginsFile) =>
   Effect.flatMap(loginsPath, (path) =>

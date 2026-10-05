@@ -1,6 +1,6 @@
 # proofbox
 
-proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It can also run a Harness in a Sandbox, so code gets written there and the agent checks it there. ADR 0023 records that decision. Claude Code runs Turns; Codex comes with #194, and the README describes only checking work until #195.
+proofbox is a CLI that lets any coding agent rent a disposable machine, run an app on it, drive its screen, and bring back proof videos and screenshots. It can also run a Harness in a Sandbox, so code gets written there and the agent checks it there. ADR 0023 records that decision. Claude Code and Codex run Turns, and the README describes only checking work until #195.
 
 ## Language
 
@@ -57,7 +57,7 @@ What proofbox keeps on the Caller's machine so it can act for one Provider accou
 _Avoid_: credential, auth, session, API key
 
 **Harness login**:
-The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token` or a Codex API key. It goes into a Sandbox made with `--harness`, after any Snapshot is saved, the same way a Secret does, so no Snapshot holds it. Not the Caller's own laptop login of that Harness, which proofbox never touches.
+The machine login of one Harness that proofbox keeps on the Caller's machine: a Claude Code `setup-token`, sent as an env value, or a Codex ChatGPT plan login, an `auth.json` file sent into the Harness home. It goes into a Sandbox made with `--harness`, after any Snapshot is saved, the same way a Secret does, so no Snapshot holds it. proofbox renews a Codex login older than 7 days before it sends it, and keeps a newer one the Sandbox renewed when a Turn ends or on delete. Not the Caller's own laptop login of that Harness, which proofbox never touches.
 _Avoid_: model key, credential, auth file
 
 **GitHub login**:
@@ -103,7 +103,7 @@ _Avoid_: brain, harness, driver, client
 ### Writing code in a Sandbox
 
 **Harness**:
-A coding CLI, such as Claude Code or Codex, that proofbox installs at its newest version and runs inside a Sandbox with all permissions, so it writes, commits, and pushes code there. Each one fits the same Harness seam, the way each Provider fits the Provider seam. Claude Code is built; Codex is not yet (#194).
+A coding CLI, such as Claude Code or Codex, that proofbox installs at its newest version and runs inside a Sandbox with all permissions, so it writes, commits, and pushes code there. Each one fits the same Harness seam, the way each Provider fits the Provider seam. Claude Code and Codex are built.
 _Avoid_: inner agent, coding agent, worker, bot
 
 **Harness session**:

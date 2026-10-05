@@ -25,6 +25,7 @@ import {
   cloneWorkFolder,
   copyHarnessProfile,
   installHarness,
+  sendHarnessLoginFile,
 } from "../harness-sandbox.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
@@ -264,7 +265,11 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           harness,
           Option.fromNullable(options.harnessVersion),
         );
-        yield* copyHarnessProfile(id, harness);
+        yield* copyHarnessProfile(
+          id,
+          harness,
+          check?.entry.login._tag === "File" ? [check.entry.login.file] : [],
+        );
         const code = yield* writeSandboxFile(
           id,
           sandboxFiles(provider, sandbox.name, options.os).harness,
@@ -277,6 +282,18 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             reason: `could not write the Harness name in the Sandbox (exit code ${code})`,
           });
         }
+        if (
+          check !== undefined &&
+          check.entry.login._tag === "File" &&
+          check.harnessLogin._tag === "File"
+        ) {
+          yield* sendHarnessLoginFile(
+            id,
+            harness,
+            check.entry.login.file,
+            check.harnessLogin.text,
+          );
+        }
       }
       if (secrets !== undefined) {
         yield* sendSecrets(
@@ -285,13 +302,29 @@ export const createSandbox = Effect.fn("create.createSandbox")(
             ? secrets
             : [
                 ...secrets,
-                { name: check.entry.login.envName, value: check.harnessToken },
+                ...(check.entry.login._tag === "Env" &&
+                check.harnessLogin._tag === "Env"
+                  ? [
+                      {
+                        name: check.entry.login.envName,
+                        value: check.harnessLogin.token,
+                      },
+                    ]
+                  : []),
                 { name: "GH_TOKEN", value: check.githubToken },
               ],
         );
       } else if (check !== undefined) {
         yield* sendSecrets(id, [
-          { name: check.entry.login.envName, value: check.harnessToken },
+          ...(check.entry.login._tag === "Env" &&
+          check.harnessLogin._tag === "Env"
+            ? [
+                {
+                  name: check.entry.login.envName,
+                  value: check.harnessLogin.token,
+                },
+              ]
+            : []),
           { name: "GH_TOKEN", value: check.githubToken },
         ]);
       }

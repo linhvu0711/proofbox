@@ -2,7 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { cleanupEnvs, runCli } from "./support/cli.ts";
-import { containers, docker, fixture } from "./support/harness.ts";
+import {
+  containers,
+  docker,
+  fakeCodexLogin,
+  fixture,
+} from "./support/harness.ts";
 
 afterEach(() => {
   for (const container of containers.splice(0)) docker("rm", "-f", container);
@@ -49,5 +54,71 @@ it("a Turn on Docker outlives the Keeper while upload, exec, and screenshot work
     png: true,
     wait: "done\nslept 30s\n",
     code: 0,
+  });
+}, 300_000);
+
+it("a refused Codex login ends the Turn with exit 21 and the login fix", async () => {
+  // Given
+  const { env, settings, create } = fixture("codex", {
+    file: fakeCodexLogin(),
+  });
+  const created = await create();
+  const id = created.stdout.trim();
+  // When
+  await runCli(env, ["harness", "prompt", id, "say hi"], settings);
+  const result = await runCli(env, ["harness", "wait", id], settings);
+  // Then
+  expect({
+    code: result.exitCode,
+    refused: result.stdout.startsWith("failed: Harness login refused: "),
+    fix: result.stdout.endsWith(
+      "fix: run proofbox harness login codex, then make a new Sandbox with proofbox create --harness codex\n",
+    ),
+  }).toEqual({ code: 21, refused: true, fix: true });
+}, 300_000);
+
+it("a second Codex prompt resumes the first Turn's session", async () => {
+  // Given
+  const { env, settings, create, exec } = fixture("codex", {
+    file: fakeCodexLogin(),
+  });
+  const created = await create();
+  const id = created.stdout.trim();
+  await runCli(env, ["harness", "prompt", id, "say hi"], settings);
+  await runCli(env, ["harness", "wait", id], settings);
+  const first = await exec(id, "cat", "/var/lib/proofbox/harness-session");
+  // When
+  await runCli(env, ["harness", "prompt", id, "say hi again"], settings);
+  const result = await runCli(env, ["harness", "wait", id], settings);
+  const start = await exec(id, "head", "-n", "1", "/var/lib/proofbox/turn/out");
+  // Then
+  expect({
+    code: result.exitCode,
+    same:
+      start.stdout.trim() ===
+      `{"type":"thread.started","thread_id":"${first.stdout.trim()}"}`,
+  }).toEqual({ code: 21, same: true });
+}, 300_000);
+
+it("harness stop ends a running Codex Turn", async () => {
+  // Given
+  const { env, settings, create } = fixture("codex", {
+    file: fakeCodexLogin(),
+  });
+  const created = await create();
+  const id = created.stdout.trim();
+  await runCli(env, ["harness", "prompt", id, "say hi"], settings);
+  // When
+  const stop = await runCli(env, ["harness", "stop", id], settings);
+  const result = await runCli(env, ["harness", "wait", id], settings);
+  // Then
+  expect({
+    stop: stop.stderr,
+    code: result.exitCode,
+    stdout: result.stdout,
+  }).toEqual({
+    stop: "proofbox: stopped the turn\n",
+    code: 20,
+    stdout: "stopped\n",
   });
 }, 300_000);

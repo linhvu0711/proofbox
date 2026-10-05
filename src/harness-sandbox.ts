@@ -4,7 +4,15 @@ import {
   FileSystem,
   type Error as PlatformError,
 } from "@effect/platform";
-import { Clock, Config, Effect, Option, Redacted, Stream } from "effect";
+import {
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Option,
+  Redacted,
+  Stream,
+} from "effect";
 import { CliOutput } from "./cli-output.ts";
 import { runKeepingTail } from "./command-tail.ts";
 import { harnessEntryFor } from "./commands/harness.ts";
@@ -13,6 +21,7 @@ import { withDeadlinePush } from "./deadline.ts";
 import {
   CloneRefusedError,
   HarnessInstallFailedError,
+  HarnessLoginError,
   NoGithubLoginError,
   NoHarnessLoginError,
   ProviderError,
@@ -20,20 +29,27 @@ import {
   UploadFailedError,
 } from "./errors.ts";
 import { type GithubRepo, readGithubRepo } from "./github-repo.ts";
-import type { Harness } from "./harness.ts";
+import type { Harness, HarnessEntry, HarnessFileLogin } from "./harness.ts";
 import { harnessProfilePath } from "./harness-profile.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
 import { readGithubLogins } from "./login/github-logins.ts";
-import { readHarnessLogins } from "./login/logins-file.ts";
+import {
+  makeHarnessLoginHome,
+  readHarnessLoginFile,
+  readHarnessLogins,
+  saveHarnessLoginFileLocked,
+  withLoginsLock,
+} from "./login/logins-file.ts";
 import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
+import { runTurnScript } from "./turn.ts";
 import { MAX_SIZE_DEFAULT } from "./upload/max-size.ts";
 import { packFiles } from "./upload/pack.ts";
 
 export const copyHarnessProfile = Effect.fn(
   "harnessSandbox.copyHarnessProfile",
-)(function* (rawId: string, harness: Harness) {
+)(function* (rawId: string, harness: Harness, leaveOut: ReadonlyArray<string>) {
   const dir = yield* harnessProfilePath(harness.name);
   const fs = yield* FileSystem.FileSystem;
   const local = (error: PlatformError.PlatformError) =>
@@ -41,7 +57,9 @@ export const copyHarnessProfile = Effect.fn(
   if (!(yield* fs.exists(dir).pipe(Effect.mapError(local)))) return;
   const paths = (yield* fs
     .readDirectory(dir, { recursive: true })
-    .pipe(Effect.mapError(local))).sort();
+    .pipe(Effect.mapError(local)))
+    .filter((path) => !leaveOut.includes(path))
+    .sort();
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const info = yield* id.provider.get(id);
@@ -70,21 +88,82 @@ export const copyHarnessProfile = Effect.fn(
   );
 });
 
+export const renewHarnessLoginFile = Effect.fn(
+  "harnessSandbox.renewHarnessLoginFile",
+)((entry: HarnessEntry & { readonly login: HarnessFileLogin }) =>
+  Effect.scoped(
+    withLoginsLock(
+      Effect.gen(function* () {
+        const { login, name } = entry;
+        const saved = yield* readHarnessLoginFile(name, login.file);
+        if (Option.isNone(saved))
+          return yield* new NoHarnessLoginError({
+            harness: name,
+            expired: false,
+            howToMake: login.howToMake,
+          });
+        const tool = yield* login.load;
+        const before = tool.renewedAt(saved.value);
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          Option.isSome(before) &&
+          before.value.getTime() >= now - Duration.toMillis(login.renewAfter)
+        )
+          return saved.value;
+        const bad = () =>
+          new HarnessLoginError({
+            harness: name,
+            reason: `could not renew the Harness login for ${name}; run proofbox harness login ${name}`,
+            nothing: "created",
+          });
+        return yield* Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const home = yield* makeHarnessLoginHome(name);
+          const path = join(home, login.file);
+          yield* fs.writeFileString(path, saved.value, { mode: 0o600 });
+          yield* tool.renew(home);
+          const text = yield* fs.readFileString(path);
+          const after = tool.renewedAt(text);
+          if (
+            Option.isNone(after) ||
+            (Option.isSome(before) &&
+              after.value.getTime() <= before.value.getTime())
+          )
+            return yield* bad();
+          yield* saveHarnessLoginFileLocked(name, login.file, text);
+          return text;
+        }).pipe(Effect.mapError(bad));
+      }),
+    ),
+  ),
+);
+
 export const checkHarnessCreate = Effect.fn(
   "harnessSandbox.checkHarnessCreate",
 )(function* (name: string, folder: string) {
   const entry = yield* harnessEntryFor(name);
   const repo = yield* readGithubRepo(folder);
-  const harnessLogin = (yield* readHarnessLogins)[name];
-  const expired =
-    harnessLogin?.expiresAt !== undefined &&
-    harnessLogin.expiresAt.getTime() < (yield* Clock.currentTimeMillis);
-  if (harnessLogin === undefined || expired) {
-    return yield* new NoHarnessLoginError({
-      harness: name,
-      expired,
-      howToMake: entry.login.howToMake,
-    });
+  let harnessLogin:
+    | { readonly _tag: "Env"; readonly token: Redacted.Redacted<string> }
+    | { readonly _tag: "File"; readonly text: string };
+  if (entry.login._tag === "File") {
+    harnessLogin = {
+      _tag: "File",
+      text: yield* renewHarnessLoginFile({ ...entry, login: entry.login }),
+    };
+  } else {
+    const saved = (yield* readHarnessLogins)[name];
+    const expired =
+      saved?.expiresAt !== undefined &&
+      saved.expiresAt.getTime() < (yield* Clock.currentTimeMillis);
+    if (saved === undefined || expired) {
+      return yield* new NoHarnessLoginError({
+        harness: name,
+        expired,
+        howToMake: entry.login.howToMake,
+      });
+    }
+    harnessLogin = { _tag: "Env", token: saved.token };
   }
   const githubLogin = (yield* readGithubLogins)[repo.owner.toLowerCase()];
   if (githubLogin === undefined) {
@@ -96,9 +175,89 @@ export const checkHarnessCreate = Effect.fn(
   return {
     entry,
     repo,
-    harnessToken: harnessLogin.token,
+    harnessLogin,
     githubToken: githubLogin.token,
   };
+});
+
+export const keepNewerHarnessLoginFile = Effect.fn(
+  "harnessSandbox.keepNewerHarnessLoginFile",
+)(function* (entry: HarnessEntry, text: string) {
+  if (entry.login._tag !== "File") return;
+  const { login, name } = entry;
+  const tool = yield* login.load;
+  const renewed = tool.renewedAt(text);
+  if (Option.isNone(renewed)) return;
+  yield* withLoginsLock(
+    Effect.gen(function* () {
+      const saved = yield* readHarnessLoginFile(name, login.file);
+      if (Option.isNone(saved)) return;
+      const savedAccount = tool.accountOf(saved.value);
+      const sandboxAccount = tool.accountOf(text);
+      if (
+        Option.isNone(savedAccount) ||
+        Option.isNone(sandboxAccount) ||
+        savedAccount.value !== sandboxAccount.value
+      )
+        return;
+      const before = Option.flatMap(saved, (text) => tool.renewedAt(text));
+      if (
+        Option.isSome(before) &&
+        renewed.value.getTime() > before.value.getTime()
+      ) {
+        yield* saveHarnessLoginFileLocked(name, login.file, text);
+      }
+    }),
+  );
+});
+
+export const saveBackHarnessLoginFile = Effect.fn(
+  "harnessSandbox.saveBackHarnessLoginFile",
+)(function* (rawId: string, entry: HarnessEntry) {
+  if (entry.login._tag !== "File") return;
+  const harness = yield* entry.load;
+  const result = yield* runTurnScript(rawId, [
+    "sh",
+    "-c",
+    'cat "$HOME/$1/$2" 2>/dev/null',
+    "sh",
+    harness.home,
+    entry.login.file,
+  ]);
+  if (result.code !== 0) return;
+  yield* keepNewerHarnessLoginFile(entry, result.out);
+});
+
+export const sendHarnessLoginFile = Effect.fn(
+  "harnessSandbox.sendHarnessLoginFile",
+)(function* (rawId: string, harness: Harness, file: string, text: string) {
+  const providers = yield* Providers;
+  const id = yield* resolveSandboxId(rawId, providers);
+  const info = yield* id.provider.get(id);
+  const progress = yield* Progress;
+  const keeper = yield* KeeperClient;
+  yield* progress.step(
+    "sending the Harness login",
+    withDeadlinePush(
+      id.provider,
+      id,
+      info,
+    )(
+      runInSandbox(
+        keeper,
+        rawId,
+        [
+          "sh",
+          "-c",
+          'umask 077; mkdir -p "$HOME/$1" && cat > "$HOME/$1/$2" && chmod 600 "$HOME/$1/$2"',
+          "sh",
+          harness.home,
+          file,
+        ],
+        Stream.make(new TextEncoder().encode(text)),
+      ),
+    ),
+  );
 });
 
 const FETCH = `set -eu

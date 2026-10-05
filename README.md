@@ -79,7 +79,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 This section is `feat/harness` work: it is not in `main` yet. A Sandbox made without `--harness` stays verify-only, as above.
 
-With `--harness`, proofbox installs a Harness in the Sandbox: Claude Code now, Codex later (#194). The Harness runs there with all permissions, writes code, commits, and pushes. The Caller still drives it from outside (ADR 0023, ADR 0024).
+With `--harness`, proofbox installs a Harness in the Sandbox: Claude Code or Codex. The Harness runs there with all permissions, writes code, commits, and pushes. The Caller still drives it from outside (ADR 0023, ADR 0024).
 
 Save the logins once per laptop:
 
@@ -121,7 +121,7 @@ A Turn ends in one of these states. `harness wait` prints it on stdout and exits
 What costs money while a Turn runs:
 
 - The Sandbox bills its Provider for every minute it lives, also while the model thinks: about $1.20 to $1.80 for a 20-minute Turn on a Namespace Mac (ADR 0023). Docker costs nothing.
-- The Harness login pays for the model. Claude usage counts against the account behind `claude setup-token`. A Codex API key bills OpenAI.
+- The Harness login pays for the model. Claude usage counts against the account behind `claude setup-token`. A Codex login uses the Caller's ChatGPT plan.
 - `harness wait` keeps the Sandbox alive. When you are done, `harness stop` and `delete`.
 
 To check that a new Harness version still works, run `pnpm test:harness` (see Develop).
@@ -131,11 +131,11 @@ To check that a new Harness version still works, run `pnpm test:harness` (see De
 | Command | What it does |
 | --- | --- |
 | `auth login <provider>` | Logs in to a Provider. Namespace opens its login page in the browser; `--token` reads a token from stdin; `--region us\|eu` sets where new Sandboxes go. |
-| `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. Then one line per saved GitHub owner and saved Harness login, with the Claude token's end date. |
+| `auth status` | Shows each Provider's login: account, region, expiry, and where it comes from. Then one line per saved GitHub owner and saved Harness login, with the Claude token's end date and the Codex login's last renewal. |
 | `auth logout <provider>` | Deletes the Sandboxes this machine started, prints their ids, then removes the saved login. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
 | `auth token <provider>` | Makes a token for CI from the browser login and prints it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
 | `github login <owner>` | Saves a fine-grained GitHub token for one owner (a user or an org), read from stdin, so a Harness can push and open pull requests. One token per owner; saving the same owner again replaces it. Then says to protect `main` with a ruleset that needs a review. |
-| `harness login claude\|codex` | Saves a Harness login read from stdin, readable only by you, in `~/.config/proofbox/harness-logins.json`. `claude` takes a token from `claude setup-token`; `codex` takes an OpenAI API key. |
+| `harness login claude\|codex` | Saves a Harness login, readable only by you, under `~/.config/proofbox/`. `claude` reads a token from `claude setup-token` on stdin into `harness-logins.json`. `codex` runs Codex's own device-code login (`codex login --device-auth`; `codex` must be installed) with your ChatGPT plan and keeps its `auth.json` in `harness-logins/codex/`, apart from your own `~/.codex/`, so a renewal on one side never breaks the other. |
 | `harness profile init claude\|codex` | Makes the Harness profile `~/.config/proofbox/harness/<name>/` and copies in what works anywhere: `CLAUDE.md`, `skills/`, and `agents/` from `~/.claude/`, or `AGENTS.md` and `skills/` from `~/.codex/`. A link is copied as the files it points to. A link that leads nowhere or loops is skipped and named. Settings, hooks, plugins, and MCP config stay out. Prints the folder. The profile is readable only by you. Names any part the laptop lacks. Refuses a profile that already exists. Edit the profile for Sandboxes only. |
 | `harness log <id>` | Prints the latest Turn of a Harness Sandbox, one line per step with its time, and the end state last: `done`, `failed: …`, `stopped`, or `still running`. A long step is cut to one line with its size. Before any prompt it says `no turn has run yet`. `--follow` prints new steps as they come and exits 0 when the Turn ends, pushing the Deadline meanwhile. `--full` prints the Harness's own JSON lines unchanged. |
 | `create --os linux\|macos` | Creates a Sandbox and prints its id. Flags: `--provider`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send), `--harness claude` (the Work folder becomes this branch fetched from GitHub with your unpushed commits and uncommitted files on top; installs Claude Code, `git`, and `gh`; sends the Harness login, the GitHub login, and the Harness profile; needs `harness login claude` and `github login <owner>` first), `--harness-version <v>` (an older Claude Code). |

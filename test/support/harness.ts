@@ -36,6 +36,18 @@ export const loginFile = (env: CliEnv, name: string, value: unknown) => {
   });
 };
 
+export const harnessLoginFile = (env: CliEnv, name: string, text: string) => {
+  const dir = join(
+    env.env.HOME ?? "",
+    ".config",
+    "proofbox",
+    "harness-logins",
+    name,
+  );
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, "auth.json"), text, { mode: 0o600 });
+};
+
 export const createArgs = (folder: string, harness = "claude") => [
   "create",
   "--os",
@@ -57,7 +69,22 @@ export const docker = (...args: string[]) =>
   execFileSync("docker", args, { encoding: "utf8" });
 export const containers: string[] = [];
 
-export const fixture = (harness = "claude", token = "sk-ant-oat01-test") => {
+export const fakeCodexLogin = () => {
+  const now = new Date();
+  const header = Buffer.from('{"alg":"none","typ":"JWT"}').toString(
+    "base64url",
+  );
+  const payload = Buffer.from(
+    `{"email":"x@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"plus","chatgpt_account_id":"acct"},"exp":${Math.floor(now.getTime() / 1000) + 86400}}`,
+  ).toString("base64url");
+  const token = `${header}.${payload}.`;
+  return `{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"${token}","access_token":"${token}","refresh_token":"bogus","account_id":"acct"},"last_refresh":"${now.toISOString()}"}`;
+};
+
+export const fixture = (
+  harness = "claude",
+  login: { token: string } | { file: string } = { token: "sk-ant-oat01-test" },
+) => {
   const env = makeEnv({ docker: true });
   const home = mkdtempSync(join(tmpdir(), "proofbox-harness-home-"));
   const folder = mkdtempSync(join(tmpdir(), "proofbox-harness-work-"));
@@ -65,11 +92,18 @@ export const fixture = (harness = "claude", token = "sk-ant-oat01-test") => {
   trackTempDir(folder);
   const config = join(home, ".config", "proofbox");
   mkdirSync(join(config, "harness", harness), { recursive: true });
-  writeFileSync(
-    join(config, "harness-logins.json"),
-    JSON.stringify({ [harness]: { token } }),
-    { mode: 0o600 },
-  );
+  if ("file" in login)
+    harnessLoginFile(
+      { ...env, env: { ...env.env, HOME: home } },
+      harness,
+      login.file,
+    );
+  else
+    writeFileSync(
+      join(config, "harness-logins.json"),
+      JSON.stringify({ [harness]: { token: login.token } }),
+      { mode: 0o600 },
+    );
   writeFileSync(
     join(config, "github-logins.json"),
     JSON.stringify({ octocat: { token: "github_pat_test" } }),

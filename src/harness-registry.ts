@@ -18,12 +18,23 @@ export const HarnessesLive = Layer.effect(
         Effect.map((module) => module.makeClaudeHarness()),
       ),
     );
+    const codex = yield* Effect.cached(
+      importFor("codex", () => import("./codex-harness.ts")).pipe(
+        Effect.map((module) => module.makeCodexHarness()),
+      ),
+    );
+    const codexLogin = yield* Effect.cached(
+      importFor("codex", () => import("./codex-login.ts")).pipe(
+        Effect.map((module) => module.makeCodexLogin("codex")),
+      ),
+    );
     const harnesses = new Map<string, HarnessEntry>([
       [
         "claude",
         {
           name: "claude",
           login: {
+            _tag: "Env",
             envName: "CLAUDE_CODE_OAUTH_TOKEN",
             what: "token",
             placeholder: "<token>",
@@ -43,24 +54,19 @@ export const HarnessesLive = Layer.effect(
         {
           name: "codex",
           login: {
-            envName: "CODEX_API_KEY",
-            what: "API key",
-            placeholder: "<key>",
-            howToMake: "Make one at https://platform.openai.com/api-keys",
-            lifetime: Option.none(),
+            _tag: "File",
+            what: "ChatGPT plan login",
+            file: "auth.json",
+            howToMake: "It signs in with your ChatGPT plan",
+            renewAfter: Duration.days(7),
+            load: codexLogin,
           },
           profile: {
             home: ".codex",
             parts: ["AGENTS.md", "skills/"],
             leftOut: "config.toml, hooks, plugins, and MCP config",
           },
-          // Stand-in replaced by #194.
-          load: Effect.fail(
-            new HarnessError({
-              harness: "codex",
-              reason: "not built yet (#194)",
-            }),
-          ),
+          load: codex,
         },
       ],
     ]);
@@ -68,12 +74,13 @@ export const HarnessesLive = Layer.effect(
     if (Option.isSome(fakeRoot)) {
       const fake = yield* Effect.cached(
         importFor("fake", () => import("./fake/fake-harness.ts")).pipe(
-          Effect.map((module) => module.makeFakeHarness()),
+          Effect.map((module) => module.makeFakeHarness("fake")),
         ),
       );
       harnesses.set("fake", {
         name: "fake",
         login: {
+          _tag: "Env",
           envName: "PROOFBOX_FAKE_HARNESS_TOKEN",
           what: "token",
           placeholder: "<token>",
@@ -86,6 +93,28 @@ export const HarnessesLive = Layer.effect(
           leftOut: "settings",
         },
         load: fake,
+      });
+      const fakeFile = yield* Effect.cached(
+        importFor("fake-file", () => import("./fake/fake-harness.ts")),
+      );
+      harnesses.set("fake-file", {
+        name: "fake-file",
+        login: {
+          _tag: "File",
+          what: "fake plan login",
+          file: "auth.json",
+          howToMake: "It runs a fake login",
+          renewAfter: Duration.days(7),
+          load: Effect.map(fakeFile, (module) => module.makeFakeFileLogin()),
+        },
+        profile: {
+          home: ".fake-harness",
+          parts: ["AGENTS.md", "skills/"],
+          leftOut: "settings",
+        },
+        load: Effect.map(fakeFile, (module) =>
+          module.makeFakeHarness("fake-file"),
+        ),
       });
     }
     return harnesses;

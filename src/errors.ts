@@ -698,12 +698,22 @@ export class NotFineGrainedTokenError extends Data.TaggedError(
   }
 }
 
+export class HarnessLoginError extends Data.TaggedError("HarnessLoginError")<{
+  readonly harness: string;
+  readonly reason: string;
+  readonly nothing: "saved" | "created";
+}> {
+  get message() {
+    return `${this.reason}. Nothing was ${this.nothing}.`;
+  }
+}
+
 export class NoHarnessTokenError extends Data.TaggedError(
   "NoHarnessTokenError",
 )<{
   readonly harness: string;
-  readonly what: "token" | "API key";
-  readonly placeholder: "<token>" | "<key>";
+  readonly what: "token";
+  readonly placeholder: "<token>";
   readonly howToMake: string;
 }> {
   get message() {
