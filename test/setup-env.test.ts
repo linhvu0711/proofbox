@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -218,5 +225,52 @@ describe("Setup env", () => {
       exitCode: 0,
       stdout: "unset\n",
     });
+  });
+
+  it("a bad Setup env line fails create with its line number and leaves no Sandbox", async () => {
+    // Given: a Setup script whose second Setup env line is not NAME=VALUE
+    const env = makeEnv();
+    const script = setupScript(
+      '#!/bin/sh\necho GREETING=hi >> "$PROOFBOX_ENV"\necho \'not a setting\' >> "$PROOFBOX_ENV"\n',
+    );
+    // When
+    const created = await create(env, workFixture(), script);
+    const listed = await runCli(env, ["list"]);
+    // Then
+    expect({
+      exitCode: created.exitCode,
+      stdout: created.stdout,
+      lastLine: created.stderr.split("\n").at(-2),
+      listed: listed.stdout,
+      made: existsSync(env.root) ? readdirSync(env.root) : [],
+    }).toEqual({
+      exitCode: 125,
+      stdout: "",
+      lastLine:
+        "$PROOFBOX_ENV line 2 is not NAME=VALUE; fix the Setup script and create again. This Sandbox was deleted.",
+      listed: "",
+      made: [],
+    });
+  });
+
+  it("a bad Setup env line saves no Snapshot, so the next create runs the Setup script again", async () => {
+    // Given: a Setup script with a bad Setup env line, and Snapshots on
+    const env = makeEnv();
+    const dir = snapshotsDir();
+    const set = { PROOFBOX_FAKE_SNAPSHOTS: dir };
+    const folder = workFixture();
+    const script = setupScript(
+      '#!/bin/sh\necho GREETING=hi >> "$PROOFBOX_ENV"\necho \'not a setting\' >> "$PROOFBOX_ENV"\n',
+    );
+    // When
+    await create(env, folder, script, set);
+    const saved = readdirSync(dir);
+    const second = await create(env, folder, script, set);
+    // Then
+    expect({
+      saved,
+      setupRan: second.stderr.includes("running Setup script"),
+      reused: second.stderr.includes("Snapshot reused"),
+    }).toEqual({ saved: [], setupRan: true, reused: false });
   });
 });

@@ -331,6 +331,14 @@ export class SetupScriptFailedError extends Data.TaggedError(
   }
 }
 
+export class SetupEnvLineError extends Data.TaggedError("SetupEnvLineError")<{
+  readonly line: number;
+}> {
+  get message() {
+    return `$PROOFBOX_ENV line ${this.line} is not NAME=VALUE; fix the Setup script and create again. This Sandbox was deleted.`;
+  }
+}
+
 export class BadSizeError extends Data.TaggedError("BadSizeError")<{
   readonly value: string;
 }> {

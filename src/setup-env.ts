@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { UploadFailedError } from "./errors.ts";
+import { SetupEnvLineError, UploadFailedError } from "./errors.ts";
 import {
   readSandboxFile,
   type SandboxFiles,
@@ -35,7 +35,11 @@ export const keepSetupEnv = Effect.fn("setupEnv.keepSetupEnv")(function* (
       code: read.code,
     });
   }
-  const entries = yield* parseEnvLines("$PROOFBOX_ENV", read.text);
+  const entries = yield* parseEnvLines("$PROOFBOX_ENV", read.text).pipe(
+    Effect.catchTag("SecretsFileLineError", (error) =>
+      Effect.fail(new SetupEnvLineError({ line: error.line })),
+    ),
+  );
   const written = yield* writeSandboxFile(
     rawId,
     files.setupEnv,
