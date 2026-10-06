@@ -248,4 +248,45 @@ describe("update", () => {
       pnpm: undefined,
     });
   });
+  it("update says when pnpm is not on PATH", async () => {
+    // Given: GitHub's main is d527832, and PATH is an empty folder
+    const github = await fakeGithub(commits({ main: MAIN }));
+    const empty = mkdtempSync(join(tmpdir(), "proofbox-path-"));
+    dirs.push(empty);
+    // When
+    const result = await runCli(makeEnv(), ["update"], {
+      set: { PATH: empty, PROOFBOX_GITHUB_API_URL: github.url },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      end: result.stderr.endsWith(
+        "pnpm is not on PATH. Install pnpm, then run proofbox update again.\n",
+      ),
+    }).toEqual({ exitCode: 125, stdout: "", end: true });
+  });
+
+  it("update fails when pnpm fails", async () => {
+    // Given: GitHub's main is d527832, and pnpm exits 1
+    const github = await fakeGithub(commits({ main: MAIN }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+        FAKE_PNPM_EXIT: "1",
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      pnpmOut: result.stderr.includes("+ proofbox 0.0.0\n"),
+      end: result.stderr.endsWith(
+        "pnpm could not install proofbox d527832 (exit 1). Its output is above.\n",
+      ),
+    }).toEqual({ exitCode: 125, stdout: "", pnpmOut: true, end: true });
+  });
 });

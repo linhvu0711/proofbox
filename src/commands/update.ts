@@ -76,8 +76,20 @@ export const updateProofbox = Effect.fn("update.updateProofbox")(
       Command.make("pnpm", ...installArgs(full)),
       undefined,
       {
-        spawn: (error) => new UpdateError({ reason: error.message }),
+        spawn: (error) =>
+          new UpdateError({
+            reason:
+              error.reason === "NotFound"
+                ? "pnpm is not on PATH. Install pnpm, then run proofbox update again."
+                : `Could not start pnpm: ${error.message}`,
+          }),
         fail: (reason) => new UpdateError({ reason }),
+        exit: (code) =>
+          code === 0
+            ? Effect.succeed(code)
+            : new UpdateError({
+                reason: `pnpm could not install proofbox ${short} (exit ${code}). Its output is above.`,
+              }),
       },
     ).pipe(
       Stream.runForEach((event) =>
