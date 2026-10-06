@@ -10,8 +10,14 @@
   "bin": {
     "proofbox": "dist/main.js"
   },
+  "files": [
+    "dist",
+    "images",
+    "scripts/sync-repos.sh"
+  ],
   "scripts": {
     "postinstall": "bash scripts/sync-repos.sh",
+    "prepare": "node scripts/build.ts",
     "test": "vitest run",
     "test:docker": "vitest run --config vitest.docker.config.ts",
     "test:namespace": "vitest run --config vitest.namespace.config.ts",

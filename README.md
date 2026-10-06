@@ -41,13 +41,22 @@ On Linux, the user is `app`. It has no password and no sudo.
 
 ## Install
 
-Needs Node 24.12 or later and pnpm.
+Needs Node 24.12 or later, pnpm, and git.
+
+Install the commit you want. Use its full 40-character hash in both places, since pnpm 12 builds a package from git only when `--allow-build` names it by this exact key:
+
+```sh
+pnpm add -g --allow-build=proofbox@https://codeload.github.com/linhvu0711/proofbox/tar.gz/<commit> github:linhvu0711/proofbox#<commit>
+```
+
+To update, run it again with a newer commit.
+
+To work on proofbox itself, link a clone instead. `pnpm install` builds `dist/` and fetches the source in `repos/`:
 
 ```sh
 git clone https://github.com/linhvu0711/proofbox.git
 cd proofbox
 pnpm install
-pnpm build
 pnpm link --global
 ```
 
@@ -149,7 +158,7 @@ Rules:
 - Never edit files under `repos/`. They are replaced wholesale on the next fetch.
 - Lint, type-check, and tests skip `repos/`.
 
-`repos/` is not in git. `pnpm install` runs `scripts/sync-repos.sh`, which reads the table in `repos/README.md` and does a shallow clone of each pinned tag. Run the script by hand if the folder is missing. Set `EMBED_SOURCE_SKIP=1` to skip the fetch.
+`repos/` is not in git. `pnpm install` in a git checkout runs `scripts/sync-repos.sh`, which reads the table in `repos/README.md` and does a shallow clone of each pinned tag. It skips a folder with no `.git`, such as a GitHub install. Run the script by hand if the folder is missing. Set `EMBED_SOURCE_SKIP=1` to skip the fetch.
 
 After bumping a package, change its tag in `repos/README.md`, run `scripts/sync-repos.sh`, and change the version in this table, in the `CLAUDE.md` table, and in the first line of each `docs/idioms/effect-*.md` file.
 <!-- embed-source:end -->
