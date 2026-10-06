@@ -414,6 +414,43 @@ describe("Recording and the Proof video", () => {
     },
   );
 
+  effectIt.effect(
+    "mark cuts by code point when one character is over 60 code points",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above, and an `a` with 60 combining accents,
+        // one character of 61 code points
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({
+          id,
+          label: `a${"\u0301".repeat(60)}`,
+          wait: false,
+        });
+        // Then: the mark keeps `a` and 59 accents, never an empty label
+        expect({
+          marks: calls.filter((argv) => argv[1] === "mark"),
+          warnings,
+        }).toEqual({
+          marks: [["/opt/proofbox/record", "mark", `a${"\u0301".repeat(59)}`]],
+          warnings: [
+            `Step mark cut to 60 characters: "a${"\u0301".repeat(59)}"`,
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
   it("mark refuses an empty label", async () => {
     // Given
     const env = makeEnv();

@@ -9,8 +9,11 @@ const MARK_MAX = 60;
 
 // Characters are code points. The cut never splits an emoji: one that would
 // cross the limit, such as a thumbs-up with a skin tone, is left out whole.
+// A first character that is itself over the limit, such as a letter with
+// many accents, is cut by code point, so the mark is never empty.
 const cutLabel = (label: string): string => {
-  if (Array.from(label).length <= MARK_MAX) return label;
+  const points = Array.from(label);
+  if (points.length <= MARK_MAX) return label;
   let kept = "";
   let count = 0;
   for (const { segment } of new Intl.Segmenter(undefined, {
@@ -20,7 +23,7 @@ const cutLabel = (label: string): string => {
     if (count > MARK_MAX) break;
     kept += segment;
   }
-  return kept;
+  return kept === "" ? points.slice(0, MARK_MAX).join("") : kept;
 };
 
 export const setMark = Effect.fn("mark.setMark")(function* (options: {
