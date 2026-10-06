@@ -6,7 +6,22 @@ import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { readXev, startXev } from "./support/xev.ts";
+import { readXev, startXev, type XevEvent } from "./support/xev.ts";
+
+const LETTERS_59 =
+  "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456";
+
+// The KeyPress events after the first click, and the mean X server time in
+// ms from one to the next.
+const letterGap = (events: ReadonlyArray<XevEvent>) => {
+  const clickAt = events.findIndex((event) => event.type === "ButtonPress");
+  const keys = events
+    .slice(clickAt + 1)
+    .filter((event) => event.type === "KeyPress");
+  const first = keys[0]?.time ?? 0;
+  const last = keys.at(-1)?.time ?? 0;
+  return { count: keys.length, gap: (last - first) / (keys.length - 1) };
+};
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -250,6 +265,56 @@ describe("Pixel actions", () => {
       .filter((event) => event.type === "KeyPress")
       .map((event) => event.keysym);
     expect(keys).toEqual(["h", "e", "l", "l", "o"]);
+  });
+
+  it("type at --pace fast waits 12 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, [
+      "type",
+      id,
+      LETTERS_59,
+      "--pace",
+      "fast",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(10.8);
+    expect(gap).toBeLessThanOrEqual(13.2);
+  });
+
+  it("type with --letter 40ms waits 40 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, [
+      "type",
+      id,
+      LETTERS_59,
+      "--pace",
+      "fast",
+      "--letter",
+      "40ms",
+      "--type-max",
+      "10s",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(36);
+    expect(gap).toBeLessThanOrEqual(44);
   });
 
   it("type sends text that starts with a dash as letters", async () => {
