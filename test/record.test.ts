@@ -375,6 +375,48 @@ describe("Recording and the Proof video", () => {
     }).pipe(Effect.provide(layers(mac, { warnings })));
   });
 
+  it("mark refuses an empty label", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["mark", id, ""]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "": use one line of text, for example "step 3: save the post"\n',
+    });
+  });
+
+  it("mark refuses a label with a line break", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["mark", id, "step 1\nstep 2"]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "step 1\nstep 2": use one line of text, for example "step 3: save the post"\n',
+    });
+  });
+
   it("record stop refuses a bad --max-size", async () => {
     // Given
     const env = makeEnv();
