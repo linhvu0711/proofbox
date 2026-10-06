@@ -1295,7 +1295,7 @@ describe("Namespace macOS Secrets", () => {
       folder,
       "--setup",
       script,
-      "--env-file",
+      "--secrets",
       file,
     ]);
     id = created.id;
@@ -1310,7 +1310,7 @@ describe("Namespace macOS Secrets", () => {
     cleanupEnvs();
   });
 
-  it("a command after create --env-file on a Mac sees the Secret", async () => {
+  it("a command after create --secrets on a Mac sees the Secret", async () => {
     // Given: the describe's Mac
     // When
     const seen = await runCli(env, [
@@ -1401,5 +1401,39 @@ describe("Namespace macOS Provider at 6x14", () => {
     } finally {
       cleanupEnvs();
     }
+  });
+});
+
+describe("Namespace macOS Setup env", () => {
+  let env: CliEnv;
+  let id: string;
+
+  afterAll(async () => {
+    if (/^ns:[a-z0-9]+:[a-z0-9]+$/.test(id)) {
+      await runCli(env, ["delete", id]);
+      await destroyHost(id.split(":").at(-2) ?? "", id.split(":").at(-1) ?? "");
+    }
+    cleanupEnvs();
+  });
+
+  it("a Setup env PATH reaches exec on a Mac", async () => {
+    // Given: a Setup script that puts pnpm in /tmp/pb/bin and that folder
+    // on the Setup env PATH
+    env = makeEnv({ namespace: true });
+    const folder = mkdtempSync(join(tmpdir(), "proofbox-work-"));
+    execFileSync("git", ["init", "-q"], { cwd: folder });
+    const scriptDir = mkdtempSync(join(tmpdir(), "proofbox-setup-"));
+    const script = join(scriptDir, "setup.sh");
+    writeFileSync(
+      script,
+      '#!/bin/sh\nset -eu\nmkdir -p /tmp/pb/bin\ncurl -fsSL https://github.com/pnpm/pnpm/releases/download/v10.18.0/pnpm-macos-arm64 -o /tmp/pb/bin/pnpm\nchmod +x /tmp/pb/bin/pnpm\necho "PATH=/tmp/pb/bin:$PATH" >> "$PROOFBOX_ENV"\n',
+      { mode: 0o755 },
+    );
+    // When
+    const created = await createMac(env, ["--work", folder, "--setup", script]);
+    id = created.id;
+    const pnpm = await runCli(env, ["exec", id, "--", "pnpm", "-v"]);
+    // Then
+    expect(pnpm.stdout).toBe("10.18.0\n");
   });
 });

@@ -62,6 +62,8 @@ describe("Sandbox files", () => {
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
+      setupEnvRaw: "/var/lib/proofbox/setup-env-raw",
+      setupEnv: "/var/lib/proofbox/setup-env",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/run/proofbox/secrets/env",
     });
@@ -75,6 +77,8 @@ describe("Sandbox files", () => {
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
+      setupEnvRaw: "/var/lib/proofbox/setup-env-raw",
+      setupEnv: "/var/lib/proofbox/setup-env",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/run/proofbox/secrets/env",
     });
@@ -88,6 +92,8 @@ describe("Sandbox files", () => {
     // Then
     expect(files).toEqual({
       setupScript: "/var/lib/proofbox/setup",
+      setupEnvRaw: "/var/lib/proofbox/setup-env-raw",
+      setupEnv: "/var/lib/proofbox/setup-env",
       hashList: "/var/lib/proofbox/work-hashes.json",
       secrets: "/var/run/proofbox-secrets/env",
     });
@@ -105,6 +111,8 @@ describe("Sandbox files", () => {
     // Then
     expect(files).toEqual({
       setupScript: "/tmp/pb-fake/abc123/state/setup",
+      setupEnvRaw: "/tmp/pb-fake/abc123/state/setup-env-raw",
+      setupEnv: "/tmp/pb-fake/abc123/state/setup-env",
       hashList: "/tmp/pb-fake/abc123/state/work-hashes.json",
       secrets: "/tmp/pb-fake/abc123/secrets/env",
     });

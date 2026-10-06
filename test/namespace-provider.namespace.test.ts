@@ -136,7 +136,7 @@ describe("Namespace Provider", () => {
       folder,
       "--setup",
       script,
-      "--env-file",
+      "--secrets",
       envPath,
     ]);
     const fp = /Snapshot saved, Fingerprint ([0-9a-f]{12})/.exec(
@@ -185,6 +185,49 @@ describe("Namespace Provider", () => {
       expirySet: true,
       keptTwoWeeks: true,
       notKeptLonger: true,
+    });
+  });
+
+  it("a Setup env PATH reaches exec on Namespace, also from a reused Snapshot", async () => {
+    // Given: a lockfile no earlier run had, and a Setup script that puts
+    // pnpm in /tmp/pb/bin and that folder on the Setup env PATH
+    const env = makeEnv({ docker: true, namespace: true });
+    const folder = makeGitFolder({
+      committed: {
+        "a.txt": "a\n",
+        "pnpm-lock.yaml": `lockfileVersion: '9.0'\n# run ${Date.now()}\n`,
+      },
+    });
+    const script = tempFile(
+      "setup.sh",
+      '#!/bin/sh\nset -eu\necho ran >> runs.txt\nmkdir -p /tmp/pb/bin\ncurl -fsSL https://github.com/pnpm/pnpm/releases/download/v10.18.0/pnpm-linuxstatic-x64 -o /tmp/pb/bin/pnpm\nchmod +x /tmp/pb/bin/pnpm\necho "PATH=/tmp/pb/bin:$PATH" >> "$PROOFBOX_ENV"\n',
+    );
+    // When
+    const first = await create(env, ["--work", folder, "--setup", script]);
+    const firstPnpm = await runCli(env, [
+      "exec",
+      first.stdout.trim(),
+      "--",
+      "pnpm",
+      "-v",
+    ]);
+    const second = await create(env, ["--work", folder, "--setup", script]);
+    const id = second.stdout.trim();
+    const secondPnpm = await runCli(env, ["exec", id, "--", "pnpm", "-v"]);
+    const runs = await runCli(env, ["exec", id, "--", "cat", "runs.txt"]);
+    // Then
+    expect({
+      first: firstPnpm.stdout,
+      reused: second.stderr.includes("proofbox: Snapshot reused"),
+      setupRan: second.stderr.includes("proofbox: running Setup script"),
+      second: secondPnpm.stdout,
+      runs: runs.stdout,
+    }).toEqual({
+      first: "10.18.0\n",
+      reused: true,
+      setupRan: false,
+      second: "10.18.0\n",
+      runs: "ran\n",
     });
   });
 

@@ -7,6 +7,7 @@ import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { sandboxFiles, writeSandboxFile } from "./sandbox-file.ts";
 import { resolveSandboxId } from "./sandbox-id.ts";
+import { keepSetupEnv, withProofboxEnv } from "./setup-env.ts";
 
 const KEEP_LINES = 50;
 
@@ -23,7 +24,8 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
     const info = yield* provider.get(id);
     const progress = yield* Progress;
     const keeper = yield* KeeperClient;
-    const setupPath = sandboxFiles(provider, id.name, info.os).setupScript;
+    const files = sandboxFiles(provider, id.name, info.os);
+    const setupPath = files.setupScript;
     yield* progress
       .step(
         "running Setup script",
@@ -69,7 +71,10 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
                 pending = pending.slice(-65_536);
               }
             };
-            const ran = yield* keeper.exec(rawId, [setupPath]);
+            const ran = yield* keeper.exec(
+              rawId,
+              withProofboxEnv(files, [setupPath]),
+            );
             let code = 0;
             yield* ran.pipe(
               Stream.runForEach((event) => {
@@ -92,6 +97,7 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
               }
             }
             if (code !== 0) return yield* new SetupScriptExit({ code, lines });
+            yield* keepSetupEnv(rawId, files);
           }),
         ),
       )

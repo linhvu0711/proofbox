@@ -2,9 +2,8 @@ import { Effect, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { type MemoryKills, Providers } from "../provider.ts";
-import { sandboxFiles } from "../sandbox-file.ts";
+import { sandboxFiles, withSandboxEnv } from "../sandbox-file.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
-import { withSecrets } from "../secrets.ts";
 import { OUT_OF_MEMORY_EXIT, outOfMemoryMessage } from "../size.ts";
 
 export const execInSandbox = Effect.fn("exec.execInSandbox")(function* (
@@ -21,7 +20,7 @@ export const execInSandbox = Effect.fn("exec.execInSandbox")(function* (
   const info = yield* keeper.info(rawId);
   const events = yield* keeper.exec(
     rawId,
-    withSecrets(sandboxFiles(provider, id.name, info.os).secrets, argv),
+    withSandboxEnv(sandboxFiles(provider, id.name, info.os), argv),
   );
   let exitCode: number | undefined;
   let kills: MemoryKills | undefined;

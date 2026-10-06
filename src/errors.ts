@@ -299,23 +299,25 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   }
 }
 
-export class EnvFileUnreadableError extends Data.TaggedError(
-  "EnvFileUnreadableError",
+export class SecretsFileUnreadableError extends Data.TaggedError(
+  "SecretsFileUnreadableError",
 )<{
   readonly path: string;
   readonly reason: "not found" | "is not readable" | "is a folder";
 }> {
   get message() {
-    return `Env file ${this.path} ${this.reason}. Nothing was created.`;
+    return `Secrets file ${this.path} ${this.reason}. Nothing was created.`;
   }
 }
 
-export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
+export class SecretsFileLineError extends Data.TaggedError(
+  "SecretsFileLineError",
+)<{
   readonly path: string;
   readonly line: number;
 }> {
   get message() {
-    return `Env file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
+    return `Secrets file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
   }
 }
 
@@ -326,6 +328,23 @@ export class SetupScriptFailedError extends Data.TaggedError(
 }> {
   get message() {
     return `Setup script failed with exit code ${this.code}; its last 50 lines are above. Fix the script and create again. This Sandbox was deleted.`;
+  }
+}
+
+export class SetupEnvLineError extends Data.TaggedError("SetupEnvLineError")<{
+  readonly line: number;
+}> {
+  get message() {
+    return `$PROOFBOX_ENV line ${this.line} is not NAME=VALUE; fix the Setup script and create again. This Sandbox was deleted.`;
+  }
+}
+
+export class SetupEnvClashError extends Data.TaggedError("SetupEnvClashError")<{
+  readonly name: string;
+  readonly path: string;
+}> {
+  get message() {
+    return `${this.name} is in both the Setup env and the Secrets file ${this.path}; remove it from one and create again. This Sandbox was deleted.`;
   }
 }
 

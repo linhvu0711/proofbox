@@ -78,13 +78,13 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       ),
       setup: Options.text("setup").pipe(
         Options.withDescription(
-          "the Setup script to run after the upload, for example setup-linux.sh; needs --work",
+          "the Setup script to run after the upload, for example setup-linux.sh; needs --work. NAME=value lines it writes to the file at $PROOFBOX_ENV, such as PATH=/tmp/pb/bin:$PATH, reach every later exec",
         ),
         Options.optional,
       ),
-      envFile: Options.text("env-file").pipe(
+      secretsFile: Options.text("secrets").pipe(
         Options.withDescription(
-          "a file of NAME=VALUE lines to send as Secrets, for example app.env; default none",
+          "the Secrets file: NAME=VALUE lines to send as Secrets after the Setup script, for example app.env; default none",
         ),
         Options.optional,
       ),
@@ -96,7 +96,17 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         Options.optional,
       ),
     },
-    ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
+    ({
+      os,
+      provider,
+      idle,
+      maxLife,
+      work,
+      setup,
+      secretsFile,
+      maxSize,
+      size,
+    }) =>
       createSandbox({
         os,
         provider: Option.getOrUndefined(provider),
@@ -104,7 +114,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         maxLife: Option.getOrUndefined(maxLife),
         work: Option.getOrUndefined(work),
         setup: Option.getOrUndefined(setup),
-        envFile: Option.getOrUndefined(envFile),
+        secretsFile: Option.getOrUndefined(secretsFile),
         maxSize: Option.getOrUndefined(maxSize),
         size: Option.getOrUndefined(size),
       }),

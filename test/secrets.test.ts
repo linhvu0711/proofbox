@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { withSecrets } from "../src/secrets.ts";
+import { withSandboxEnv } from "../src/sandbox-file.ts";
 
 describe("Secrets", () => {
-  it("withSecrets keeps a Secret out of an xtrace log", () => {
+  it("withSandboxEnv keeps a Secret out of an xtrace log", () => {
     // Given
     const dir = mkdtempSync(join(tmpdir(), "proofbox-secrets-"));
     try {
@@ -14,7 +14,10 @@ describe("Secrets", () => {
       writeFileSync(file, "export API_TOKEN='pb-secret-7f3a91'\n", {
         mode: 0o600,
       });
-      const argv = withSecrets(file, ["sh", "-c", 'printf %s "$API_TOKEN"']);
+      const argv = withSandboxEnv(
+        { setupEnv: join(dir, "setup-env"), secrets: file },
+        ["sh", "-c", 'printf %s "$API_TOKEN"'],
+      );
       // When
       const run = spawnSync("sh", ["-x", ...argv.slice(1)], {
         encoding: "utf8",
