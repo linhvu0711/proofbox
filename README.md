@@ -49,7 +49,7 @@ Install the commit you want. Use its full 40-character hash in both places, sinc
 pnpm add -g --allow-build=proofbox@https://codeload.github.com/linhvu0711/proofbox/tar.gz/<commit> github:linhvu0711/proofbox#<commit>
 ```
 
-To update, run it again with a newer commit.
+After that, `proofbox update` installs the newest commit on main, and `proofbox update --commit <hash>` the commit you name (a short hash works).
 
 To work on proofbox itself, link a clone instead. `pnpm install` builds `dist/` and fetches the source in `repos/`:
 
@@ -59,6 +59,8 @@ cd proofbox
 pnpm install
 pnpm link --global
 ```
+
+In a linked clone, update with `git pull` and `pnpm install`; `proofbox update` would replace the link with a GitHub install.
 
 Then, for the `namespace` Provider, log in first: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. For CI, make that token while logged in with the browser: `proofbox auth token namespace --name ci --expires 30d` prints it once (at most `1y`). The `docker` Provider needs Docker.
 
@@ -120,6 +122,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `live <id> [--json]` | Print the address and password of a Sandbox's Live view. A person can watch and control the screen. `--json` prints `{"address":…,"password":…}` once, then stays open until Ctrl-C. |
 | `list [--json]` | List your Sandboxes. Names each Unfinished Sandbox on stderr, with the `delete` command for it. `--json` prints one line of JSON: an array of `{id, os, base, deadline, maxLife}`, `base` only when set. |
 | `delete <id>` | Delete a Sandbox. |
+| `update [--commit <hash>]` | Install proofbox from GitHub: the newest commit on main, or the commit `--commit` names, as a short or full hash. Prints the short hash it installed. Needs pnpm and git. |
 
 `proofbox <command> --help` describes each argument and option, with its format, default, and an example.
 

@@ -30,6 +30,7 @@ COMMANDS
     start     start a Recording of the Sandbox screen
     stop      end the Recording and download its Proof video, or discard it
   mark        set a Step mark, or a Wait mark with --wait, during a Recording
+  update      install the newest proofbox from GitHub, or the commit --commit names
   auth        log in to Providers and manage their logins
     login     log in to a Provider
     status    show each Provider's login

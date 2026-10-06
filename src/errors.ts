@@ -30,6 +30,15 @@ export class ProviderUnavailableError extends Data.TaggedError(
   }
 }
 
+// `proofbox update` could not install: the reason says what to do next.
+export class UpdateError extends Data.TaggedError("UpdateError")<{
+  readonly reason: string;
+}> {
+  get message() {
+    return this.reason;
+  }
+}
+
 export class ToolBundleHashError extends Data.TaggedError(
   "ToolBundleHashError",
 )<{
