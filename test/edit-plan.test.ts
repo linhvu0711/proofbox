@@ -4,6 +4,8 @@ import {
   nothingChanged,
   parseProbe,
   planEdit,
+  typingSpans,
+  withoutSpans,
 } from "../src/proof/edit-plan.ts";
 
 describe("edit-plan", () => {
@@ -732,5 +734,59 @@ describe("edit-plan", () => {
     const result = nothingChanged(toggled);
     // Then
     expect(result).toBe(false);
+  });
+
+  it("typing splits the Still part it sits in", () => {
+    // Given
+    const freezes: ReadonlyArray<readonly [number, number | undefined]> = [
+      [1, 11],
+      [12, undefined],
+    ];
+    // When
+    const result = withoutSpans(freezes, [[2, 8]]);
+    // Then
+    expect(result).toEqual([
+      [1, 2],
+      [8, 11],
+      [12, undefined],
+    ]);
+  });
+
+  it("typing inside a Still part plays as recorded", () => {
+    // Given: freezedetect saw 1 s to 11 s as still, typing ran 2 s to 8 s
+    const input = {
+      duration: 12,
+      freezes: withoutSpans([[1, 11]], [[2, 8]]),
+      marks: [],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 12, step: 0 },
+      { kind: "still", at: 12, seconds: 4, step: 0 },
+    ]);
+  });
+
+  it("a type and its typed line make one typing span", () => {
+    // Given
+    const lines = [
+      { kind: "type", t: 2 },
+      { kind: "typed", t: 8 },
+    ];
+    // When
+    const spans = typingSpans(lines, 10);
+    // Then
+    expect(spans).toEqual([[2, 8]]);
+  });
+
+  it("typing still running at record stop runs to the end of the Recording", () => {
+    // Given
+    const lines = [{ kind: "type", t: 2 }];
+    // When
+    const spans = typingSpans(lines, 10);
+    // Then
+    expect(spans).toEqual([[2, 10]]);
   });
 });

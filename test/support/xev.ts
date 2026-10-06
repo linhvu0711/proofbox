@@ -15,6 +15,7 @@ export interface XevEvent {
   readonly root?: readonly [number, number];
   readonly button?: number;
   readonly keysym?: string;
+  readonly time?: number;
 }
 
 export const readXev = async (
@@ -32,11 +33,13 @@ export const readXev = async (
       const root = /root:\((\d+),(\d+)\)/.exec(block);
       const button = /button (\d+)/.exec(block);
       const keysym = /keysym 0x[0-9a-f]+, (\w+)\)/.exec(block)?.[1];
+      const time = /time (\d+)/.exec(block);
       const event: {
         type: string;
         root?: readonly [number, number];
         button?: number;
         keysym?: string;
+        time?: number;
       } = { type };
       if (root !== null) {
         event.root = [Number(root[1]), Number(root[2])];
@@ -46,6 +49,10 @@ export const readXev = async (
       }
       if (keysym !== undefined) {
         event.keysym = keysym;
+      }
+      // Only key events carry their time, for letter timing.
+      if (time !== null && type.startsWith("Key")) {
+        event.time = Number(time[1]);
       }
       return event;
     })

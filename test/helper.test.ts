@@ -403,6 +403,38 @@ describe("Helper call time limits", () => {
     }),
   );
 
+  it.effect(
+    "a type of 59 letters at human pace gets 2 min plus its letters and settle",
+    () =>
+      Effect.gen(function* () {
+        // Given: human pace, 59 letters at 100 ms and settle 700 ms
+        const sandbox = yield* macSandbox(() => Stream.never);
+        // When
+        const error = yield* sandbox.provide(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.fork(
+              Effect.flip(
+                typeText({
+                  id: sandbox.id,
+                  text: "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456",
+                  pace: "human",
+                }),
+              ),
+            );
+            yield* sleepsNear(120_000);
+            yield* TestClock.adjust("128 seconds");
+            return yield* Fiber.join(fiber);
+          }),
+        );
+        // Then
+        expect(error.message).toMatch(
+          new RegExp(
+            `^Sandbox ${sandbox.id} did not answer the type in 2 min 7 s\\.`,
+          ),
+        );
+      }),
+  );
+
   it.effect("a type that runs 150 s still succeeds", () =>
     Effect.gen(function* () {
       // Given: six letters at 25 s each

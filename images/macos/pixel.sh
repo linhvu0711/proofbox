@@ -32,7 +32,8 @@ now() {
 }
 
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
-# before the press, the first letter or key, or the capture.
+# before the press, the first letter or key, or the capture; typed right
+# after the last letter.
 log() {
   t=$(now)
   at=$("$INPUT" where)
@@ -81,6 +82,7 @@ case "$cmd" in
     # type LETTER_MS SETTLE_MS SHOT TEXT
     log type
     "$INPUT" type "$1" "$4"
+    log typed
     settle "$2"
     if [ "$3" = "1" ]; then
       shot

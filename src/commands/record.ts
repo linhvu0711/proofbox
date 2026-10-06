@@ -16,7 +16,13 @@ import {
 } from "../helper.ts";
 import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
-import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
+import {
+  nothingChanged,
+  parseProbe,
+  planEdit,
+  typingSpans,
+  withoutSpans,
+} from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
@@ -236,6 +242,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       const clicks: { t: number; x: number; y: number }[] = [];
       const actions: number[] = [];
       const waits: { t: number; reason: string }[] = [];
+      const typing: { kind: string; t: number }[] = [];
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -243,6 +250,16 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         const entry = yield* Schema.decodeUnknown(
           Schema.parseJson(ActionLogLine),
         )(line);
+        // Typing that began before the Recording counts from its start.
+        if (
+          (entry.kind === "type" || entry.kind === "typed") &&
+          entry.t <= info.stop
+        ) {
+          typing.push({
+            kind: entry.kind,
+            t: Math.max(0, Math.min(entry.t - info.start, probe.duration)),
+          });
+        }
         if (entry.t < info.start || entry.t > info.stop) {
           continue;
         }
@@ -266,7 +283,12 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const plan = planEdit({
         duration: probe.duration,
-        freezes: probe.freezes,
+        // One letter changes too few pixels for freezedetect, so the time
+        // typing ran is never a Still part (ADR 0006).
+        freezes: withoutSpans(
+          probe.freezes,
+          typingSpans(typing, probe.duration),
+        ),
         marks,
         clicks,
         actions,

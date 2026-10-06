@@ -6,7 +6,22 @@ import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
-import { readXev, startXev } from "./support/xev.ts";
+import { readXev, startXev, type XevEvent } from "./support/xev.ts";
+
+const LETTERS_59 =
+  "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456";
+
+// The KeyPress events after the first click, and the mean X server time in
+// ms from one to the next.
+const letterGap = (events: ReadonlyArray<XevEvent>) => {
+  const clickAt = events.findIndex((event) => event.type === "ButtonPress");
+  const keys = events
+    .slice(clickAt + 1)
+    .filter((event) => event.type === "KeyPress");
+  const first = keys[0]?.time ?? 0;
+  const last = keys.at(-1)?.time ?? 0;
+  return { count: keys.length, gap: (last - first) / (keys.length - 1) };
+};
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -315,6 +330,73 @@ describe("Pixel actions", () => {
     expect(keys).toEqual(["h", "e", "l", "l", "o"]);
   });
 
+  it("type at human pace waits 100 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, ["type", id, LETTERS_59]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(90);
+    expect(gap).toBeLessThanOrEqual(110);
+  });
+
+  it("type at --pace fast waits 12 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, [
+      "type",
+      id,
+      LETTERS_59,
+      "--pace",
+      "fast",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(10.8);
+    expect(gap).toBeLessThanOrEqual(13.2);
+  });
+
+  it("type with --letter 40ms waits 40 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, [
+      "type",
+      id,
+      LETTERS_59,
+      "--pace",
+      "fast",
+      "--letter",
+      "40ms",
+      "--type-max",
+      "10s",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(36);
+    expect(gap).toBeLessThanOrEqual(44);
+  });
+
   it("type sends text that starts with a dash as letters", async () => {
     // Given
     const env = makeEnv({ docker: true });
@@ -452,6 +534,43 @@ describe("Pixel actions", () => {
     ).toHaveLength(0);
   });
 
+  it("typing adds a typed line to the Action log when the last letter is in", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "type",
+      id,
+      "abcdefghijklmnopqrst",
+      "--pace",
+      "fast",
+      "--letter",
+      "100ms",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const cat = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/action-log.jsonl",
+    ]);
+    const [typeLine, typedLine] = cat.stdout
+      .trim()
+      .split("\n")
+      .slice(-2)
+      .map((line) =>
+        Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(line),
+      );
+    expect([typeLine?.kind, typedLine?.kind]).toEqual(["type", "typed"]);
+    const span = (typedLine?.t ?? 0) - (typeLine?.t ?? 0);
+    expect(span).toBeGreaterThanOrEqual(1.8);
+    expect(span).toBeLessThanOrEqual(2.2);
+  });
+
   it("each action adds a line to the Action log", async () => {
     // Given
     const env = makeEnv({ docker: true });
@@ -507,6 +626,7 @@ describe("Pixel actions", () => {
       { kind: "screenshot", x: 720, y: 450 },
       { kind: "click", x: 700, y: 400 },
       { kind: "type", x: 700, y: 400 },
+      { kind: "typed", x: 700, y: 400 },
       { kind: "key", x: 700, y: 400 },
       { kind: "scroll", x: 700, y: 400 },
       { kind: "drag", x: 100, y: 200, toX: 500, toY: 200 },

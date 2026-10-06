@@ -26,6 +26,7 @@ const ActionLine = Schema.Struct({
     "screenshot",
     "click",
     "type",
+    "typed",
     "key",
     "scroll",
     "drag",
@@ -50,8 +51,8 @@ export const ActionLogLine = Schema.Union(ActionLine, WaitLine);
 
 export const PACE_HUMAN = {
   glideMs: 400,
-  letterMs: 80,
-  typeMaxMs: 3000,
+  letterMs: 100,
+  typeMaxMs: 10000,
   settleMs: 700,
 };
 

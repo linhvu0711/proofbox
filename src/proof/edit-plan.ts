@@ -88,6 +88,54 @@ export const parseProbe = (text: string): ProbeResult => {
   };
 };
 
+// Takes each span out of the Still parts it overlaps, so the edit keeps
+// it at real speed. Only the edit uses it: the nothing-changed check still
+// needs a change freezedetect saw.
+export const withoutSpans = (
+  freezes: ReadonlyArray<readonly [number, number | undefined]>,
+  spans: ReadonlyArray<readonly [number, number]>,
+): ReadonlyArray<readonly [number, number | undefined]> =>
+  spans.reduce<ReadonlyArray<readonly [number, number | undefined]>>(
+    (parts, [from, to]) =>
+      parts.flatMap(([a, b]) => {
+        if (to <= a || (b !== undefined && from >= b)) {
+          return [[a, b]];
+        }
+        const kept: (readonly [number, number | undefined])[] = [];
+        if (from > a) {
+          kept.push([a, from]);
+        }
+        if (b === undefined || to < b) {
+          kept.push([to, b]);
+        }
+        return kept;
+      }),
+    freezes,
+  );
+
+// The time each type action ran, from its `type` line (before the first
+// letter) to its `typed` line (after the last). Typing still running at
+// record stop runs to the end of the Recording.
+export const typingSpans = (
+  lines: ReadonlyArray<{ readonly kind: string; readonly t: number }>,
+  duration: number,
+): ReadonlyArray<readonly [number, number]> => {
+  const spans: (readonly [number, number])[] = [];
+  let open: number | undefined;
+  for (const { kind, t } of lines) {
+    if (kind === "type") {
+      open = t;
+    } else if (kind === "typed") {
+      spans.push([open ?? 0, t]);
+      open = undefined;
+    }
+  }
+  if (open !== undefined) {
+    spans.push([open, duration]);
+  }
+  return spans;
+};
+
 export const nothingChanged = (probe: ProbeResult): boolean => {
   let still = 0;
   let position = 0;

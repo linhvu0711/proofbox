@@ -254,13 +254,13 @@ const glide = Options.text("glide").pipe(
 );
 const letter = Options.text("letter").pipe(
   Options.withDescription(
-    "the wait between letters, ms or s, for example 40ms; default 80ms with --pace human, 12ms with fast",
+    "the wait between letters, ms or s, for example 40ms; default 100ms with --pace human, 12ms with fast",
   ),
   Options.optional,
 );
 const typeMax = Options.text("type-max").pipe(
   Options.withDescription(
-    "the most time all the typing may take, ms or s, for example 5s; default 3000ms",
+    "the most time all the typing may take, ms or s, for example 5s; default 10s with --pace human, 3000ms with fast",
   ),
   Options.optional,
 );

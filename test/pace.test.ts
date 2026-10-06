@@ -11,8 +11,8 @@ describe("Pace", () => {
       // Then
       expect(pace).toEqual({
         glideMs: 400,
-        letterMs: 80,
-        typeMaxMs: 3000,
+        letterMs: 100,
+        typeMaxMs: 10000,
         settleMs: 700,
       });
     }),
@@ -53,11 +53,20 @@ describe("Pace", () => {
   it.effect("typing is capped at --type-max", () =>
     Effect.gen(function* () {
       // When
-      const long = yield* resolvePace({ pace: "human" }, 100);
+      const long = yield* resolvePace({ pace: "human" }, 200);
       const short = yield* resolvePace({ pace: "human" }, 10);
       // Then
-      expect(long.letterMs).toBe(30);
-      expect(short.letterMs).toBe(80);
+      expect(long.letterMs).toBe(50);
+      expect(short.letterMs).toBe(100);
+    }),
+  );
+
+  it.effect("59 letters at human pace keep 100 ms a letter", () =>
+    Effect.gen(function* () {
+      // When
+      const pace = yield* resolvePace({ pace: "human" }, 59);
+      // Then
+      expect(pace.letterMs).toBe(100);
     }),
   );
 

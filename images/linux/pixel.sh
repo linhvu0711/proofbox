@@ -51,7 +51,8 @@ now() {
 }
 
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
-# before the press, the first letter or key, or the capture.
+# before the press, the first letter or key, or the capture; typed right
+# after the last letter.
 log() {
   t=$(now)
   eval "$(xdotool getmouselocation --shell)"
@@ -89,7 +90,10 @@ case "$cmd" in
     # type LETTER_MS SETTLE_MS SHOT TEXT
     log type
     # -- keeps text that starts with a dash from reading as an xdotool flag.
-    xdotool type --delay "$1" -- "$4"
+    # The Base image's xdotool (3.20160805.1) waits half of --delay between
+    # letters, so ask for twice the letter time.
+    xdotool type --delay "$(( $1 * 2 ))" -- "$4"
+    log typed
     settle "$2"
     if [ "$3" = "1" ]; then
       shot
