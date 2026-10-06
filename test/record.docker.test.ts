@@ -223,6 +223,54 @@ describe("Recording and the Proof video", () => {
     );
   });
 
+  it("mark cuts a Step label over 60 characters to its first 60 and warns", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    // When
+    const marked = await runCli(env, [
+      "mark",
+      id,
+      "step 1: open the settings page, then check that the new title shows the date",
+    ]);
+    // A Proof video needs the screen to change.
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(2000);
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect({
+      code: marked.exitCode,
+      stderr: marked.stderr,
+      stdout: result.stdout,
+    }).toEqual({
+      code: 0,
+      stderr:
+        'proofbox: Step mark cut to 60 characters: "step 1: open the settings page, then check that the new titl"\n',
+      stdout: `{"video":"${dir}/proof.mp4","screenshots":[{"step":1,"label":"step 1: open the settings page, then check that the new titl","path":"${dir}/proof-1.png"}]}\n`,
+    });
+  });
+
   it("record stop --json with no Step marks gives an empty screenshots list", async () => {
     // Given
     const env = makeEnv({ docker: true });

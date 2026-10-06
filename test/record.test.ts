@@ -16,6 +16,7 @@ import {
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
+import { setMark } from "../src/commands/mark.ts";
 import { stopRecording } from "../src/commands/record.ts";
 import { CaptureBlockedError, NothingChangedError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
@@ -183,10 +184,39 @@ const labelLessMac = (root: string): Provider => {
   };
 };
 
-// `terminal`: the look is on. `hints` gets each hint line.
+// A fake Mac whose record helper takes every call with exit 0; `calls` gets
+// the argv of each one.
+const markingMac = (root: string, calls: string[][]): Provider => {
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+  const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
+    calls.push([...argv]);
+    return Stream.make({ _tag: "Exit" as const, code: 0 });
+  };
+  return {
+    ...base,
+    offers: {
+      ...base.offers,
+      macos: {
+        sizes: [{ cpu: 4, ramGb: 7 }],
+        features: new Set(["desktop", "recording"]),
+      },
+    },
+    connect: (sandbox) =>
+      Effect.map(base.connect(sandbox), (connection) =>
+        withCall(connection, (argv) => answer(commandOf(argv))),
+      ),
+  };
+};
+
+// `terminal`: the look is on. `hints` gets each hint line, and `warnings`
+// each warning.
 const layers = (
   mac: Provider,
-  options: { readonly terminal?: boolean; readonly hints?: string[] } = {},
+  options: {
+    readonly terminal?: boolean;
+    readonly hints?: string[];
+    readonly warnings?: string[];
+  } = {},
 ) => {
   const providers = Layer.succeed(
     Providers,
@@ -203,7 +233,10 @@ const layers = (
       Progress,
       new Progress({
         step: (_label, effect) => effect,
-        warn: () => Effect.void,
+        warn: (text) =>
+          Effect.sync(() => {
+            options.warnings?.push(text);
+          }),
         note: () => Effect.void,
         done: () => Effect.void,
         hint: (text) =>
@@ -231,28 +264,194 @@ describe("Recording and the Proof video", () => {
     }
   });
 
-  it("mark refuses a label over 60 characters", async () => {
-    // Given
-    const env = makeEnv();
-    const created = await runCli(env, [
-      "create",
-      "--os",
-      "linux",
-      "--provider",
-      "fake",
-    ]);
-    const id = created.stdout.trim();
-    const label = "a".repeat(61);
-    // When
-    const result = await runCli(env, ["mark", id, label]);
-    // Then
-    expect(result.exitCode).toBe(125);
-    expect(result.stderr).toBe(
-      `Bad Step mark "${label}": use 1 to 60 characters on one line, for example "step 3: save the post"\n`,
-    );
+  effectIt.effect(
+    "mark cuts a label over 60 characters to 60 and warns",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({ id, label: "a".repeat(61), wait: false });
+        // Then
+        expect({
+          marks: calls.filter((argv) => argv[1] === "mark"),
+          warnings,
+        }).toEqual({
+          marks: [
+            [
+              "/opt/proofbox/record",
+              "mark",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+          ],
+          warnings: [
+            'Step mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  effectIt.effect(
+    "mark --wait cuts a reason over 60 characters to 60 and warns",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({ id, label: "a".repeat(61), wait: true });
+        // Then
+        expect({
+          waits: calls.filter((argv) => argv[1] === "wait"),
+          warnings,
+        }).toEqual({
+          waits: [
+            [
+              "/opt/proofbox/record",
+              "wait",
+              '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+            ],
+          ],
+          warnings: [
+            'Wait mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  effectIt.effect("mark cuts a label at a whole character", () => {
+    const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+    tempRoots.push(root);
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+    const mac = markingMac(root, calls);
+    return Effect.gen(function* () {
+      // Given: the stub Mac above, and 61 characters that are 62 UTF-16 units
+      const info = yield* mac.create({
+        os: "macos",
+        idle: Duration.minutes(5),
+        maxLife: Duration.hours(1),
+      });
+      const id = `fake:${info.name}`;
+      // When
+      yield* setMark({ id, label: `${"a".repeat(58)}✔👍b`, wait: false });
+      // Then
+      expect({
+        marks: calls.filter((argv) => argv[1] === "mark"),
+        warnings,
+      }).toEqual({
+        marks: [
+          [
+            "/opt/proofbox/record",
+            "mark",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa✔👍",
+          ],
+        ],
+        warnings: [
+          'Step mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa✔👍"',
+        ],
+      });
+    }).pipe(Effect.provide(layers(mac, { warnings })));
   });
 
-  it("mark --wait refuses a reason over 60 characters", async () => {
+  effectIt.effect(
+    "mark cuts before an emoji that would cross 60 characters",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above, and a thumbs-up with a skin tone, two
+        // code points, at characters 60 and 61
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({ id, label: `${"a".repeat(59)}👍🏽`, wait: false });
+        // Then
+        expect({
+          marks: calls.filter((argv) => argv[1] === "mark"),
+          warnings,
+        }).toEqual({
+          marks: [
+            [
+              "/opt/proofbox/record",
+              "mark",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+          ],
+          warnings: [
+            'Step mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  effectIt.effect(
+    "mark cuts by code point when one character is over 60 code points",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above, and an `a` with 60 combining accents,
+        // one character of 61 code points
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({
+          id,
+          label: `a${"\u0301".repeat(60)}`,
+          wait: false,
+        });
+        // Then: the mark keeps `a` and 59 accents, never an empty label
+        expect({
+          marks: calls.filter((argv) => argv[1] === "mark"),
+          warnings,
+        }).toEqual({
+          marks: [["/opt/proofbox/record", "mark", `a${"\u0301".repeat(59)}`]],
+          warnings: [
+            `Step mark cut to 60 characters: "a${"\u0301".repeat(59)}"`,
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  it("mark refuses an empty label", async () => {
     // Given
     const env = makeEnv();
     const created = await runCli(env, [
@@ -263,14 +462,35 @@ describe("Recording and the Proof video", () => {
       "fake",
     ]);
     const id = created.stdout.trim();
-    const label = "a".repeat(61);
     // When
-    const result = await runCli(env, ["mark", id, label, "--wait"]);
+    const result = await runCli(env, ["mark", id, ""]);
     // Then
-    expect(result.exitCode).toBe(125);
-    expect(result.stderr).toBe(
-      `Bad Step mark "${label}": use 1 to 60 characters on one line, for example "step 3: save the post"\n`,
-    );
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "": use one line of text, for example "step 3: save the post"\n',
+    });
+  });
+
+  it("mark refuses a label with a line break", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["mark", id, "step 1\nstep 2"]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "step 1\nstep 2": use one line of text, for example "step 3: save the post"\n',
+    });
   });
 
   it("record stop refuses a bad --max-size", async () => {

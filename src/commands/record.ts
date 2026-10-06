@@ -89,7 +89,7 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
   );
 }, Effect.scoped);
 
-// A Step mark's label, as the Caller gave it to `mark`: the helper keeps it
+// A Step mark's label, as `mark` set it (cut to 60 characters): the helper keeps it
 // in `caption-<step>.txt` in the Recording folder, with no newline.
 export const readStepLabel = Effect.fn("record.readStepLabel")(function* (
   id: string,
