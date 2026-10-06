@@ -171,4 +171,81 @@ describe("update", () => {
       pnpm: undefined,
     });
   });
+  it("update names a commit GitHub does not know", async () => {
+    // Given: GitHub knows only main, and pnpm succeeds
+    const github = await fakeGithub(commits({ main: MAIN }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update", "--commit", "0000000"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      pnpm: readLog(pnpm.log),
+    }).toEqual({
+      exitCode: 125,
+      stderr:
+        "Commit 0000000 is not in linhvu0711/proofbox. Pick one from https://github.com/linhvu0711/proofbox/commits/main.\n",
+      pnpm: undefined,
+    });
+  });
+
+  it("update says when GitHub cannot be reached", async () => {
+    // Given: a GitHub server that was started and closed, so its port is
+    // free; pnpm succeeds
+    const github = await startFakeGithub(commits({ main: MAIN }));
+    await github.close();
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      pnpm: readLog(pnpm.log),
+    }).toEqual({
+      exitCode: 125,
+      stderr:
+        "Could not reach GitHub to look up main. Check the network and try again.\n",
+      pnpm: undefined,
+    });
+  });
+
+  it("update says when GitHub answers with an error", async () => {
+    // Given: GitHub refuses every call, as it does past its rate limit;
+    // pnpm succeeds
+    const github = await fakeGithub(() => ({
+      status: 403,
+      body: '{"message":"API rate limit exceeded"}',
+    }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      pnpm: readLog(pnpm.log),
+    }).toEqual({
+      exitCode: 125,
+      stderr:
+        "GitHub answered HTTP 403 to the lookup of main. Try again later.\n",
+      pnpm: undefined,
+    });
+  });
 });

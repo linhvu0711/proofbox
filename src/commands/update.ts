@@ -7,6 +7,7 @@ import { Progress } from "../progress.ts";
 
 const REPO = "linhvu0711/proofbox";
 const HASH = /^[0-9a-fA-F]{7,40}$/;
+const FULL_HASH = /^[0-9a-f]{40}$/;
 
 // The GitHub REST API base, overridable for tests.
 const githubApi = Config.string("PROOFBOX_GITHUB_API_URL").pipe(
@@ -31,6 +32,16 @@ const lookUpCommit = Effect.fn("update.lookUpCommit")(function* (ref: string) {
         reason: `Could not reach GitHub to look up ${ref}. Check the network and try again.`,
       }),
   });
+  if (reply.status === 422) {
+    return yield* new UpdateError({
+      reason: `Commit ${ref} is not in ${REPO}. Pick one from https://github.com/${REPO}/commits/main.`,
+    });
+  }
+  if (reply.status !== 200 || !FULL_HASH.test(reply.body)) {
+    return yield* new UpdateError({
+      reason: `GitHub answered HTTP ${reply.status} to the lookup of ${ref}. Try again later.`,
+    });
+  }
   return reply.body;
 });
 
