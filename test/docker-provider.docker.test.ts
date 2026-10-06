@@ -30,6 +30,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
 import {
   type CliEnv,
@@ -353,8 +354,11 @@ describe("Docker Provider", () => {
                     step: (_label, effect) => effect,
                     warn: () => Effect.void,
                     note: () => Effect.void,
+                    done: () => Effect.void,
+                    hint: () => Effect.void,
                   }),
                 ),
+                Style.Default.pipe(Layer.provide(CliOutput.Test)),
               ),
             ),
           ),

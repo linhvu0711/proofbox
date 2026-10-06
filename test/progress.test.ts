@@ -210,6 +210,68 @@ describe("Progress", () => {
     ),
   );
 
+  it.effect("with FORCE_COLOR=1 a hint prints dim with two spaces", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.hint("make one: proofbox create --os linux");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("\u001b[2m  make one: proofbox create --os linux\u001b[0m\n");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["FORCE_COLOR", "1"]])),
+      ),
+    ),
+  );
+
+  it.effect("with FORCE_COLOR=1 done prints a green ✔ and its text", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.done("clicked 120,340");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("\u001b[32m✔\u001b[0m clicked 120,340\n");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["FORCE_COLOR", "1"]])),
+      ),
+    ),
+  );
+
+  it.effect("without a terminal done and hint print nothing", () =>
+    Effect.gen(function* () {
+      const progress = yield* Progress;
+      yield* progress.done("clicked 120,340");
+      yield* progress.hint("make one: proofbox create --os linux");
+      const output = yield* CliOutput;
+      expect(
+        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
+      ).toBe("");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+      Effect.withConfigProvider(ConfigProvider.fromMap(new Map())),
+    ),
+  );
+
   it.effect("with FORCE_COLOR=1 a warning prints a yellow !", () =>
     Effect.gen(function* () {
       const progress = yield* Progress;
@@ -238,9 +300,15 @@ describe("Progress", () => {
       ["create", "--os", "linux", "--provider", "fake"],
       { set: { FORCE_COLOR: "1" } },
     );
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: match the ANSI reset after elapsed time.
-    expect(result.stderr.replace(/\d+(m \d+)?s(?=\u001b\[0m\n)/g, "<t>")).toBe(
-      "\u001b[32m✔\u001b[0m creating fake Sandbox  \u001b[2m<t>\u001b[0m\n\u001b[32m✔\u001b[0m starting Keeper  \u001b[2m<t>\u001b[0m\n",
+    const id = result.stdout.trim();
+    const dim = (text: string) => `\u001b[2m  ${text}\u001b[0m\n`;
+    expect(
+      result.stderr
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: match the ANSI reset after elapsed time.
+        .replace(/\d+(m \d+)?s(?=\u001b\[0m\n)/g, "<t>")
+        .replace(/(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}/g, "<time>"),
+    ).toBe(
+      `\u001b[32m✔\u001b[0m creating fake Sandbox  \u001b[2m<t>\u001b[0m\n\u001b[32m✔\u001b[0m starting Keeper  \u001b[2m<t>\u001b[0m\n${dim(`run a command: proofbox exec ${id} -- <command>`)}${dim(`delete it: proofbox delete ${id}`)}${dim("ends at <time> if idle, at <time> at the latest")}`,
     );
     expect(result.exitCode).toBe(0);
   });
@@ -312,8 +380,13 @@ describe("Progress", () => {
       ["create", "--os", "linux", "--provider", "fake"],
       { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
     );
-    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
-      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n",
+    const id = result.stdout.trim();
+    expect(
+      result.stderr
+        .replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")
+        .replace(/(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}/g, "<time>"),
+    ).toBe(
+      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
     );
     expect(result.stderr).not.toContain("\u001b");
   });

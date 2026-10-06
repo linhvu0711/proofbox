@@ -1,4 +1,4 @@
-import { Duration, Effect, Schema, Stream } from "effect";
+import { Duration, Effect, Option, Schema, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import {
   CaptureBlockedError,
@@ -20,6 +20,8 @@ import { nothingChanged, parseProbe, planEdit } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
+import { Style } from "../style.ts";
+import { formatMb } from "../upload/max-size.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",
@@ -74,6 +76,11 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
       reason: `Recording helper failed: ${started.stderr}`,
     });
   }
+  const progress = yield* Progress;
+  yield* progress.done("Recording started");
+  yield* progress.hint(
+    `stop it with proofbox record stop ${id} --out proof.mp4`,
+  );
 }, Effect.scoped);
 
 // A Step mark's label, as the Caller gave it to `mark`: the helper keeps it
@@ -307,13 +314,15 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         }
         return Number(built.stdout.toString("utf8").trim());
       });
-      yield* encodeUnderLimit(encode, {
-        limit: options.maxSize ?? PROOF_SIZE_DEFAULT,
+      return yield* encodeUnderLimit(encode, {
+        limit,
         raw: `${info.dir}/raw.mkv`,
       });
     });
+    const limit = options.maxSize ?? PROOF_SIZE_DEFAULT;
     const progress = yield* Progress;
-    yield* progress.step("building the Proof video", buildProof);
+    const style = yield* Style;
+    const bytes = yield* progress.step("building the Proof video", buildProof);
     const video = yield* fetchHelper(
       options.id,
       RECORD_HELPER,
@@ -337,7 +346,8 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (shot.code !== 0) {
         return yield* helperFailed(shot);
       }
-      // Only the JSON names the labels, so the plain path reads none.
+      // Only the JSON holds the labels, so a plain path for a program reads
+      // none.
       screenshots.push(
         options.json === true
           ? {
@@ -355,6 +365,28 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     }
     const lines = [out, ...screenshots.map((shot) => shot.path)];
     yield* output.out(`${lines.join("\n")}\n`);
+    // The hints are for a person only, and each label costs a fetch, so a
+    // program pays for none of it.
+    if (!style.look) {
+      return;
+    }
+    yield* progress.hint(
+      `Proof video ${out}, ${formatMb(bytes)} MB of the ${formatMb(limit)} MB Size limit`,
+    );
+    // The files are saved by now; a label that cannot be read only leaves
+    // its line without one.
+    for (const shot of screenshots) {
+      const label = yield* readStepLabel(options.id, info.dir, shot.step).pipe(
+        Effect.option,
+      );
+      yield* progress.hint(
+        Option.match(label, {
+          onNone: () => `Proof screenshot ${shot.path}, Step ${shot.step}`,
+          onSome: (text) =>
+            `Proof screenshot ${shot.path}, Step ${shot.step} "${text}"`,
+        }),
+      );
+    }
   },
   Effect.scoped,
 );

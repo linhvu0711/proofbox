@@ -10,6 +10,7 @@ import { openLive } from "../src/commands/live.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { Progress } from "../src/progress.ts";
 import {
+  liveViewOn,
   type Provider,
   type ProviderEntry,
   Providers,
@@ -57,6 +58,8 @@ const layers = (provider: Provider) =>
         step: (_label, effect) => effect,
         warn: () => Effect.void,
         note: () => Effect.void,
+        done: () => Effect.void,
+        hint: () => Effect.void,
       }),
     ),
   );
@@ -93,6 +96,27 @@ describe("live", () => {
         retryDelay: 50,
       });
     }
+  });
+
+  it("liveViewOn gives the Live view only on an OS that offers one", () => {
+    // Given: the plain fake, the stub above, and a Live view with no offer
+    const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+    tempRoots.push(root);
+    const plain = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+    const live = withLiveView(root);
+    const unoffered = { ...live, offers: plain.offers };
+    // Then
+    expect({
+      plain: liveViewOn(plain, "linux"),
+      live: liveViewOn(live, "linux") === live.liveView,
+      otherOs: liveViewOn(live, "macos"),
+      unoffered: liveViewOn(unoffered, "linux"),
+    }).toEqual({
+      plain: undefined,
+      live: true,
+      otherOs: undefined,
+      unoffered: undefined,
+    });
   });
 
   it("live on a Provider with no Live view is refused", async () => {

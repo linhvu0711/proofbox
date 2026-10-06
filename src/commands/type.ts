@@ -1,5 +1,6 @@
 import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
+import { Progress } from "../progress.ts";
 
 export const typeText = Effect.fn("type.typeText")(function* (options: {
   readonly id: string;
@@ -25,5 +26,10 @@ export const typeText = Effect.fn("type.typeText")(function* (options: {
         ),
       },
     },
+  );
+  const letters = Array.from(options.text).length;
+  const progress = yield* Progress;
+  yield* progress.done(
+    `typed ${letters} ${letters === 1 ? "letter" : "letters"}`,
   );
 }, Effect.scoped);

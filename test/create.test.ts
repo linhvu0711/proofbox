@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { formatClock } from "../src/format-time.ts";
 import {
   cleanupEnvs,
   keeperCannotStart,
@@ -44,6 +45,17 @@ const envFile = (content: string, mode = 0o600) => {
   chmodSync(path, mode);
   return path;
 };
+
+// The dim lines a create ends with, as the look prints them with NO_COLOR=1,
+// each time already replaced by <time>.
+const hintLines = (id: string) =>
+  `  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`;
+
+// Elapsed times and clock times change from run to run.
+const steady = (stderr: string) =>
+  stderr
+    .replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")
+    .replace(/(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}/g, "<time>");
 
 describe("create", () => {
   afterEach(cleanupEnvs);
@@ -213,10 +225,44 @@ describe("create", () => {
       ],
       { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
     );
-    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
-      "✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✔ running Setup script  <t>\n",
+    expect(steady(result.stderr)).toBe(
+      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ uploading Work folder  <t>\n  sent 4 files, removed 0 files\n✔ running Setup script  <t>\n${hintLines(result.stdout.trim())}`,
     );
     expect(result.exitCode).toBe(0);
+  });
+
+  it("with FORCE_COLOR=1 create ends with how to use the Sandbox and when it ends", async () => {
+    // Given: the fake Provider, which has no Live view, so no live hint
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    // Then
+    const id = result.stdout.trim();
+    expect(steady(result.stderr)).toBe(
+      `✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n  run a command: proofbox exec ${id} -- <command>\n  delete it: proofbox delete ${id}\n  ends at <time> if idle, at <time> at the latest\n`,
+    );
+  });
+
+  it("with FORCE_COLOR=1 create says it ends at the Deadline the Provider holds", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake"],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    // Then: the idle end is the fake's own deadline file, in local time
+    const name = result.stdout.trim().replace(/^fake:/, "");
+    const seconds = readFileSync(join(env.root, name, "deadline"), "utf8");
+    const held = new Date(Number(seconds.trim()) * 1000);
+    expect(result.stderr).toContain(
+      `  ends at ${formatClock(held, new Date())} if idle, at `,
+    );
   });
 
   it("create --setup without --work makes nothing", async () => {
@@ -678,8 +724,8 @@ describe("create", () => {
       ["create", "--os", "linux", "--provider", "fake", "--env-file", path],
       { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
     );
-    expect(result.stderr.replace(/ {2}\d+(m \d+)?s\n/g, "  <t>\n")).toBe(
-      `! env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n`,
+    expect(steady(result.stderr)).toBe(
+      `! env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n${hintLines(result.stdout.trim())}`,
     );
     expect(result.exitCode).toBe(0);
   });

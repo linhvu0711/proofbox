@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import {
+  Chunk,
   ConfigProvider,
   Duration,
   Effect,
   Fiber,
   Layer,
+  Ref,
   Stream,
   TestClock,
 } from "effect";
@@ -26,6 +28,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
@@ -123,14 +126,77 @@ const stoppingMac = (
   };
 };
 
-const layers = (mac: Provider) => {
+// A fake Mac with one Step mark, whose Recording builds and downloads but
+// whose Step label cannot be read.
+const labelLessMac = (root: string): Provider => {
+  const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+  const dir = "/var/lib/proofbox/recordings/1";
+  const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
+    const [, action, remote] = argv;
+    const text = (body: string) =>
+      Stream.make(
+        { _tag: "Stdout" as const, bytes: new TextEncoder().encode(body) },
+        { _tag: "Exit" as const, code: 0 },
+      );
+    if (action === "stop") {
+      return text(
+        `{"dir":"${dir}","start":1000,"stop":1010,"steps":1,"width":1440,"height":900}`,
+      );
+    }
+    if (action === "probe") {
+      return text("Duration: 00:00:10.00\n");
+    }
+    if (action === "build") {
+      return text("1000");
+    }
+    if (action === "fetch" && remote === `${dir}/caption-1.txt`) {
+      return Stream.make(
+        {
+          _tag: "Stderr" as const,
+          bytes: new TextEncoder().encode("no such file"),
+        },
+        { _tag: "Exit" as const, code: 1 },
+      );
+    }
+    if (action === "fetch" && remote?.startsWith(`${dir}/`) === true) {
+      return Stream.make(
+        { _tag: "Stdout" as const, bytes: PNG_HEAD },
+        { _tag: "Exit" as const, code: 0 },
+      );
+    }
+    // The Action log: no actions.
+    return text("");
+  };
+  return {
+    ...base,
+    offers: {
+      ...base.offers,
+      macos: {
+        sizes: [{ cpu: 4, ramGb: 7 }],
+        features: new Set(["desktop", "recording"]),
+      },
+    },
+    connect: (sandbox) =>
+      Effect.map(base.connect(sandbox), (connection) =>
+        withCall(connection, (argv) => answer(commandOf(argv))),
+      ),
+  };
+};
+
+// `terminal`: the look is on. `hints` gets each hint line.
+const layers = (
+  mac: Provider,
+  options: { readonly terminal?: boolean; readonly hints?: string[] } = {},
+) => {
   const providers = Layer.succeed(
     Providers,
     new Map<string, ProviderEntry>([["fake", providerEntry(mac)]]),
   );
+  const output =
+    options.terminal === true ? CliOutput.TestTerminal(100) : CliOutput.Test;
   return Layer.mergeAll(
     NodeContext.layer,
-    CliOutput.Test,
+    output,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     Layer.succeed(
@@ -139,8 +205,14 @@ const layers = (mac: Provider) => {
         step: (_label, effect) => effect,
         warn: () => Effect.void,
         note: () => Effect.void,
+        done: () => Effect.void,
+        hint: (text) =>
+          Effect.sync(() => {
+            options.hints?.push(text);
+          }),
       }),
     ),
+    Style.Default.pipe(Layer.provide(output)),
   );
 };
 
@@ -304,6 +376,41 @@ describe("Recording and the Proof video", () => {
         );
         expect(new Uint8Array(readFileSync(saved))).toEqual(PNG_HEAD);
       }).pipe(Effect.provide(layers(mac)));
+    },
+  );
+
+  effectIt.effect(
+    "at a terminal record stop names a Proof screenshot whose label it cannot read",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const mac = labelLessMac(root);
+      const hints: string[] = [];
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
+        tempRoots.push(dir);
+        const out = join(dir, "proof.mp4");
+        const shot = join(dir, "proof-1.png");
+        // When
+        yield* stopRecording({ id, out });
+        // Then: the paths print, and the screenshot's line has no label
+        const output = yield* CliOutput;
+        const stdout = yield* Ref.get(output.captured.out);
+        expect({
+          stdout: Chunk.toReadonlyArray(stdout).join(""),
+          shot: hints.at(-1),
+        }).toEqual({
+          stdout: `${out}\n${shot}\n`,
+          shot: `Proof screenshot ${shot}, Step 1`,
+        });
+      }).pipe(Effect.provide(layers(mac, { terminal: true, hints })));
     },
   );
 

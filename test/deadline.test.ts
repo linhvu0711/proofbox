@@ -16,6 +16,7 @@ import {
   Providers,
   providerEntry,
 } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
@@ -60,8 +61,11 @@ const layers = () => {
         step: (_label, effect) => effect,
         warn: () => Effect.void,
         note: () => Effect.void,
+        done: () => Effect.void,
+        hint: () => Effect.void,
       }),
     ),
+    Style.Default.pipe(Layer.provide(CliOutput.Test)),
   );
 };
 

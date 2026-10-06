@@ -1,6 +1,7 @@
 import { Duration, Effect } from "effect";
 import { BadStepsError } from "../errors.ts";
 import { resolvePace, runPixel } from "../pixel.ts";
+import { Progress } from "../progress.ts";
 
 const BUTTONS = { up: "4", down: "5", left: "6", right: "7" } as const;
 
@@ -44,5 +45,9 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
         ),
       },
     },
+  );
+  const progress = yield* Progress;
+  yield* progress.done(
+    `scrolled ${options.direction} ${options.steps} at ${options.x},${options.y}`,
   );
 }, Effect.scoped);

@@ -661,6 +661,29 @@ describe("Recording and the Proof video", () => {
     );
   });
 
+  it("with FORCE_COLOR=1 record start and mark print ✔ lines", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const set = { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" };
+    // When
+    const stderrs: string[] = [];
+    for (const args of [
+      ["record", "start", id],
+      ["mark", id, "login done"],
+      ["mark", id, "loading the page", "--wait"],
+    ]) {
+      stderrs.push((await runCli(env, args, { set })).stderr);
+    }
+    // Then
+    expect(stderrs).toEqual([
+      `✔ Recording started\n  stop it with proofbox record stop ${id} --out proof.mp4\n`,
+      '✔ Step mark "login done"\n',
+      '✔ Wait mark "loading the page"\n',
+    ]);
+  });
+
   it("record start twice is refused", async () => {
     // Given
     const env = makeEnv({ docker: true });
@@ -906,6 +929,43 @@ describe("Recording and the Proof video", () => {
       result.stderr.startsWith("proofbox: building the Proof video\n"),
     ).toBe(true);
     expect(result.stdout).toBe(`${join(dir, "proof.mp4")}\n`);
+  });
+
+  it("with FORCE_COLOR=1 record stop names the Proof video size and each Proof screenshot", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "login done"]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(3000);
+    // When
+    const result = await runCli(
+      env,
+      ["record", "stop", id, "--out", join(dir, "proof.mp4")],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    // Then
+    expect(
+      result.stderr
+        .split("\n")
+        .filter((line) => line.startsWith("  Proof"))
+        .map((line) => line.replace(/\d+\.\d MB of/, "<n> MB of")),
+    ).toEqual([
+      `  Proof video ${dir}/proof.mp4, <n> MB of the 10.0 MB Size limit`,
+      `  Proof screenshot ${dir}/proof-1.png, Step 1 "login done"`,
+    ]);
   });
 
   it("record stop --out into a missing folder says it could not write the file", async () => {

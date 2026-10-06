@@ -1,5 +1,6 @@
 import { Duration, Effect } from "effect";
 import { resolvePace, runPixel } from "../pixel.ts";
+import { Progress } from "../progress.ts";
 
 export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
   readonly id: string;
@@ -39,5 +40,9 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
         extra: Duration.millis(2 * pace.glideMs + pace.settleMs),
       },
     },
+  );
+  const progress = yield* Progress;
+  yield* progress.done(
+    `dragged ${options.x1},${options.y1} to ${options.x2},${options.y2}`,
   );
 }, Effect.scoped);
