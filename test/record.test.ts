@@ -85,8 +85,8 @@ const blockedMac = (root: string, blocked: string): Provider => {
   };
 };
 
-// A fake Mac whose Recording ran 300 s (start 1000, stop 1300) and whose
-// check (`probe`) answers with `probe`.
+// A fake Mac whose Recording ran 300 s (start 1000, stop 1300), whose
+// check (`probe`) answers with `probe`, and whose Action log is empty.
 const stoppingMac = (
   root: string,
   probe: Stream.Stream<ExecEvent>,
@@ -107,6 +107,10 @@ const stoppingMac = (
     }
     if (action === "probe") {
       return probe;
+    }
+    if (action === "fetch") {
+      // The Action log: no actions.
+      return Stream.make({ _tag: "Exit" as const, code: 0 });
     }
     return Stream.make({ _tag: "Exit" as const, code: 1 });
   };

@@ -4,6 +4,7 @@ import {
   nothingChanged,
   parseProbe,
   planEdit,
+  withoutSpans,
 } from "../src/proof/edit-plan.ts";
 
 describe("edit-plan", () => {
@@ -730,6 +731,51 @@ describe("edit-plan", () => {
     };
     // When
     const result = nothingChanged(toggled);
+    // Then
+    expect(result).toBe(false);
+  });
+
+  it("typing splits the Still part it sits in", () => {
+    // Given
+    const freezes: ReadonlyArray<readonly [number, number | undefined]> = [
+      [1, 11],
+      [12, undefined],
+    ];
+    // When
+    const result = withoutSpans(freezes, [[2, 8]]);
+    // Then
+    expect(result).toEqual([
+      [1, 2],
+      [8, 11],
+      [12, undefined],
+    ]);
+  });
+
+  it("typing inside a Still part plays as recorded", () => {
+    // Given: freezedetect saw 1 s to 11 s as still, typing ran 2 s to 8 s
+    const input = {
+      duration: 12,
+      freezes: withoutSpans([[1, 11]], [[2, 8]]),
+      marks: [],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 12, step: 0 },
+      { kind: "still", at: 12, seconds: 4, step: 0 },
+    ]);
+  });
+
+  it("a Recording where only typing changed the screen is not still", () => {
+    // Given
+    const probe = {
+      duration: 6,
+      freezes: withoutSpans([[0, undefined]], [[1, 4]]),
+    };
+    // When
+    const result = nothingChanged(probe);
     // Then
     expect(result).toBe(false);
   });

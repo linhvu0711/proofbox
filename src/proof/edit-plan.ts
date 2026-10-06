@@ -88,6 +88,31 @@ export const parseProbe = (text: string): ProbeResult => {
   };
 };
 
+// Takes each span out of the Still parts it overlaps. Typing changes too
+// few pixels a letter for freezedetect to see, so the time a type action
+// ran is a change, never a Still part.
+export const withoutSpans = (
+  freezes: ReadonlyArray<readonly [number, number | undefined]>,
+  spans: ReadonlyArray<readonly [number, number]>,
+): ReadonlyArray<readonly [number, number | undefined]> =>
+  spans.reduce<ReadonlyArray<readonly [number, number | undefined]>>(
+    (parts, [from, to]) =>
+      parts.flatMap(([a, b]) => {
+        if (to <= a || (b !== undefined && from >= b)) {
+          return [[a, b]];
+        }
+        const kept: (readonly [number, number | undefined])[] = [];
+        if (from > a) {
+          kept.push([a, from]);
+        }
+        if (b === undefined || to < b) {
+          kept.push([to, b]);
+        }
+        return kept;
+      }),
+    freezes,
+  );
+
 export const nothingChanged = (probe: ProbeResult): boolean => {
   let still = 0;
   let position = 0;

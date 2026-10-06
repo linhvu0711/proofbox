@@ -139,7 +139,7 @@ A reason the Caller gives for a Still part during a Recording ("waiting for the 
 _Avoid_: wait step, pause
 
 **Still part**:
-A stretch of a Recording where nothing on screen changes. One under 4 s plays as recorded; the Proof video cuts a longer one to 4 s. It keeps a short "» 1 min 50 s later" label, the length of the whole Still part, only when the app ended it or a Wait mark names it.
+A stretch of a Recording where nothing on screen changes. Typing is never a Still part, even when one letter changes too little to see. One under 4 s plays as recorded; the Proof video cuts a longer one to 4 s. It keeps a short "» 1 min 50 s later" label, the length of the whole Still part, only when the app ended it or a Wait mark names it.
 _Avoid_: idle time, dead time, thinking time
 
 **Proof video**:

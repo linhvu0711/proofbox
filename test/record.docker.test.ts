@@ -847,6 +847,28 @@ describe("Recording and the Proof video", () => {
     expect(result.stdout).toBe(`${out}\n${join(dir, "proof-1.png")}\n`);
   });
 
+  it("a Recording where only typing happened makes a Proof video", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(1000);
+    await runCli(env, ["type", id, "abcdefghijklmnopqrstuvwxyzabcdefghijklmn"]);
+    await wait(1000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "typing.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+  });
+
   it("a Recording where nothing changed on screen makes no video", async () => {
     // Given
     const env = makeEnv({ docker: true });
