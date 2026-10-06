@@ -78,7 +78,7 @@ describe("Pixel actions", () => {
       "--",
       "sh",
       "-c",
-      "sleep 3; xwininfo -root -tree | grep -c xmessage || true",
+      "sleep 3; tree=$(xwininfo -root -tree) && { printf '%s\\n' \"$tree\" | grep -c xmessage; true; }",
     ]);
     // Then
     expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
@@ -99,7 +99,7 @@ describe("Pixel actions", () => {
       "--",
       "sh",
       "-c",
-      "sleep 3; /opt/proofbox/tools/ffmpeg -loglevel error -f x11grab -video_size 1x1 -i :99+700,600 -frames:v 1 -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' '",
+      "sleep 3; /opt/proofbox/tools/ffmpeg -loglevel error -f x11grab -video_size 1x1 -i :99+700,600 -frames:v 1 -f rawvideo -pix_fmt rgb24 -y /tmp/pixel.rgb && od -An -tu1 /tmp/pixel.rgb | tr -s ' '",
     ]);
     // Then
     expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
