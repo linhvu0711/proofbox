@@ -212,6 +212,17 @@ describe("Help text", () => {
     );
   });
 
+  it("mark --help says a label over 60 characters is cut to 60", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["mark", "--help"]);
+    // Then
+    expect(result.stdout).toContain(
+      "one line of text, for example step 1: open the app; over 60 characters is cut to 60",
+    );
+  });
+
   it("proofbox auth shows each subcommand's description", async () => {
     // Given
     const env = makeEnv();

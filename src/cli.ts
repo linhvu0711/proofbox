@@ -497,7 +497,7 @@ const mark = Command.make(
     id: sandboxId,
     label: Args.text({ name: "label" }).pipe(
       Args.withDescription(
-        "the mark's text, 1 to 60 characters, for example step 1: open the app",
+        "one line of text, for example step 1: open the app; over 60 characters is cut to 60",
       ),
     ),
     wait: Options.boolean("wait").pipe(
