@@ -4,6 +4,7 @@ import {
   nothingChanged,
   parseProbe,
   planEdit,
+  typingSpans,
   withoutSpans,
 } from "../src/proof/edit-plan.ts";
 
@@ -768,15 +769,24 @@ describe("edit-plan", () => {
     ]);
   });
 
-  it("a Recording where only typing changed the screen is not still", () => {
+  it("a type and its typed line make one typing span", () => {
     // Given
-    const probe = {
-      duration: 6,
-      freezes: withoutSpans([[0, undefined]], [[1, 4]]),
-    };
+    const lines = [
+      { kind: "type", t: 2 },
+      { kind: "typed", t: 8 },
+    ];
     // When
-    const result = nothingChanged(probe);
+    const spans = typingSpans(lines, 10);
     // Then
-    expect(result).toBe(false);
+    expect(spans).toEqual([[2, 8]]);
+  });
+
+  it("typing still running at record stop runs to the end of the Recording", () => {
+    // Given
+    const lines = [{ kind: "type", t: 2 }];
+    // When
+    const spans = typingSpans(lines, 10);
+    // Then
+    expect(spans).toEqual([[2, 10]]);
   });
 });

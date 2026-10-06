@@ -18,9 +18,9 @@ import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import {
   nothingChanged,
-  type ProbeResult,
   parseProbe,
   planEdit,
+  typingSpans,
   withoutSpans,
 } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
@@ -207,6 +207,25 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         return yield* helperFailed(probed);
       }
       const probe = parseProbe(probed.stdout.toString("utf8"));
+      let check = probe;
+      if (probe.freezes.length === 0 && probe.duration < 3) {
+        const again = yield* runHelper(
+          options.id,
+          RECORD_HELPER,
+          ["probe", info.dir, String(Math.max(probe.duration / 4, 0.1))],
+          { outcome: "no Proof video was made", limit: buildLimit },
+        );
+        if (again.code !== 0) {
+          return yield* helperFailed(again);
+        }
+        check = parseProbe(again.stdout.toString("utf8"));
+      }
+      if (nothingChanged(check)) {
+        return yield* new NothingChangedError({
+          id: options.id,
+          raw: `${info.dir}/raw.mkv`,
+        });
+      }
       const actionLog = yield* runHelper(
         options.id,
         RECORD_HELPER,
@@ -222,8 +241,8 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       const marks: number[] = [];
       const clicks: { t: number; x: number; y: number }[] = [];
       const actions: number[] = [];
-      const typing: [number, number][] = [];
       const waits: { t: number; reason: string }[] = [];
+      const typing: { kind: string; t: number }[] = [];
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -231,6 +250,16 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         const entry = yield* Schema.decodeUnknown(
           Schema.parseJson(ActionLogLine),
         )(line);
+        // Typing that began before the Recording counts from its start.
+        if (
+          (entry.kind === "type" || entry.kind === "typed") &&
+          entry.t <= info.stop
+        ) {
+          typing.push({
+            kind: entry.kind,
+            t: Math.max(0, Math.min(entry.t - info.start, probe.duration)),
+          });
+        }
         if (entry.t < info.start || entry.t > info.stop) {
           continue;
         }
@@ -241,8 +270,6 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           clicks.push({ t, x: entry.x, y: entry.y });
         } else if (entry.kind === "wait") {
           waits.push({ t, reason: entry.reason });
-        } else if (entry.kind === "type" && entry.until !== undefined) {
-          typing.push([t, Math.min(entry.until - info.start, probe.duration)]);
         }
         if (
           entry.kind === "click" ||
@@ -254,33 +281,14 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           actions.push(t);
         }
       }
-      const freezes = withoutSpans(probe.freezes, typing);
-      let check: ProbeResult = { duration: probe.duration, freezes };
-      if (probe.freezes.length === 0 && probe.duration < 3) {
-        const again = yield* runHelper(
-          options.id,
-          RECORD_HELPER,
-          ["probe", info.dir, String(Math.max(probe.duration / 4, 0.1))],
-          { outcome: "no Proof video was made", limit: buildLimit },
-        );
-        if (again.code !== 0) {
-          return yield* helperFailed(again);
-        }
-        const short = parseProbe(again.stdout.toString("utf8"));
-        check = {
-          duration: short.duration,
-          freezes: withoutSpans(short.freezes, typing),
-        };
-      }
-      if (nothingChanged(check)) {
-        return yield* new NothingChangedError({
-          id: options.id,
-          raw: `${info.dir}/raw.mkv`,
-        });
-      }
       const plan = planEdit({
         duration: probe.duration,
-        freezes,
+        // One letter changes too few pixels for freezedetect, so the time
+        // typing ran is never a Still part (ADR 0006).
+        freezes: withoutSpans(
+          probe.freezes,
+          typingSpans(typing, probe.duration),
+        ),
         marks,
         clicks,
         actions,

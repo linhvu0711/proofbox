@@ -88,9 +88,9 @@ export const parseProbe = (text: string): ProbeResult => {
   };
 };
 
-// Takes each span out of the Still parts it overlaps. Typing changes too
-// few pixels a letter for freezedetect to see, so the time a type action
-// ran is a change, never a Still part.
+// Takes each span out of the Still parts it overlaps, so the edit keeps
+// it at real speed. Only the edit uses it: the nothing-changed check still
+// needs a change freezedetect saw.
 export const withoutSpans = (
   freezes: ReadonlyArray<readonly [number, number | undefined]>,
   spans: ReadonlyArray<readonly [number, number]>,
@@ -112,6 +112,29 @@ export const withoutSpans = (
       }),
     freezes,
   );
+
+// The time each type action ran, from its `type` line (before the first
+// letter) to its `typed` line (after the last). Typing still running at
+// record stop runs to the end of the Recording.
+export const typingSpans = (
+  lines: ReadonlyArray<{ readonly kind: string; readonly t: number }>,
+  duration: number,
+): ReadonlyArray<readonly [number, number]> => {
+  const spans: (readonly [number, number])[] = [];
+  let open: number | undefined;
+  for (const { kind, t } of lines) {
+    if (kind === "type") {
+      open = t;
+    } else if (kind === "typed") {
+      spans.push([open ?? 0, t]);
+      open = undefined;
+    }
+  }
+  if (open !== undefined) {
+    spans.push([open, duration]);
+  }
+  return spans;
+};
 
 export const nothingChanged = (probe: ProbeResult): boolean => {
   let still = 0;

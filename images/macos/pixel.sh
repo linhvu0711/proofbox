@@ -32,7 +32,8 @@ now() {
 }
 
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
-# before the press, the key, or the capture.
+# before the press, the first letter or key, or the capture; typed right
+# after the last letter.
 log() {
   t=$(now)
   at=$("$INPUT" where)
@@ -43,15 +44,6 @@ log() {
   else
     printf '{"t":%s,"kind":"%s","x":%s,"y":%s}\n' "$t" "$1" "$X" "$Y" >> "$LOG"
   fi
-}
-
-# log_type FROM: append the type line once the last letter is in. FROM is
-# the time right before the first letter; until is now, so the edit knows
-# how long the typing ran.
-log_type() {
-  until=$(now)
-  at=$("$INPUT" where)
-  printf '{"t":%s,"kind":"type","x":%s,"y":%s,"until":%s}\n' "$1" "${at% *}" "${at#* }" "$until" >> "$LOG"
 }
 
 # shot: write a PNG of the screen to stdout at the screen's size in points
@@ -88,9 +80,9 @@ case "$cmd" in
     ;;
   type)
     # type LETTER_MS SETTLE_MS SHOT TEXT
-    from=$(now)
+    log type
     "$INPUT" type "$1" "$4"
-    log_type "$from"
+    log typed
     settle "$2"
     if [ "$3" = "1" ]; then
       shot

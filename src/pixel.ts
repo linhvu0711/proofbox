@@ -26,6 +26,7 @@ const ActionLine = Schema.Struct({
     "screenshot",
     "click",
     "type",
+    "typed",
     "key",
     "scroll",
     "drag",
@@ -36,7 +37,6 @@ const ActionLine = Schema.Struct({
   toX: Schema.optional(Schema.Number.pipe(Schema.int())),
   toY: Schema.optional(Schema.Number.pipe(Schema.int())),
   step: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-  until: Schema.optional(Schema.Number),
 });
 
 const WaitLine = Schema.Struct({

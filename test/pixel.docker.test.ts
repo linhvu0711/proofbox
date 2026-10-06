@@ -471,7 +471,7 @@ describe("Pixel actions", () => {
     ).toHaveLength(0);
   });
 
-  it("the type line in the Action log ends when the last letter is in", async () => {
+  it("typing adds a typed line to the Action log when the last letter is in", async () => {
     // Given
     const env = makeEnv({ docker: true });
     const created = await create(env);
@@ -495,11 +495,15 @@ describe("Pixel actions", () => {
       "cat",
       "/run/proofbox/action-log.jsonl",
     ]);
-    const line = Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(
-      cat.stdout.trim().split("\n").at(-1) ?? "",
-    );
-    expect(line.kind).toBe("type");
-    const span = "until" in line ? (line.until ?? 0) - line.t : 0;
+    const [typeLine, typedLine] = cat.stdout
+      .trim()
+      .split("\n")
+      .slice(-2)
+      .map((line) =>
+        Schema.decodeUnknownSync(Schema.parseJson(ActionLogLine))(line),
+      );
+    expect([typeLine?.kind, typedLine?.kind]).toEqual(["type", "typed"]);
+    const span = (typedLine?.t ?? 0) - (typeLine?.t ?? 0);
     expect(span).toBeGreaterThanOrEqual(1.8);
     expect(span).toBeLessThanOrEqual(2.2);
   });
@@ -558,7 +562,8 @@ describe("Pixel actions", () => {
     expect(lines.map(({ t: _t, ...rest }) => rest)).toEqual([
       { kind: "screenshot", x: 720, y: 450 },
       { kind: "click", x: 700, y: 400 },
-      { kind: "type", x: 700, y: 400, until: expect.any(Number) },
+      { kind: "type", x: 700, y: 400 },
+      { kind: "typed", x: 700, y: 400 },
       { kind: "key", x: 700, y: 400 },
       { kind: "scroll", x: 700, y: 400 },
       { kind: "drag", x: 100, y: 200, toX: 500, toY: 200 },
