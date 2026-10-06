@@ -1,5 +1,6 @@
 import { globSync, rmSync } from "node:fs";
 import { build } from "esbuild";
+import { buildCommit } from "./build-commit.ts";
 
 // Bundles src/ into dist/. Loading one bundle is about 4x faster than the
 // ~1,300 files `effect` and its packages spread over (ADR 0017).
@@ -7,6 +8,9 @@ import { build } from "esbuild";
 // Every process proofbox spawns is its own entry, so entryPath() finds
 // dist/<path>-main.js.
 const entryPoints = ["src/main.ts", ...globSync("src/**/*-main.ts")];
+
+// `proofbox --version` names the commit (src/version.ts).
+const commit = buildCommit(".");
 
 rmSync("dist", { recursive: true, force: true });
 const result = await build({
@@ -24,6 +28,8 @@ const result = await build({
   banner: {
     js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
   },
+  define:
+    commit === undefined ? {} : { PROOFBOX_COMMIT: JSON.stringify(commit) },
   metafile: true,
 });
 

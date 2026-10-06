@@ -30,6 +30,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: node dist/main.js --help
+      - run: test "$(node dist/main.js --version)" = "proofbox 0.0.0 ($(git rev-parse --short=7 HEAD))"
 
   docker:
     runs-on: ubuntu-24.04
