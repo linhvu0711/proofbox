@@ -15,13 +15,13 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips).toEqual([
       { kind: "cut", from: 0, to: 8, step: 0 },
-      { kind: "still", at: 8, seconds: 2, step: 0 },
+      { kind: "still", at: 8, seconds: 4, step: 0 },
     ]);
     expect(plan.captions).toEqual([]);
-    expect(plan.seconds).toBe(10);
+    expect(plan.seconds).toBe(12);
   });
 
-  it("each Step mark starts a step that ends on a 2 s hold", () => {
+  it("each Step mark starts a step that ends on a 4 s hold", () => {
     // Given
     const input = { duration: 20, freezes: [], marks: [2, 10], clicks: [] };
     // When
@@ -30,18 +30,18 @@ describe("edit-plan", () => {
     expect(plan.clips).toEqual([
       { kind: "cut", from: 0, to: 2, step: 0 },
       { kind: "cut", from: 2, to: 10, step: 1 },
-      { kind: "still", at: 10, seconds: 2, step: 1 },
+      { kind: "still", at: 10, seconds: 4, step: 1 },
       { kind: "cut", from: 10, to: 20, step: 2 },
-      { kind: "still", at: 20, seconds: 2, step: 2 },
+      { kind: "still", at: 20, seconds: 4, step: 2 },
     ]);
     expect(plan.captions).toEqual([
-      { step: 1, from: 2, to: 12 },
-      { step: 2, from: 12, to: 24 },
+      { step: 1, from: 2, to: 14 },
+      { step: 2, from: 14, to: 28 },
     ]);
-    expect(plan.seconds).toBe(24);
+    expect(plan.seconds).toBe(28);
   });
 
-  it("a step shorter than 3 s is held until it lasts 3 s", () => {
+  it("a step shorter than 4 s still ends on a 4 s hold", () => {
     // Given
     const input = { duration: 5, freezes: [], marks: [0, 0.5], clicks: [] };
     // When
@@ -49,15 +49,15 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips).toEqual([
       { kind: "cut", from: 0, to: 0.5, step: 1 },
-      { kind: "still", at: 0.5, seconds: 2.5, step: 1 },
+      { kind: "still", at: 0.5, seconds: 4, step: 1 },
       { kind: "cut", from: 0.5, to: 5, step: 2 },
-      { kind: "still", at: 5, seconds: 2, step: 2 },
+      { kind: "still", at: 5, seconds: 4, step: 2 },
     ]);
     expect(plan.captions).toEqual([
-      { step: 1, from: 0, to: 3 },
-      { step: 2, from: 3, to: 9.5 },
+      { step: 1, from: 0, to: 4.5 },
+      { step: 2, from: 4.5, to: 13 },
     ]);
-    expect(plan.seconds).toBe(9.5);
+    expect(plan.seconds).toBe(13);
   });
 
   it("a 3-minute Recording with long pauses comes out at 16 s", () => {
@@ -77,12 +77,12 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips).toEqual([
       { kind: "cut", from: 0, to: 1, step: 0 },
-      { kind: "cut", from: 1, to: 4, step: 1 },
-      { kind: "still", at: 4, seconds: 2, label: "» 54 s later", step: 1 },
-      { kind: "cut", from: 58, to: 61, step: 2 },
-      { kind: "still", at: 61, seconds: 2, label: "» 54 s later", step: 2 },
-      { kind: "cut", from: 115, to: 118, step: 3 },
-      { kind: "still", at: 118, seconds: 2, step: 3 },
+      { kind: "cut", from: 1, to: 3, step: 1 },
+      { kind: "still", at: 3, seconds: 3, label: "» 56 s later", step: 1 },
+      { kind: "cut", from: 58, to: 60, step: 2 },
+      { kind: "still", at: 60, seconds: 3, label: "» 56 s later", step: 2 },
+      { kind: "cut", from: 115, to: 117, step: 3 },
+      { kind: "still", at: 117, seconds: 3, step: 3 },
     ]);
     expect(plan.captions).toEqual([
       { step: 1, from: 1, to: 6 },
@@ -92,7 +92,7 @@ describe("edit-plan", () => {
     expect(plan.seconds).toBe(16);
   });
 
-  it("a still part inside a step becomes a 2 s label", () => {
+  it("a Still part inside a step shows 1 s, a 2 s label, and 1 s", () => {
     // Given
     const input = {
       duration: 40,
@@ -106,15 +106,15 @@ describe("edit-plan", () => {
     const plan = planEdit(input);
     // Then
     expect(plan.clips).toEqual([
-      { kind: "cut", from: 0, to: 7, step: 1 },
-      { kind: "still", at: 7, seconds: 2, label: "» 22 s later", step: 1 },
+      { kind: "cut", from: 0, to: 6, step: 1 },
+      { kind: "still", at: 6, seconds: 2, label: "» 25 s later", step: 1 },
       { kind: "cut", from: 29, to: 40, step: 1 },
-      { kind: "still", at: 40, seconds: 2, step: 1 },
+      { kind: "still", at: 40, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(22);
+    expect(plan.seconds).toBe(23);
   });
 
-  it("a still part under 3 s after its margins is kept", () => {
+  it("a 4.5 s Still part is cut to 4 s", () => {
     // Given
     const input = {
       duration: 12,
@@ -128,13 +128,15 @@ describe("edit-plan", () => {
     const plan = planEdit(input);
     // Then
     expect(plan.clips).toEqual([
-      { kind: "cut", from: 0, to: 12, step: 1 },
-      { kind: "still", at: 12, seconds: 2, step: 1 },
+      { kind: "cut", from: 0, to: 4, step: 1 },
+      { kind: "still", at: 4, seconds: 2, label: "» 5 s later", step: 1 },
+      { kind: "cut", from: 6.5, to: 12, step: 1 },
+      { kind: "still", at: 12, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(14);
+    expect(plan.seconds).toBe(15.5);
   });
 
-  it("a Still part a Caller action ends is cut with no label, keeping 2 s after and 1 s before", () => {
+  it("a Still part a Caller action ends is cut to 4 s with no label", () => {
     // Given
     const input = {
       duration: 40,
@@ -149,11 +151,12 @@ describe("edit-plan", () => {
     const plan = planEdit(input);
     // Then
     expect(plan.clips).toEqual([
-      { kind: "cut", from: 0, to: 7, step: 1 },
+      { kind: "cut", from: 0, to: 6, step: 1 },
+      { kind: "still", at: 6, seconds: 2, step: 1 },
       { kind: "cut", from: 29, to: 40, step: 1 },
-      { kind: "still", at: 40, seconds: 2, step: 1 },
+      { kind: "still", at: 40, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(20);
+    expect(plan.seconds).toBe(23);
   });
 
   it("a Still part the app ends keeps its label", () => {
@@ -172,9 +175,9 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips[1]).toEqual({
       kind: "still",
-      at: 7,
+      at: 6,
       seconds: 2,
-      label: "» 22 s later",
+      label: "» 25 s later",
       step: 1,
     });
   });
@@ -195,14 +198,14 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips[1]).toEqual({
       kind: "still",
-      at: 7,
+      at: 6,
       seconds: 2,
-      label: "» 22 s later",
+      label: "» 25 s later",
       step: 1,
     });
   });
 
-  it("a Still part that runs to the end of the Recording has no label", () => {
+  it("a Still part at the end of the Recording is held 4 s with no label", () => {
     // Given
     const input = {
       duration: 40,
@@ -216,10 +219,9 @@ describe("edit-plan", () => {
     const plan = planEdit(input);
     // Then
     expect(plan.clips).toEqual([
-      { kind: "cut", from: 0, to: 7, step: 1 },
-      { kind: "still", at: 7, seconds: 2, step: 1 },
+      { kind: "cut", from: 0, to: 6, step: 1 },
+      { kind: "still", at: 6, seconds: 3, step: 1 },
     ]);
-    expect(plan.seconds).toBe(9);
   });
 
   it("a Wait mark puts its reason after the label", () => {
@@ -239,9 +241,9 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips[1]).toEqual({
       kind: "still",
-      at: 7,
+      at: 6,
       seconds: 2,
-      label: "» 22 s later · waiting for the scheduler",
+      label: "» 25 s later · waiting for the scheduler",
       step: 1,
     });
   });
@@ -263,9 +265,9 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips[1]).toEqual({
       kind: "still",
-      at: 7,
+      at: 6,
       seconds: 2,
-      label: "» 22 s later · waiting for the scheduler",
+      label: "» 25 s later · waiting for the scheduler",
       step: 1,
     });
   });
@@ -333,8 +335,8 @@ describe("edit-plan", () => {
     expect(plan.clips[0]).toEqual({
       kind: "still",
       at: 0,
-      seconds: 2,
-      label: "» 9 s later · too early",
+      seconds: 3,
+      label: "» 10 s later · too early",
       step: 0,
     });
   });
@@ -358,9 +360,9 @@ describe("edit-plan", () => {
     // Then
     expect(plan.clips[1]).toEqual({
       kind: "still",
-      at: 7,
+      at: 6,
       seconds: 2,
-      label: "» 22 s later · first reason",
+      label: "» 25 s later · first reason",
       step: 1,
     });
   });
@@ -400,12 +402,182 @@ describe("edit-plan", () => {
     const plan = planEdit(input);
     // Then
     expect(plan.clips).toEqual([
-      { kind: "cut", from: 0, to: 7, step: 1 },
-      { kind: "still", at: 7, seconds: 2, step: 1 },
+      { kind: "cut", from: 0, to: 6, step: 1 },
+      { kind: "still", at: 6, seconds: 3, step: 1 },
+      { kind: "still", at: 15, seconds: 3, step: 2 },
       { kind: "cut", from: 29, to: 40, step: 2 },
-      { kind: "still", at: 40, seconds: 2, step: 2 },
+      { kind: "still", at: 40, seconds: 4, step: 2 },
     ]);
-    expect(plan.seconds).toBe(22);
+    expect(plan.seconds).toBe(27);
+  });
+
+  it("a Still part under 4 s between two actions plays as recorded, with no label", () => {
+    // Given
+    const input = {
+      duration: 20,
+      freezes: [
+        [5, 7],
+        [10, 13.9],
+      ] as ReadonlyArray<readonly [number, number | undefined]>,
+      marks: [0],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 20, step: 1 },
+      { kind: "still", at: 20, seconds: 4, step: 1 },
+    ]);
+  });
+
+  it("a 60 s Still part becomes 4 s with a » 1 min later label", () => {
+    // Given
+    const input = {
+      duration: 80,
+      freezes: [[5, 65]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 6, step: 1 },
+      { kind: "still", at: 6, seconds: 2, label: "» 1 min later", step: 1 },
+      { kind: "cut", from: 64, to: 80, step: 1 },
+      { kind: "still", at: 80, seconds: 4, step: 1 },
+    ]);
+  });
+
+  it("a 60 s Still part a Wait mark names shows its reason", () => {
+    // Given
+    const input = {
+      duration: 80,
+      freezes: [[5, 65]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [],
+      waits: [{ t: 10, reason: "waiting for the scheduler" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 6,
+      seconds: 2,
+      label: "» 1 min later · waiting for the scheduler",
+      step: 1,
+    });
+  });
+
+  it("a last screen still for 3.5 s before the Step mark gets a 1 s hold", () => {
+    // Given: the step's action ends 3.5 s before the next Step mark
+    const input = {
+      duration: 20,
+      freezes: [[6.5, 10]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 10],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 10, step: 1 },
+      { kind: "still", at: 10, seconds: 1, step: 1 },
+      { kind: "cut", from: 10, to: 20, step: 2 },
+      { kind: "still", at: 20, seconds: 4, step: 2 },
+    ]);
+  });
+
+  it("a step with no change is held 4 s with its label", () => {
+    // Given: step 2 runs from 10 s to 20 s inside one Still part
+    const input = {
+      duration: 40,
+      freezes: [[8, 30]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 10, 20],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips.filter((clip) => clip.step === 2)).toEqual([
+      { kind: "still", at: 10, seconds: 4, label: "» 10 s later", step: 2 },
+    ]);
+  });
+
+  it("a Still part under 4 s at a step's start plays as recorded", () => {
+    // Given: a Still part from 8 s to 12 s, across the Step mark at 10 s
+    const input = {
+      duration: 20,
+      freezes: [[8, 12]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 10],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 10, step: 1 },
+      { kind: "still", at: 10, seconds: 2, step: 1 },
+      { kind: "cut", from: 10, to: 20, step: 2 },
+      { kind: "still", at: 20, seconds: 4, step: 2 },
+    ]);
+  });
+
+  it("a Still part of 4 s or more at a step's start shows 3 s still and 1 s as recorded", () => {
+    // Given: a Still part from 8 s to 16 s, across the Step mark at 10 s
+    const input = {
+      duration: 30,
+      freezes: [[8, 16]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0, 10],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips.filter((clip) => clip.step === 2)).toEqual([
+      { kind: "still", at: 10, seconds: 3, label: "» 6 s later", step: 2 },
+      { kind: "cut", from: 15, to: 30, step: 2 },
+      { kind: "still", at: 30, seconds: 4, step: 2 },
+    ]);
+  });
+
+  it("a click after a cut Still part rings at its place in the video", () => {
+    // Given
+    const input = {
+      duration: 80,
+      freezes: [[5, 65]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [0],
+      clicks: [
+        { t: 64.6, x: 100, y: 200 },
+        { t: 79.9, x: 5, y: 6 },
+      ],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    expect(
+      plan.rings.map((r) => ({ ...r, from: round2(r.from), to: round2(r.to) })),
+    ).toEqual([
+      { x: 100, y: 200, from: 8.6, to: 9.4 },
+      { x: 5, y: 6, from: 23.9, to: 24.7 },
+    ]);
   });
 
   it("the label reads seconds, then minutes", () => {
@@ -421,7 +593,7 @@ describe("edit-plan", () => {
     ]);
   });
 
-  it("each click gets a ring for 0.8 s at its place in the video", () => {
+  it("each click shown in the video gets a ring for 0.8 s at its place", () => {
     // Given
     const input = {
       duration: 172,
@@ -440,10 +612,7 @@ describe("edit-plan", () => {
     // When
     const plan = planEdit(input);
     // Then
-    expect(plan.rings).toEqual([
-      { x: 700, y: 400, from: 1.5, to: 2.3 },
-      { x: 10, y: 20, from: 3.5, to: 4.3 },
-    ]);
+    expect(plan.rings).toEqual([{ x: 700, y: 400, from: 1.5, to: 2.3 }]);
   });
 
   it("a click at the end of a cut keeps its ring into the hold", () => {
@@ -509,19 +678,19 @@ describe("edit-plan", () => {
     );
     expect(rounded).toEqual([
       { kind: "cut", from: 0, to: 1.58, step: 0 },
-      { kind: "cut", from: 1.58, to: 4.93, step: 1 },
+      { kind: "cut", from: 1.58, to: 3.93, step: 1 },
       {
         kind: "still",
-        at: 4.93,
-        seconds: 2,
-        label: "» 25 s later",
+        at: 3.93,
+        seconds: 3,
+        label: "» 27 s later",
         step: 1,
       },
-      { kind: "cut", from: 29.82, to: 32.77, step: 2 },
+      { kind: "cut", from: 29.82, to: 31.77, step: 2 },
       {
         kind: "still",
-        at: 32.77,
-        seconds: 2,
+        at: 31.77,
+        seconds: 3,
         step: 2,
       },
     ]);

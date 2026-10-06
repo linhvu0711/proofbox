@@ -21,9 +21,9 @@ describe("render-edit", () => {
     expect(script).toContain("concat=n=5:v=1:a=0");
     expect(script).toContain("pad=1440:972:0:72:color=0x111111");
     expect(script).toContain(
-      `textfile=${DIR}/caption-1.txt:fontsize=36:fontcolor=white:x=36:y=(72-text_h)/2:enable='between(t,2,12)'`,
+      `textfile=${DIR}/caption-1.txt:fontsize=36:fontcolor=white:x=36:y=(72-text_h)/2:enable='between(t,2,14)'`,
     );
-    expect(script).toContain("enable='between(t,12,24)'");
+    expect(script).toContain("enable='between(t,14,28)'");
   });
 
   it("a 2560-wide Recording gets a 128 px bar and a 64 px font", () => {
@@ -55,7 +55,7 @@ describe("render-edit", () => {
     const script = renderEdit(plan, options);
     // Then
     expect(script).toContain(
-      `movie=${DIR}/raw.mkv:seek_point=6.9,trim=start=6.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text=» 22 s later:expansion=none:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
+      `movie=${DIR}/raw.mkv:seek_point=5.9,trim=start=5.9,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/30/TB,drawtext=fontfile=${FONT}:text=» 25 s later:expansion=none:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=18:x=(w-text_w)/2:y=h-text_h-72`,
     );
   });
 
@@ -74,7 +74,7 @@ describe("render-edit", () => {
     const script = renderEdit(plan, options);
     // Then
     expect(script).toContain(
-      String.raw`text=» 22 s later · it\\\'s 1\\:30\, \[ok\]\; 100% \\\\ done:expansion=none:fontsize=36`,
+      String.raw`text=» 25 s later · it\\\'s 1\\:30\, \[ok\]\; 100% \\\\ done:expansion=none:fontsize=36`,
     );
   });
 

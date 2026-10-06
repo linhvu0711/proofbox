@@ -12,7 +12,7 @@ Words are in `CONTEXT.md`. Decisions are in `docs/adr/`.
 - Uploads your Work folder (tracked and new files, minus git-ignored ones). The Sandbox never clones your repo and never gets a GitHub token (ADR 0005).
 - Runs a Setup script, then sends Secrets from your env file after setup, so setup and Snapshots never hold them.
 - Drives the screen at human pace: screenshot, click, type, key, scroll, drag.
-- Records the desktop and builds a Proof video in the Sandbox: Still parts cut, click rings, step captions, under the Size limit (10 MB by default). It also saves a Proof screenshot at each Step mark (ADR 0006).
+- Records the desktop and builds a Proof video in the Sandbox: Still parts over 4 s cut to 4 s, click rings, step captions, under the Size limit (10 MB by default). It also saves a Proof screenshot at each Step mark (ADR 0006).
 - Leaves nothing in your repo. Its own config lives in `~/.config/proofbox/` (ADR 0007).
 
 ## Providers
