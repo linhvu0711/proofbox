@@ -66,6 +66,10 @@ _Avoid_: checkout, clone, repo copy
 A per-OS script the Caller passes on create that installs the app's dependencies, not the app build itself. It lives wherever the Caller keeps it, never required inside the repo, and it never sees Secrets.
 _Avoid_: bootstrap, install script, environment file
 
+**Setup env**:
+The `NAME=value` lines the Setup script writes to the file at `$PROOFBOX_ENV`, such as the `PATH` to the tools it installed. Every later `exec` in the Sandbox gets them. A Snapshot keeps them, so a Sandbox started from it gets them too. A name in both the Setup env and the Secrets file is an error, not an override.
+_Avoid_: env file, env script, profile
+
 **Base image**:
 The proofbox-owned starting point for a Sandbox: a desktop, a browser, fonts, and the recording tools. On Namespace a Base image version is deleted after 14 days without use; a Sandbox started from it, or from a Snapshot made from it, is a use.
 _Avoid_: template, golden image
@@ -83,8 +87,12 @@ The hash of the Base image version, the Setup script, and the Work folder's lock
 _Avoid_: cache key, digest, tag
 
 **Secret**:
-An env value from the env file the Caller passes on create. It lives only on the Caller's machine until proofbox sends it into one Sandbox, after the Setup script has finished and any Snapshot is saved, so neither ever holds it.
+An env value from the Secrets file. It lives only on the Caller's machine until proofbox sends it into one Sandbox, after the Setup script has finished and any Snapshot is saved, so neither ever holds it.
 _Avoid_: credential, env var
+
+**Secrets file**:
+The file of `NAME=value` lines the Caller passes on create with `--secrets`, one Secret per line. It lives wherever the Caller keeps it, never required inside the repo.
+_Avoid_: env file, dotenv
 
 ### Driving and watching
 
