@@ -74,19 +74,23 @@ export const parseEnvLines = Effect.fn("secrets.parseEnvLines")(function* (
   return secrets;
 });
 
-const secretsFileError = (path: string) => (error: PlatformError.PlatformError) => {
-  switch (error._tag === "SystemError" ? error.reason : undefined) {
-    case "NotFound":
-      return new SecretsFileUnreadableError({ path, reason: "not found" });
-    case "PermissionDenied":
-      return new SecretsFileUnreadableError({ path, reason: "is not readable" });
-    default:
-      return new ProviderError({
-        provider: "local",
-        reason: platformReason(error),
-      });
-  }
-};
+const secretsFileError =
+  (path: string) => (error: PlatformError.PlatformError) => {
+    switch (error._tag === "SystemError" ? error.reason : undefined) {
+      case "NotFound":
+        return new SecretsFileUnreadableError({ path, reason: "not found" });
+      case "PermissionDenied":
+        return new SecretsFileUnreadableError({
+          path,
+          reason: "is not readable",
+        });
+      default:
+        return new ProviderError({
+          provider: "local",
+          reason: platformReason(error),
+        });
+    }
+  };
 
 export const readSecretsFile = Effect.fn("secrets.readSecretsFile")(function* (
   path: string,
@@ -97,7 +101,10 @@ export const readSecretsFile = Effect.fn("secrets.readSecretsFile")(function* (
     .stat(path)
     .pipe(Effect.mapError((error) => onError(error)));
   if (info.type === "Directory") {
-    return yield* new SecretsFileUnreadableError({ path, reason: "is a folder" });
+    return yield* new SecretsFileUnreadableError({
+      path,
+      reason: "is a folder",
+    });
   }
   const text = yield* fs
     .readFileString(path)
@@ -111,6 +118,15 @@ export const readSecretsFile = Effect.fn("secrets.readSecretsFile")(function* (
   return yield* parseEnvLines(path, text);
 });
 
+// A file `sh` loads with `.`: one quoted `export NAME='value'` line each.
+export const envBody = (entries: ReadonlyArray<Secret>): string =>
+  entries
+    .map(
+      (entry) =>
+        `export ${entry.name}=${shellJoin([Redacted.value(entry.value)])}\n`,
+    )
+    .join("");
+
 export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (
   rawId: string,
   secrets: ReadonlyArray<Secret>,
@@ -120,12 +136,7 @@ export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (
   const provider = id.provider;
   const info = yield* provider.get(id);
   const progress = yield* Progress;
-  const body = secrets
-    .map(
-      (secret) =>
-        `export ${secret.name}=${shellJoin([Redacted.value(secret.value)])}\n`,
-    )
-    .join("");
+  const body = envBody(secrets);
   yield* progress.step(
     `sending ${secrets.length} ${secrets.length === 1 ? "Secret" : "Secrets"}`,
     withDeadlinePush(
@@ -147,15 +158,3 @@ export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (
     ),
   );
 });
-
-export const withSecrets = (
-  envPath: string,
-  argv: ReadonlyArray<string>,
-): ReadonlyArray<string> => [
-  "sh",
-  "-c",
-  'set +x; if [ -r "$1" ]; then . "$1"; fi; shift; exec "$@"',
-  "sh",
-  envPath,
-  ...argv,
-];
