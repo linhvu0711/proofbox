@@ -103,7 +103,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 
 `proofbox <command> --help` describes each argument and option, with its format, default, and an example.
 
-Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`. `click`, `scroll`, and `drag` take `--glide` and `--settle`; `type` takes `--letter`, `--type-max`, and `--settle`; and `key` takes `--settle`. Each overrides that part of `--pace`. With `--pace human` the defaults are `--glide 400ms`, `--letter 80ms`, `--type-max 3000ms`, `--settle 700ms`.
+Pixel actions take `--pace human\|fast` (human by default) and `--screenshot <file>` to save the screen after the action, at the same size as `screenshot`. `click`, `scroll`, and `drag` take `--glide` and `--settle`; `type` takes `--letter`, `--type-max`, and `--settle`; and `key` takes `--settle`. Each overrides that part of `--pace`. With `--pace human` the defaults are `--glide 400ms`, `--letter 100ms`, `--type-max 10s`, `--settle 700ms`.
 
 `--json` on `list`, `auth status`, `record stop`, and `live` prints one line of JSON on stdout. On a failure stdout stays empty, the error goes to stderr, and proofbox exits 125.
 

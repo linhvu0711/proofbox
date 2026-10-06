@@ -105,7 +105,7 @@ A screen command that works the way a person does: screenshot, click, type, key,
 _Avoid_: computer use, GUI action, input event
 
 **Pace**:
-How fast a Pixel action moves: the pointer glide, the wait between letters, and the settle time after the action. `human` is the default, so a Proof video is easy to follow; `fast` is for when no one will watch.
+How fast a Pixel action moves: the pointer glide, the wait between letters, and the settle time after the action. `human` is the default, at about 100 ms a letter, so a Proof video is easy to follow; `fast` is for when no one will watch.
 _Avoid_: speed, delay, timing preset
 
 **Live view**:

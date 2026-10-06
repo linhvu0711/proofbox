@@ -267,6 +267,23 @@ describe("Pixel actions", () => {
     expect(keys).toEqual(["h", "e", "l", "l", "o"]);
   });
 
+  it("type at human pace waits 100 ms between letters", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["click", id, "700", "400", "--pace", "fast"]);
+    // When
+    const result = await runCli(env, ["type", id, LETTERS_59]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    const { count, gap } = letterGap(await readXev(env, id));
+    expect(count).toBe(59);
+    expect(gap).toBeGreaterThanOrEqual(90);
+    expect(gap).toBeLessThanOrEqual(110);
+  });
+
   it("type at --pace fast waits 12 ms between letters", async () => {
     // Given
     const env = makeEnv({ docker: true });
