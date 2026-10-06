@@ -50,7 +50,8 @@ export const readXev = async (
       if (keysym !== undefined) {
         event.keysym = keysym;
       }
-      if (time !== null) {
+      // Only key events carry their time, for letter timing.
+      if (time !== null && type.startsWith("Key")) {
         event.time = Number(time[1]);
       }
       return event;
