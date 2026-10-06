@@ -3,6 +3,7 @@
 # Safe to run twice: a folder already at the right tag is left alone.
 # Never fails the install: without network it warns and exits 0.
 # Set EMBED_SOURCE_SKIP=1 to skip (for example in CI that only lints and tests).
+# A folder with no .git is skipped: only a clone fetches the source.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || { echo "sync-repos: cannot cd to the repo root, skipping"; exit 0; }
@@ -10,6 +11,12 @@ MANIFEST="repos/README.md"
 
 if [[ "${EMBED_SOURCE_SKIP:-}" == "1" ]]; then
   echo "sync-repos: skipped (EMBED_SOURCE_SKIP=1)"
+  exit 0
+fi
+# pnpm builds a GitHub install from an archive with no .git, and the installed
+# package has none either: only a clone fetches the source.
+if [[ ! -e .git ]]; then
+  echo "sync-repos: not a git checkout, skipping"
   exit 0
 fi
 [[ -f "$MANIFEST" ]] || { echo "sync-repos: no $MANIFEST, nothing to fetch"; exit 0; }
