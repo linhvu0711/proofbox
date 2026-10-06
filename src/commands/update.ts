@@ -1,0 +1,110 @@
+import { Command, CommandExecutor } from "@effect/platform";
+import { Config, Effect, Option, Stream } from "effect";
+import { CliOutput } from "../cli-output.ts";
+import { commandEvents } from "../command-events.ts";
+import { UpdateError } from "../errors.ts";
+import { Progress } from "../progress.ts";
+
+const REPO = "linhvu0711/proofbox";
+const HASH = /^[0-9a-fA-F]{7,40}$/;
+const FULL_HASH = /^[0-9a-f]{40}$/;
+
+// The GitHub REST API base, overridable for tests.
+const githubApi = Config.string("PROOFBOX_GITHUB_API_URL").pipe(
+  Config.withDefault("https://api.github.com"),
+);
+
+// The full commit of `ref` (a branch or a short or full hash): with this
+// Accept header the commits API answers the bare hash as text.
+const lookUpCommit = Effect.fn("update.lookUpCommit")(function* (ref: string) {
+  const base = yield* githubApi.pipe(
+    Effect.mapError((error) => new UpdateError({ reason: error.message })),
+  );
+  const reply = yield* Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(`${base}/repos/${REPO}/commits/${ref}`, {
+        headers: { accept: "application/vnd.github.sha" },
+      });
+      return { status: res.status, body: (await res.text()).trim() };
+    },
+    catch: () =>
+      new UpdateError({
+        reason: `Could not reach GitHub to look up ${ref}. Check the network and try again.`,
+      }),
+  });
+  if (reply.status === 422) {
+    return yield* new UpdateError({
+      reason: `Commit ${ref} is not in ${REPO}. Pick one from https://github.com/${REPO}/commits/main.`,
+    });
+  }
+  if (reply.status !== 200 || !FULL_HASH.test(reply.body)) {
+    return yield* new UpdateError({
+      reason: `GitHub answered HTTP ${reply.status} to the lookup of ${ref}. Try again later.`,
+    });
+  }
+  return reply.body;
+});
+
+// pnpm 12 builds a git package only when --allow-build names it by its
+// resolved key, the codeload URL with the full commit.
+const installArgs = (full: string) => [
+  "add",
+  "-g",
+  `--allow-build=proofbox@https://codeload.github.com/${REPO}/tar.gz/${full}`,
+  `github:${REPO}#${full}`,
+];
+
+export const updateProofbox = Effect.fn("update.updateProofbox")(
+  function* (options: { readonly commit: Option.Option<string> }) {
+    const output = yield* CliOutput;
+    const progress = yield* Progress;
+    const executor = yield* CommandExecutor.CommandExecutor;
+    const ref = Option.getOrElse(options.commit, () => "main");
+    if (Option.isSome(options.commit) && !HASH.test(ref)) {
+      return yield* new UpdateError({
+        reason:
+          "--commit takes a commit hash of 7 to 40 hex characters, for example d527832.",
+      });
+    }
+    const full = yield* lookUpCommit(ref);
+    const short = full.slice(0, 7);
+    yield* progress.note(`installing proofbox ${short} from GitHub`);
+    // No stdin, so pnpm never asks which packages to build. Its output is
+    // progress, not the result, so all of it goes to stderr. pnpm's last
+    // line has no line end, so proofbox ends it before its own line.
+    let lineOpen = false;
+    yield* commandEvents(
+      executor,
+      Command.make("pnpm", ...installArgs(full)),
+      undefined,
+      {
+        spawn: (error) =>
+          new UpdateError({
+            reason:
+              error.reason === "NotFound"
+                ? "pnpm is not on PATH. Install pnpm, then run proofbox update again."
+                : `Could not start pnpm: ${error.message}`,
+          }),
+        fail: (reason) => new UpdateError({ reason }),
+        exit: (code) =>
+          code === 0
+            ? Effect.succeed(code)
+            : new UpdateError({
+                reason: `pnpm could not install proofbox ${short} (exit ${code}). Its output is above.`,
+              }),
+      },
+    ).pipe(
+      Stream.runForEach((event) => {
+        if (event._tag === "Exit" || event.bytes.length === 0) {
+          return Effect.void;
+        }
+        lineOpen = event.bytes[event.bytes.length - 1] !== 0x0a;
+        return output.err(event.bytes);
+      }),
+      Effect.ensuring(
+        Effect.suspend(() => (lineOpen ? output.err("\n") : Effect.void)),
+      ),
+    );
+    yield* output.out(`${short}\n`);
+  },
+);

@@ -26,6 +26,7 @@ import { startRecording, stopRecording } from "./commands/record.ts";
 import { takeScreenshot } from "./commands/screenshot.ts";
 import { scrollAt } from "./commands/scroll.ts";
 import { typeText } from "./commands/type.ts";
+import { updateProofbox } from "./commands/update.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
 import { KNOWN_REGIONS } from "./namespace/regions.ts";
 import { parseMaxSize } from "./upload/max-size.ts";
@@ -204,6 +205,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       live,
       record,
       mark,
+      update,
       auth,
     ]),
   );
@@ -483,6 +485,23 @@ const json = Options.boolean("json").pipe(
 const list = Command.make("list", { json }, ({ json }) =>
   listSandboxes({ json }),
 ).pipe(Command.withDescription("list your Sandboxes"));
+
+const update = Command.make(
+  "update",
+  {
+    commit: Options.text("commit").pipe(
+      Options.withDescription(
+        "the commit to install, a hash of 7 to 40 hex characters, for example d527832; default: the newest commit on main",
+      ),
+      Options.optional,
+    ),
+  },
+  ({ commit }) => updateProofbox({ commit }),
+).pipe(
+  Command.withDescription(
+    "install the newest proofbox from GitHub, or the commit --commit names",
+  ),
+);
 
 const del = Command.make(
   "delete",
