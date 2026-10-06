@@ -31,8 +31,9 @@ afterEach(async () => {
     rmSync(dir, { recursive: true, force: true });
 });
 
-// A `pnpm` on PATH that logs its argv, prints a line on stdout and one on
-// stderr as pnpm does, and exits with $FAKE_PNPM_EXIT (0 by default).
+// A `pnpm` on PATH that logs its argv, prints a line on stdout and two on
+// stderr as pnpm does, the last with no line end, and exits with
+// $FAKE_PNPM_EXIT (0 by default).
 const fakePnpm = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-pnpm-"));
   dirs.push(dir);
@@ -42,7 +43,7 @@ const fakePnpm = () => {
   const path = join(binDir, "pnpm");
   writeFileSync(
     path,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nprintf '+ proofbox 0.0.0\\n'\nprintf 'Progress: done\\n' >&2\nexit "\${FAKE_PNPM_EXIT:-0}"\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nprintf '+ proofbox 0.0.0\\n'\nprintf 'Progress: done\\n' >&2\nprintf 'Done in 1s' >&2\nexit "\${FAKE_PNPM_EXIT:-0}"\n`,
   );
   chmodSync(path, 0o755);
   return { binDir, log };
@@ -288,5 +289,19 @@ describe("update", () => {
         "pnpm could not install proofbox d527832 (exit 1). Its output is above.\n",
       ),
     }).toEqual({ exitCode: 125, stdout: "", pnpmOut: true, end: true });
+  });
+  it("update ends pnpm's last line before its own output", async () => {
+    // Given: GitHub's main is d527832, and pnpm's last line has no line end
+    const github = await fakeGithub(commits({ main: MAIN }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect(result.stderr.endsWith("Progress: done\nDone in 1s\n")).toBe(true);
   });
 });

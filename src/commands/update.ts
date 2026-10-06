@@ -70,7 +70,9 @@ export const updateProofbox = Effect.fn("update.updateProofbox")(
     const short = full.slice(0, 7);
     yield* progress.note(`installing proofbox ${short} from GitHub`);
     // No stdin, so pnpm never asks which packages to build. Its output is
-    // progress, not the result, so all of it goes to stderr.
+    // progress, not the result, so all of it goes to stderr. pnpm's last
+    // line has no line end, so proofbox ends it before its own line.
+    let lineOpen = false;
     yield* commandEvents(
       executor,
       Command.make("pnpm", ...installArgs(full)),
@@ -92,8 +94,15 @@ export const updateProofbox = Effect.fn("update.updateProofbox")(
               }),
       },
     ).pipe(
-      Stream.runForEach((event) =>
-        event._tag === "Exit" ? Effect.void : output.err(event.bytes),
+      Stream.runForEach((event) => {
+        if (event._tag === "Exit" || event.bytes.length === 0) {
+          return Effect.void;
+        }
+        lineOpen = event.bytes[event.bytes.length - 1] !== 0x0a;
+        return output.err(event.bytes);
+      }),
+      Effect.ensuring(
+        Effect.suspend(() => (lineOpen ? output.err("\n") : Effect.void)),
       ),
     );
     yield* output.out(`${short}\n`);
