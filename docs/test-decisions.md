@@ -21,7 +21,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 
 9. The user watched the prototypes: too fast to follow. Decided 2026-09-27, two parts, both in the tool, with defaults the Caller can change:
    - Human pace during Pixel actions: the mouse glides (about 0.4 s), typing at about 80 ms per letter (at most about 3 s per field), and about 0.7 s wait after each action.
-   - Video edit: 1 s before each change and 2 s after the screen settles, a 2 s result hold at the end of each Step, a ring at each click (from the Action log), a caption bar that stays for the whole step, a 2 s "» N s later" label only where the app ended the Still part or a Wait mark names it (ADR 0018), and at least 3 s per step.
+   - Video edit: 1 s before and after each change, a Still part under 4 s kept as recorded and a longer one cut to 4 s, each step's last screen held at least 4 s, a ring at each click (from the Action log), a caption bar that stays for the whole step, and a "» N s later" label, the whole Still part's length, only where the app ended the Still part or a Wait mark names it (ADR 0018).
    - Captions sized from the video width.
 
 ## Secrets on macOS

@@ -139,11 +139,11 @@ A reason the Caller gives for a Still part during a Recording ("waiting for the 
 _Avoid_: wait step, pause
 
 **Still part**:
-A stretch of a Recording where nothing on screen changes. The Proof video cuts it. It keeps a short "» 1 min 50 s later" label only when the app ended it or a Wait mark names it.
+A stretch of a Recording where nothing on screen changes. One under 4 s plays as recorded; the Proof video cuts a longer one to 4 s. It keeps a short "» 1 min 50 s later" label, the length of the whole Still part, only when the app ended it or a Wait mark names it.
 _Avoid_: idle time, dead time, thinking time
 
 **Proof video**:
-The final MP4 made from a Recording: Still parts cut, actions at real speed, Step mark captions, under the Size limit.
+The final MP4 made from a Recording: Still parts of 4 s or more cut to 4 s, actions at real speed, each step's last screen held at least 4 s, Step mark captions, under the Size limit.
 _Avoid_: demo, recording, walkthrough video
 
 **Proof screenshot**:

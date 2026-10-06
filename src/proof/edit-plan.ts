@@ -179,21 +179,25 @@ export const planEdit = (input: PlanInput): EditPlan => {
       changing.push([position, end]);
     }
 
+    // Each change keeps 1 s before and after it. A Still part under 4 s
+    // plays as recorded, so the spans around it merge, and the first span
+    // starts at the step's start when the Still part before it is that short.
     const merged: [number, number][] = [];
     for (const [a, b] of changing) {
-      const from = Math.max(a - 1, start);
-      const to = Math.min(b + 2, end);
+      const pad = Math.max(a - 1, start);
+      const from = merged.length === 0 && pad - start < 3 ? start : pad;
+      const to = Math.min(b + 1, end);
       const last = merged[merged.length - 1];
-      if (last !== undefined && from - last[1] < 3) {
+      if (last !== undefined && from - last[1] < 2) {
         last[1] = Math.max(last[1], to);
       } else {
         merged.push([from, to]);
       }
     }
 
-    // This step's Still parts, in order: each gap that keeps a still
-    // clip (its screen changes again at a + 1), then the tail or the
-    // empty step, which end at the step's end.
+    // This step's Still parts of 4 s or more, in order: each gap between
+    // spans, which gets a still clip (its screen changes again at a + 1),
+    // then the tail or the empty step, which end at the step's end.
     const stillParts: {
       from: number;
       to: number;
@@ -203,7 +207,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
     {
       let position = start;
       for (const [a, b] of merged) {
-        if (a - position >= 3) {
+        if (a > position) {
           stillParts.push({ from: position, to: a, endsAt: a + 1 });
         }
         position = b;
@@ -240,8 +244,8 @@ export const planEdit = (input: PlanInput): EditPlan => {
         const reason = stillParts.at(-1)?.reason;
         endLabel =
           reason !== undefined
-            ? `${labelText(tail)} · ${reason}`
-            : stillLabel(end - tail, end);
+            ? `${labelText(tail + 1)} · ${reason}`
+            : stillLabel(end - tail - 1, end);
       } else {
         const last = merged[merged.length - 1];
         if (last !== undefined) {
@@ -250,28 +254,28 @@ export const planEdit = (input: PlanInput): EditPlan => {
       }
     }
 
+    // A Still part of 4 s or more shows 4 s: 1 s after the change before it
+    // (none at the step's start), a still clip, and 1 s before the next
+    // change. Its label tells how long the whole Still part was.
     let stillIndex = 0;
     let cursor = start;
     for (const [a, b] of merged) {
-      const gap = a - cursor;
-      let gapLabel: string | undefined;
-      if (gap >= 3) {
+      if (a > cursor) {
         const reason = stillParts[stillIndex]?.reason;
         stillIndex += 1;
-        gapLabel =
-          reason !== undefined
-            ? `${labelText(gap)} · ${reason}`
-            : stillLabel(cursor, a);
-      }
-      if (gapLabel !== undefined) {
+        const from = cursor === start ? start : cursor - 1;
+        const seconds = cursor === start ? 3 : 2;
         clips.push({
           kind: "still",
           at: cursor,
-          seconds: 2,
-          label: gapLabel,
+          seconds,
+          label:
+            reason !== undefined
+              ? `${labelText(a + 1 - from)} · ${reason}`
+              : stillLabel(from, a + 1),
           step,
         });
-        out += 2;
+        out += seconds;
         const last = cutSpans[cutSpans.length - 1];
         if (last !== undefined && last.step === step) {
           last.after = out;
@@ -288,18 +292,22 @@ export const planEdit = (input: PlanInput): EditPlan => {
         clips.push({
           kind: "still",
           at: start,
-          seconds: 3,
+          seconds: 4,
           label:
-            end - start >= 3
+            end - start >= 4
               ? reason !== undefined
                 ? `${labelText(end - start)} · ${reason}`
                 : stillLabel(start, end)
               : undefined,
           step,
         });
-        out += 3;
+        out += 4;
       } else {
-        const seconds = Math.max(2, 3 - (out - outStart));
+        // The step's last screen shows at least 4 s: a cut tail keeps 1 s
+        // and a 3 s hold; a shorter still tail gets the rest of 4 s, at
+        // least 1 s, since a hold of no frames makes ffmpeg loop forever.
+        const still = end - (changing.at(-1)?.[1] ?? end);
+        const seconds = still >= 4 ? 3 : Math.max(1, 4 - still);
         clips.push({
           kind: "still",
           at: cursor,
