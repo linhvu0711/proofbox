@@ -167,6 +167,25 @@ describe("Help text", () => {
     );
   });
 
+  it("create --help explains $PROOFBOX_ENV with a PATH example and shows --secrets", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["create", "--help"]);
+    // Then
+    expect({
+      proofboxEnv: result.stdout.includes("$PROOFBOX_ENV"),
+      pathExample: result.stdout.includes("PATH=/tmp/pb/bin:$PATH"),
+      secrets: result.stdout.includes("--secrets"),
+      envFile: result.stdout.includes("--env-file"),
+    }).toEqual({
+      proofboxEnv: true,
+      pathExample: true,
+      secrets: true,
+      envFile: false,
+    });
+  });
+
   it("create and upload --help say --max-size limits the Work folder", async () => {
     // Given
     const env = makeEnv();

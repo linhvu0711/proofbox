@@ -73,6 +73,17 @@ proofbox record stop "$id" --out ~/proof/my-app/proof.mp4   # also saves proof-1
 proofbox delete "$id"
 ```
 
+The Linux Sandbox user has no sudo, and `$HOME` is the Work folder, so a Setup script installs its tools in a folder of its own, such as `/tmp/pb/bin`. To put them in reach of every later `exec`, it writes `NAME=value` lines to the file at `$PROOFBOX_ENV`, the Setup env, the way a GitHub Actions step writes to `$GITHUB_ENV`:
+
+```sh
+mkdir -p /tmp/pb/bin
+curl -fsSL https://github.com/pnpm/pnpm/releases/download/v10.18.0/pnpm-linuxstatic-x64 -o /tmp/pb/bin/pnpm
+chmod +x /tmp/pb/bin/pnpm
+echo "PATH=/tmp/pb/bin:$PATH" >> "$PROOFBOX_ENV"
+```
+
+Then `proofbox exec "$id" -- pnpm -v` works with nothing loaded first, and a Sandbox started from the Snapshot gets the same values. The lines follow the Secrets file rules: one `NAME=value` per line, quotes allowed, `#` starts a comment. A bad line fails `create` and names the line. A name in both the Setup env and the Secrets file also fails `create` (ADR 0023).
+
 A Sandbox id has its Provider as a prefix and, for Namespace, its region, for example `ns:us:abc123`. stdout holds only the result (an id, paths, a list). Messages go to stderr. At a terminal, or with FORCE_COLOR=1, stderr shows ✔, ✘, and ! marks in color and one live line per step; NO_COLOR=1 keeps the marks without color. At a dead end, a dim line names the command to run next. A command with nothing else to say prints one ✔ line when it is done. Without a terminal it prints plain proofbox: lines.
 
 ## Commands
@@ -83,7 +94,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `auth status [--json]` | Show each Provider's login. It includes the account, region, expiry, and where it comes from. `--json` prints one line: an array with one item per Provider, `{"provider":…,"login":…}`, where `login` is `not-needed`, `none`, `ok`, `expired`, or `rejected`, plus `from`, `account`, `region`, `expires`, `env`, and `tokenEnd` when known. |
 | `auth logout <provider>` | Delete this machine's Sandboxes on a Provider, then remove its login. Prints their ids. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
 | `auth token <provider>` | Make a token for CI from the browser login and print it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
-| `create --os linux\|macos` | Create a Sandbox and print its Sandbox id. Flags: `--provider docker\|namespace`, `--work <folder>`, `--setup <file>`, `--secrets <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
+| `create --os linux\|macos` | Create a Sandbox and print its Sandbox id. Flags: `--provider docker\|namespace`, `--work <folder>`, `--setup <file>` (its `$PROOFBOX_ENV` lines reach every `exec`), `--secrets <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Send the Work folder to a Sandbox again; only changed and new files go. Deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Run a command in a Sandbox and pass its exit code through. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
 | `screenshot <id> --out <file>` | Save a PNG of the Sandbox screen. It is at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |

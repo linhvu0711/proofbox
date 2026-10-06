@@ -78,7 +78,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       ),
       setup: Options.text("setup").pipe(
         Options.withDescription(
-          "the Setup script to run after the upload, for example setup-linux.sh; needs --work",
+          "the Setup script to run after the upload, for example setup-linux.sh; needs --work. NAME=value lines it writes to the file at $PROOFBOX_ENV, such as PATH=/tmp/pb/bin:$PATH, reach every later exec",
         ),
         Options.optional,
       ),
