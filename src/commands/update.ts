@@ -1,11 +1,12 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Config, Effect, type Option, Stream } from "effect";
+import { Config, Effect, Option, Stream } from "effect";
 import { CliOutput } from "../cli-output.ts";
 import { commandEvents } from "../command-events.ts";
 import { UpdateError } from "../errors.ts";
 import { Progress } from "../progress.ts";
 
 const REPO = "linhvu0711/proofbox";
+const HASH = /^[0-9a-fA-F]{7,40}$/;
 
 // The GitHub REST API base, overridable for tests.
 const githubApi = Config.string("PROOFBOX_GITHUB_API_URL").pipe(
@@ -43,11 +44,18 @@ const installArgs = (full: string) => [
 ];
 
 export const updateProofbox = Effect.fn("update.updateProofbox")(
-  function* (_options: { readonly commit: Option.Option<string> }) {
+  function* (options: { readonly commit: Option.Option<string> }) {
     const output = yield* CliOutput;
     const progress = yield* Progress;
     const executor = yield* CommandExecutor.CommandExecutor;
-    const full = yield* lookUpCommit("main");
+    const ref = Option.getOrElse(options.commit, () => "main");
+    if (Option.isSome(options.commit) && !HASH.test(ref)) {
+      return yield* new UpdateError({
+        reason:
+          "--commit takes a commit hash of 7 to 40 hex characters, for example d527832.",
+      });
+    }
+    const full = yield* lookUpCommit(ref);
     const short = full.slice(0, 7);
     yield* progress.note(`installing proofbox ${short} from GitHub`);
     // No stdin, so pnpm never asks which packages to build. Its output is

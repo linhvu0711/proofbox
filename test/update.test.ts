@@ -19,6 +19,7 @@ import {
 } from "./support/fake-github.ts";
 
 const MAIN = "d5278325679e9452d7a5c95744c9011947fc46c0";
+const OLD = "1eafb64200cf09baf0ef068b2465cb950029bdb5";
 
 const dirs: string[] = [];
 const servers: FakeGithub[] = [];
@@ -120,6 +121,54 @@ describe("update", () => {
       stdout: "d527832\n",
       pnpmOut: true,
       pnpmErr: true,
+    });
+  });
+  it("update --commit installs the commit it names", async () => {
+    // Given: GitHub knows 1eafb64, and pnpm succeeds
+    const github = await fakeGithub(commits({ "1eafb64": OLD }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update", "--commit", "1eafb64"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      pnpm: readLog(pnpm.log),
+    }).toEqual({
+      exitCode: 0,
+      stdout: "1eafb64\n",
+      pnpm: `add -g --allow-build=proofbox@https://codeload.github.com/linhvu0711/proofbox/tar.gz/${OLD} github:linhvu0711/proofbox#${OLD}\n`,
+    });
+  });
+
+  it("update refuses a --commit that is not a hash", async () => {
+    // Given: GitHub's main is d527832, and pnpm succeeds
+    const github = await fakeGithub(commits({ main: MAIN }));
+    const pnpm = fakePnpm();
+    // When
+    const result = await runCli(makeEnv(), ["update", "--commit", "main"], {
+      set: {
+        PATH: `${pnpm.binDir}:${process.env.PATH}`,
+        PROOFBOX_GITHUB_API_URL: github.url,
+      },
+    });
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      calls: github.calls.length,
+      pnpm: readLog(pnpm.log),
+    }).toEqual({
+      exitCode: 125,
+      stderr:
+        "--commit takes a commit hash of 7 to 40 hex characters, for example d527832.\n",
+      calls: 0,
+      pnpm: undefined,
     });
   });
 });
