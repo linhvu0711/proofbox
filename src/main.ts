@@ -10,6 +10,7 @@ import { Progress } from "./progress.ts";
 import { Providers } from "./provider.ts";
 import { ProvidersLive } from "./provider-registry.ts";
 import { Style } from "./style.ts";
+import { versionText } from "./version.ts";
 
 // @effect/cli matches its built-in `--help` anywhere in argv, even after
 // `--`, so `exec` with a passthrough argv is dispatched by hand.
@@ -23,7 +24,8 @@ const dispatch = Effect.fn("main.dispatch")(function* (
     }
   }
   const providers = yield* Providers;
-  // @effect/cli has no hook for the top help page, so proofbox prints its own.
+  // @effect/cli has no hook for the top help page or the --version line, so
+  // proofbox prints its own.
   const args = argv.slice(2);
   if (
     args.length === 0 ||
@@ -31,6 +33,10 @@ const dispatch = Effect.fn("main.dispatch")(function* (
   ) {
     const output = yield* CliOutput;
     return yield* output.out(commandList(makeCommand([...providers.keys()])));
+  }
+  if (args.length === 1 && args[0] === "--version") {
+    const output = yield* CliOutput;
+    return yield* output.out(`proofbox ${versionText()}\n`);
   }
   return yield* makeCli([...providers.keys()])(argv);
 });

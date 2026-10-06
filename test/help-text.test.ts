@@ -298,13 +298,13 @@ describe("Help text", () => {
     }
   });
 
-  it("--version still prints the version", async () => {
+  it("--version prints proofbox and the version", async () => {
     // Given
     const env = makeEnv();
     // When
     const result = await runCli(env, ["--version"]);
     // Then
-    expect(result.stdout).toBe("0.0.0\n\n");
+    expect(result.stdout).toBe("proofbox 0.0.0\n");
     expect(result.exitCode).toBe(0);
   });
 

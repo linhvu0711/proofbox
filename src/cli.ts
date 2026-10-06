@@ -29,6 +29,7 @@ import { typeText } from "./commands/type.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
 import { KNOWN_REGIONS } from "./namespace/regions.ts";
 import { parseMaxSize } from "./upload/max-size.ts";
+import { versionText } from "./version.ts";
 
 const sandboxId = Args.text({ name: "id" }).pipe(
   Args.withDescription("a Sandbox id, for example ns:us:abc123"),
@@ -709,5 +710,5 @@ export const commandList = <Name extends string, R, E, A>(
 export const makeCli = (providers: ReadonlyArray<string>) =>
   Command.run(makeCommand(providers), {
     name: "proofbox",
-    version: "0.0.0",
+    version: versionText(),
   });
