@@ -26,7 +26,7 @@ Settled 2026-09-27 in the tool grill, after the Namespace live test (`docs/resea
 
 ## Secrets on macOS
 
-10. Decided 2026-09-27: no container on the Mac, so the env file goes into a RAM disk (`hdiutil attach -nomount ram://…`), mode 600, owned by `runner`. It is sent at the same point as on Linux: after the Setup script has finished, so setup never sees it. It is gone when the Mac is deleted. macOS has no Snapshots, so nothing can carry it forward.
+10. Decided 2026-09-27: no container on the Mac, so the Secrets file goes into a RAM disk (`hdiutil attach -nomount ram://…`), mode 600, owned by `runner`. It is sent at the same point as on Linux: after the Setup script has finished, so setup never sees it. It is gone when the Mac is deleted. macOS has no Snapshots, so nothing can carry it forward.
 
 ## Sandbox size
 

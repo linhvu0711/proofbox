@@ -24,7 +24,7 @@ import { Progress } from "../progress.ts";
 import { lacksFeature, liveViewOn, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
-import { readEnvFile, sendSecrets } from "../secrets.ts";
+import { readSecretsFile, sendSecrets } from "../secrets.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { Style } from "../style.ts";
@@ -39,7 +39,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly maxLife?: string | undefined;
     readonly work?: string | undefined;
     readonly setup?: string | undefined;
-    readonly envFile?: string | undefined;
+    readonly secretsFile?: string | undefined;
     readonly maxSize?: string | undefined;
     readonly size?: string | undefined;
   }) {
@@ -62,7 +62,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         outcome: "nothing was created",
       });
     }
-    if (options.envFile !== undefined && !offer.features.has("secrets")) {
+    if (options.secretsFile !== undefined && !offer.features.has("secrets")) {
       return yield* lacksFeature(
         provider,
         options.os,
@@ -103,9 +103,9 @@ export const createSandbox = Effect.fn("create.createSandbox")(
           );
     const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
-      options.envFile === undefined
+      options.secretsFile === undefined
         ? undefined
-        : yield* readEnvFile(options.envFile);
+        : yield* readSecretsFile(options.secretsFile);
     const files =
       options.work === undefined
         ? undefined

@@ -2,10 +2,10 @@ import { FileSystem, type Error as PlatformError } from "@effect/platform";
 import { Effect, Redacted, Schema } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import {
-  EnvFileLineError,
-  EnvFileUnreadableError,
   ProviderError,
   platformReason,
+  SecretsFileLineError,
+  SecretsFileUnreadableError,
   SecretsSendFailedError,
 } from "./errors.ts";
 import { Progress } from "./progress.ts";
@@ -22,7 +22,7 @@ export const Secret = Schema.Struct({
 });
 export type Secret = typeof Secret.Type;
 
-export const parseEnvFile = Effect.fn("secrets.parseEnvFile")(function* (
+export const parseEnvLines = Effect.fn("secrets.parseEnvLines")(function* (
   path: string,
   text: string,
 ) {
@@ -40,7 +40,7 @@ export const parseEnvFile = Effect.fn("secrets.parseEnvFile")(function* (
     const at = line.indexOf("=");
     const name = line.slice(0, at).trim();
     if (at === -1 || !NAME.test(name)) {
-      return yield* new EnvFileLineError({ path, line: lineNumber });
+      return yield* new SecretsFileLineError({ path, line: lineNumber });
     }
     const rawValue = line.slice(at + 1);
     const trimmed = rawValue.trimStart();
@@ -50,12 +50,12 @@ export const parseEnvFile = Effect.fn("secrets.parseEnvFile")(function* (
     let value: string;
     if (quoted && close === -1) {
       // A value that opens a quote must close it on the same line.
-      return yield* new EnvFileLineError({ path, line: lineNumber });
+      return yield* new SecretsFileLineError({ path, line: lineNumber });
     } else if (close !== -1) {
       // A quoted value keeps its `#`; after the closing quote only a
       // comment may follow (Docker Compose's rule).
       if (!/^\s*(?:#.*)?$/.test(trimmed.slice(close + 1))) {
-        return yield* new EnvFileLineError({ path, line: lineNumber });
+        return yield* new SecretsFileLineError({ path, line: lineNumber });
       }
       value = trimmed.slice(1, close);
     } else {
@@ -74,12 +74,12 @@ export const parseEnvFile = Effect.fn("secrets.parseEnvFile")(function* (
   return secrets;
 });
 
-const envFileError = (path: string) => (error: PlatformError.PlatformError) => {
+const secretsFileError = (path: string) => (error: PlatformError.PlatformError) => {
   switch (error._tag === "SystemError" ? error.reason : undefined) {
     case "NotFound":
-      return new EnvFileUnreadableError({ path, reason: "not found" });
+      return new SecretsFileUnreadableError({ path, reason: "not found" });
     case "PermissionDenied":
-      return new EnvFileUnreadableError({ path, reason: "is not readable" });
+      return new SecretsFileUnreadableError({ path, reason: "is not readable" });
     default:
       return new ProviderError({
         provider: "local",
@@ -88,16 +88,16 @@ const envFileError = (path: string) => (error: PlatformError.PlatformError) => {
   }
 };
 
-export const readEnvFile = Effect.fn("secrets.readEnvFile")(function* (
+export const readSecretsFile = Effect.fn("secrets.readSecretsFile")(function* (
   path: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const onError = envFileError(path);
+  const onError = secretsFileError(path);
   const info = yield* fs
     .stat(path)
     .pipe(Effect.mapError((error) => onError(error)));
   if (info.type === "Directory") {
-    return yield* new EnvFileUnreadableError({ path, reason: "is a folder" });
+    return yield* new SecretsFileUnreadableError({ path, reason: "is a folder" });
   }
   const text = yield* fs
     .readFileString(path)
@@ -105,10 +105,10 @@ export const readEnvFile = Effect.fn("secrets.readEnvFile")(function* (
   if ((info.mode & 0o077) !== 0) {
     const progress = yield* Progress;
     yield* progress.warn(
-      `env file ${path} is mode ${(info.mode & 0o777).toString(8)}, so other users can read it; run chmod 600 ${path}`,
+      `Secrets file ${path} is mode ${(info.mode & 0o777).toString(8)}, so other users can read it; run chmod 600 ${path}`,
     );
   }
-  return yield* parseEnvFile(path, text);
+  return yield* parseEnvLines(path, text);
 });
 
 export const sendSecrets = Effect.fn("secrets.sendSecrets")(function* (

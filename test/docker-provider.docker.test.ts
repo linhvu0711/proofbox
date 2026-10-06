@@ -547,14 +547,14 @@ describe("Docker Provider", () => {
   it("the Secrets live only in a tmpfs, and docker commit holds none", {
     timeout: 300_000,
   }, async () => {
-    // Given: a docker Sandbox created with an env file
+    // Given: a docker Sandbox created with a Secrets file
     const env = makeEnv({ docker: true });
     const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
     trackTempDir(dir);
     const path = join(dir, "app.env");
     writeFileSync(path, "API_TOKEN=tok-5f2a9c\n");
     chmodSync(path, 0o600);
-    const created = await create(env, ["--env-file", path]);
+    const created = await create(env, ["--secrets", path]);
     const id = created.stdout.trim();
     const name = id.slice("docker:".length);
     const tag = `proofbox-test-commit:${name}`;

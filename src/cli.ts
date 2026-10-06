@@ -82,9 +82,9 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         ),
         Options.optional,
       ),
-      envFile: Options.text("env-file").pipe(
+      secretsFile: Options.text("secrets").pipe(
         Options.withDescription(
-          "a file of NAME=VALUE lines to send as Secrets, for example app.env; default none",
+          "the Secrets file: NAME=VALUE lines to send as Secrets after the Setup script, for example app.env; default none",
         ),
         Options.optional,
       ),
@@ -96,7 +96,17 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         Options.optional,
       ),
     },
-    ({ os, provider, idle, maxLife, work, setup, envFile, maxSize, size }) =>
+    ({
+      os,
+      provider,
+      idle,
+      maxLife,
+      work,
+      setup,
+      secretsFile,
+      maxSize,
+      size,
+    }) =>
       createSandbox({
         os,
         provider: Option.getOrUndefined(provider),
@@ -104,7 +114,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         maxLife: Option.getOrUndefined(maxLife),
         work: Option.getOrUndefined(work),
         setup: Option.getOrUndefined(setup),
-        envFile: Option.getOrUndefined(envFile),
+        secretsFile: Option.getOrUndefined(secretsFile),
         maxSize: Option.getOrUndefined(maxSize),
         size: Option.getOrUndefined(size),
       }),

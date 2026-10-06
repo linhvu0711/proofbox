@@ -136,7 +136,7 @@ describe("Namespace Provider", () => {
       folder,
       "--setup",
       script,
-      "--env-file",
+      "--secrets",
       envPath,
     ]);
     const fp = /Snapshot saved, Fingerprint ([0-9a-f]{12})/.exec(

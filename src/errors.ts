@@ -299,23 +299,25 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   }
 }
 
-export class EnvFileUnreadableError extends Data.TaggedError(
-  "EnvFileUnreadableError",
+export class SecretsFileUnreadableError extends Data.TaggedError(
+  "SecretsFileUnreadableError",
 )<{
   readonly path: string;
   readonly reason: "not found" | "is not readable" | "is a folder";
 }> {
   get message() {
-    return `Env file ${this.path} ${this.reason}. Nothing was created.`;
+    return `Secrets file ${this.path} ${this.reason}. Nothing was created.`;
   }
 }
 
-export class EnvFileLineError extends Data.TaggedError("EnvFileLineError")<{
+export class SecretsFileLineError extends Data.TaggedError(
+  "SecretsFileLineError",
+)<{
   readonly path: string;
   readonly line: number;
 }> {
   get message() {
-    return `Env file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
+    return `Secrets file ${this.path} line ${this.line} is not NAME=VALUE; fix that line. Nothing was created.`;
   }
 }
 

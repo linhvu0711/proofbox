@@ -37,7 +37,7 @@ const setupScript = (content: string) => {
   return path;
 };
 
-const envFile = (content: string, mode = 0o600) => {
+const secretsFile = (content: string, mode = 0o600) => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
   trackTempDir(dir);
   const path = join(dir, "app.env");
@@ -408,10 +408,10 @@ describe("create", () => {
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("a command run after create --env-file sees each Secret", async () => {
-    // Given: an env file with two Secrets
+  it("a command run after create --secrets sees each Secret", async () => {
+    // Given: a Secrets file with two Secrets
     const env = makeEnv();
-    const path = envFile(
+    const path = secretsFile(
       "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
     );
     // When
@@ -421,7 +421,7 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     const id = create.stdout.trim();
@@ -442,11 +442,11 @@ describe("create", () => {
   });
 
   it("the Setup script runs without the Secrets", async () => {
-    // Given: a Work folder, a Setup script that records its env, and an env file
+    // Given: a Work folder, a Setup script that records its env, and a Secrets file
     const env = makeEnv();
     const folder = workFixture();
     const script = setupScript("#!/bin/sh\nenv > setup-env.txt\n");
-    const path = envFile(
+    const path = secretsFile(
       "API_TOKEN=tok-5f2a9c\nDB_URL=postgres://app:pw@db:5432/app\n",
     );
     // When
@@ -460,7 +460,7 @@ describe("create", () => {
       folder,
       "--setup",
       script,
-      "--env-file",
+      "--secrets",
       path,
     ]);
     const id = create.stdout.trim();
@@ -480,9 +480,9 @@ describe("create", () => {
   });
 
   it("no Secret value reaches proofbox output or its files", async () => {
-    // Given: an env file with one Secret
+    // Given: a Secrets file with one Secret
     const env = makeEnv();
-    const path = envFile("API_TOKEN=tok-5f2a9c\n");
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\n");
     // When
     const create = await runCli(env, [
       "create",
@@ -490,7 +490,7 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     const id = create.stdout.trim();
@@ -519,10 +519,10 @@ describe("create", () => {
     expect(leaked).toEqual([join(env.root, name, "secrets", "env")]);
   });
 
-  it("create --env-file reads dotenv lines", async () => {
-    // Given: an env file using dotenv syntax
+  it("create --secrets reads dotenv lines", async () => {
+    // Given: a Secrets file using dotenv syntax
     const env = makeEnv();
-    const path = envFile(
+    const path = secretsFile(
       '# app secrets\nexport API_TOKEN=tok-5f2a9c\n\nDB_URL = "postgres://app:pw@db:5432/app"\nGREETING=\'hi there\'\r\nHASH=abc#def\nQUOTE=it\'s\nAPI_TOKEN=tok-later\nNOTE=abc   # staging\nQUOTED="abc # x"\nQ2="abc" # note\n',
     );
     // When
@@ -532,7 +532,7 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     const id = create.stdout.trim();
@@ -552,10 +552,10 @@ describe("create", () => {
     );
   });
 
-  it("an env line with no = fails create with its line number", async () => {
-    // Given: an env file whose second line is not NAME=VALUE
+  it("a Secrets line with no = fails create with its line number", async () => {
+    // Given: a Secrets file whose second line is not NAME=VALUE
     const env = makeEnv();
-    const path = envFile("API_TOKEN=tok-5f2a9c\nnot a line\n");
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\nnot a line\n");
     // When
     const result = await runCli(env, [
       "create",
@@ -563,21 +563,23 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${path} line 2 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+      `Secrets file ${path} line 2 is not NAME=VALUE; fix that line. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("an env line with a bad name fails create without its value", async () => {
-    // Given: an env file whose third line has a name that is not a valid name
+  it("a Secrets line with a bad name fails create without its value", async () => {
+    // Given: a Secrets file whose third line has a name that is not a valid name
     const env = makeEnv();
-    const path = envFile("# first\nAPI_TOKEN=tok-5f2a9c\n1BAD=tok-9d3e71\n");
+    const path = secretsFile(
+      "# first\nAPI_TOKEN=tok-5f2a9c\n1BAD=tok-9d3e71\n",
+    );
     // When
     const result = await runCli(env, [
       "create",
@@ -585,21 +587,21 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+      `Secrets file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("an env line with an unclosed quote fails create with its line number", async () => {
-    // Given: an env file whose third line opens a quote it never closes
+  it("a Secrets line with an unclosed quote fails create with its line number", async () => {
+    // Given: a Secrets file whose third line opens a quote it never closes
     const env = makeEnv();
-    const path = envFile('# first\nAPI_TOKEN=tok-5f2a9c\nTOKEN="abc\n');
+    const path = secretsFile('# first\nAPI_TOKEN=tok-5f2a9c\nTOKEN="abc\n');
     // When
     const result = await runCli(env, [
       "create",
@@ -607,19 +609,19 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
+      `Secrets file ${path} line 3 is not NAME=VALUE; fix that line. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("create with a missing env file makes nothing", async () => {
-    // Given: an env file path that does not exist
+  it("create with a missing Secrets file makes nothing", async () => {
+    // Given: a Secrets file path that does not exist
     const env = makeEnv();
     const missing = join(
       (() => {
@@ -636,21 +638,21 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       missing,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${missing} not found. Nothing was created.\n`,
+      `Secrets file ${missing} not found. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("create with an unreadable env file makes nothing", async () => {
-    // Given: an env file mode 000
+  it("create with an unreadable Secrets file makes nothing", async () => {
+    // Given: a Secrets file mode 000
     const env = makeEnv();
-    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o000);
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\n", 0o000);
     // When
     const result = await runCli(env, [
       "create",
@@ -658,19 +660,19 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       path,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${path} is not readable. Nothing was created.\n`,
+      `Secrets file ${path} is not readable. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("create with a folder as env file makes nothing", async () => {
-    // Given: a folder passed as the env file
+  it("create with a folder as Secrets file makes nothing", async () => {
+    // Given: a folder passed as the Secrets file
     const env = makeEnv();
     const folder = mkdtempSync(join(tmpdir(), "proofbox-env-"));
     trackTempDir(folder);
@@ -681,21 +683,59 @@ describe("create", () => {
       "linux",
       "--provider",
       "fake",
-      "--env-file",
+      "--secrets",
       folder,
     ]);
     // Then
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
-      `Env file ${folder} is a folder. Nothing was created.\n`,
+      `Secrets file ${folder} is a folder. Nothing was created.\n`,
     );
     expect(existsSync(env.root) ? readdirSync(env.root) : []).toEqual([]);
   });
 
-  it("an env file other users can read gets a warning", async () => {
-    // Given: an env file mode 644
+  it("a Secrets file other users can read gets a warning", async () => {
+    // Given: a Secrets file mode 644
     const env = makeEnv();
-    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    // When
+    const result = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--secrets",
+      path,
+    ]);
+    // Then
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      `proofbox: Secrets file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n` +
+        "proofbox: creating fake Sandbox\n" +
+        "proofbox: starting Keeper\n" +
+        "proofbox: sending 1 Secret\n",
+    );
+  });
+
+  it("with FORCE_COLOR=1 a Secrets file other users can read gets a ! warning", async () => {
+    const env = makeEnv();
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\n", 0o644);
+    const result = await runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake", "--secrets", path],
+      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
+    );
+    expect(steady(result.stderr)).toBe(
+      `! Secrets file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n${hintLines(result.stdout.trim())}`,
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("create --env-file fails as an unknown argument", async () => {
+    // Given: a Secrets file, passed with the old flag
+    const env = makeEnv();
+    const path = secretsFile("API_TOKEN=tok-5f2a9c\n");
     // When
     const result = await runCli(env, [
       "create",
@@ -707,26 +747,12 @@ describe("create", () => {
       path,
     ]);
     // Then
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe(
-      `proofbox: env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n` +
-        "proofbox: creating fake Sandbox\n" +
-        "proofbox: starting Keeper\n" +
-        "proofbox: sending 1 Secret\n",
-    );
-  });
-
-  it("with FORCE_COLOR=1 an env file other users can read gets a ! warning", async () => {
-    const env = makeEnv();
-    const path = envFile("API_TOKEN=tok-5f2a9c\n", 0o644);
-    const result = await runCli(
-      env,
-      ["create", "--os", "linux", "--provider", "fake", "--env-file", path],
-      { set: { FORCE_COLOR: "1", NO_COLOR: "1", NODE_NO_WARNINGS: "1" } },
-    );
-    expect(steady(result.stderr)).toBe(
-      `! env file ${path} is mode 644, so other users can read it; run chmod 600 ${path}\n✔ creating fake Sandbox  <t>\n✔ starting Keeper  <t>\n✔ sending 1 Secret  <t>\n${hintLines(result.stdout.trim())}`,
-    );
-    expect(result.exitCode).toBe(0);
+    expect({
+      exitCode: result.exitCode,
+      unknown: result.stderr.includes(
+        "Received unknown argument: '--env-file'",
+      ),
+      made: existsSync(env.root) ? readdirSync(env.root) : [],
+    }).toEqual({ exitCode: 125, unknown: true, made: [] });
   });
 });

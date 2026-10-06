@@ -10,7 +10,7 @@ Words are in `CONTEXT.md`. Decisions are in `docs/adr/`.
 
 - Creates a Linux or macOS Sandbox, and the Provider deletes it at its Deadline, even when the Caller crashes (ADR 0003).
 - Uploads your Work folder (tracked and new files, minus git-ignored ones). The Sandbox never clones your repo and never gets a GitHub token (ADR 0005).
-- Runs a Setup script, then sends Secrets from your env file after setup, so setup and Snapshots never hold them.
+- Runs a Setup script, then sends Secrets from your Secrets file after setup, so setup and Snapshots never hold them.
 - Drives the screen at human pace: screenshot, click, type, key, scroll, drag.
 - Records the desktop and builds a Proof video in the Sandbox: Still parts cut, click rings, step captions, under the Size limit (10 MB by default). It also saves a Proof screenshot at each Step mark (ADR 0006).
 - Leaves nothing in your repo. Its own config lives in `~/.config/proofbox/` (ADR 0007).
@@ -55,11 +55,11 @@ Then, for the `namespace` Provider, log in first: `proofbox auth login namespace
 
 ## Example
 
-Run this from your app's folder. The Setup script installs the app's dependencies, and the env file holds its Secrets. Keep both outside the repo (ADR 0007).
+Run this from your app's folder. The Setup script installs the app's dependencies, and the Secrets file holds its Secrets. Keep both outside the repo (ADR 0007).
 
 ```sh
 cd ~/code/my-app
-id=$(proofbox create --os linux --work . --setup ~/proof/my-app/setup-linux.sh --env-file ~/proof/my-app/app.env)
+id=$(proofbox create --os linux --work . --setup ~/proof/my-app/setup-linux.sh --secrets ~/proof/my-app/app.env)
 
 proofbox exec "$id" -- npm run build
 proofbox exec "$id" -- sh -c 'nohup npm start >/tmp/app.log 2>&1 &'
@@ -83,7 +83,7 @@ A Sandbox id has its Provider as a prefix and, for Namespace, its region, for ex
 | `auth status [--json]` | Show each Provider's login. It includes the account, region, expiry, and where it comes from. `--json` prints one line: an array with one item per Provider, `{"provider":…,"login":…}`, where `login` is `not-needed`, `none`, `ok`, `expired`, or `rejected`, plus `from`, `account`, `region`, `expires`, `env`, and `tokenEnd` when known. |
 | `auth logout <provider>` | Delete this machine's Sandboxes on a Provider, then remove its login. Prints their ids. Waits first for a create still running here. Sandboxes and Unfinished Sandboxes started elsewhere keep running, and logout names them. Exits 125 when a region could not be checked or a delete failed. |
 | `auth token <provider>` | Make a token for CI from the browser login and print it once. Flags: `--name <name>`, `--expires 30d` (at most `1y`). |
-| `create --os linux\|macos` | Create a Sandbox and print its Sandbox id. Flags: `--provider docker\|namespace`, `--work <folder>`, `--setup <file>`, `--env-file <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
+| `create --os linux\|macos` | Create a Sandbox and print its Sandbox id. Flags: `--provider docker\|namespace`, `--work <folder>`, `--setup <file>`, `--secrets <file>`, `--size 4x8`, `--idle 15m`, `--max-life 3h`, `--max-size 500MB` (the most the Work folder upload may send). |
 | `upload <id> <folder>` | Send the Work folder to a Sandbox again; only changed and new files go. Deleted files are removed. `--max-size` as on `create`. |
 | `exec <id> -- <command>...` | Run a command in a Sandbox and pass its exit code through. A command that is not there exits `127`. `exec` has no time limit: a command can run, and stay quiet, as long as it needs. Ctrl-C stops a stuck one. |
 | `screenshot <id> --out <file>` | Save a PNG of the Sandbox screen. It is at the size the Caller clicks in: 1440 x 900 on Linux, 1280 x 800 on a Mac. A spot at x, y in the PNG is `click <id> x y`; `scroll` and `drag` take the same positions. |

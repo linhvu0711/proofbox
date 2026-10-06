@@ -563,7 +563,7 @@ export const makeFakeProvider = (options: {
     list,
     delete: del,
     extend,
-    // The fake runs on the Caller's machine, where the env file already
+    // The fake runs on the Caller's machine, where the Secrets file already
     // is; its Secrets folder (mode 0700) is on disk, not a tmpfs, until delete.
     sandboxFolders: (name) => ({
       state: join(root, name, "state"),

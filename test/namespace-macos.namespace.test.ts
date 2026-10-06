@@ -1295,7 +1295,7 @@ describe("Namespace macOS Secrets", () => {
       folder,
       "--setup",
       script,
-      "--env-file",
+      "--secrets",
       file,
     ]);
     id = created.id;
@@ -1310,7 +1310,7 @@ describe("Namespace macOS Secrets", () => {
     cleanupEnvs();
   });
 
-  it("a command after create --env-file on a Mac sees the Secret", async () => {
+  it("a command after create --secrets on a Mac sees the Secret", async () => {
     // Given: the describe's Mac
     // When
     const seen = await runCli(env, [
