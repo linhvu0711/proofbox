@@ -375,6 +375,45 @@ describe("Recording and the Proof video", () => {
     }).pipe(Effect.provide(layers(mac, { warnings })));
   });
 
+  effectIt.effect(
+    "mark cuts before an emoji that would cross 60 characters",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above, and a thumbs-up with a skin tone, two
+        // code points, at characters 60 and 61
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* setMark({ id, label: `${"a".repeat(59)}👍🏽`, wait: false });
+        // Then
+        expect({
+          marks: calls.filter((argv) => argv[1] === "mark"),
+          warnings,
+        }).toEqual({
+          marks: [
+            [
+              "/opt/proofbox/record",
+              "mark",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
+          ],
+          warnings: [
+            'Step mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
   it("mark refuses an empty label", async () => {
     // Given
     const env = makeEnv();

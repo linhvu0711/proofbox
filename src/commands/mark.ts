@@ -7,6 +7,22 @@ import { RECORD_HELPER } from "./record.ts";
 // The most characters a mark keeps; a longer label is cut to this many.
 const MARK_MAX = 60;
 
+// Characters are code points. The cut never splits an emoji: one that would
+// cross the limit, such as a thumbs-up with a skin tone, is left out whole.
+const cutLabel = (label: string): string => {
+  if (Array.from(label).length <= MARK_MAX) return label;
+  let kept = "";
+  let count = 0;
+  for (const { segment } of new Intl.Segmenter(undefined, {
+    granularity: "grapheme",
+  }).segment(label)) {
+    count += Array.from(segment).length;
+    if (count > MARK_MAX) break;
+    kept += segment;
+  }
+  return kept;
+};
+
 export const setMark = Effect.fn("mark.setMark")(function* (options: {
   readonly id: string;
   readonly label: string;
@@ -19,12 +35,7 @@ export const setMark = Effect.fn("mark.setMark")(function* (options: {
   ) {
     return yield* new BadMarkError({ label: options.label });
   }
-  // Characters are code points, so the cut never splits an emoji.
-  const points = Array.from(options.label);
-  const label =
-    points.length > MARK_MAX
-      ? points.slice(0, MARK_MAX).join("")
-      : options.label;
+  const label = cutLabel(options.label);
   const marked = yield* runHelper(
     options.id,
     RECORD_HELPER,
