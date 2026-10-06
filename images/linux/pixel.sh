@@ -51,7 +51,7 @@ now() {
 }
 
 # log KIND [TO_X TO_Y]: append one line to the Action log. Call it right
-# before the press, the first letter or key, or the capture.
+# before the press, the key, or the capture.
 log() {
   t=$(now)
   eval "$(xdotool getmouselocation --shell)"
@@ -60,6 +60,15 @@ log() {
   else
     printf '{"t":%s,"kind":"%s","x":%s,"y":%s}\n' "$t" "$1" "$X" "$Y" >> "$LOG"
   fi
+}
+
+# log_type FROM: append the type line once the last letter is in. FROM is
+# the time right before the first letter; until is now, so the edit knows
+# how long the typing ran.
+log_type() {
+  until=$(now)
+  eval "$(xdotool getmouselocation --shell)"
+  printf '{"t":%s,"kind":"type","x":%s,"y":%s,"until":%s}\n' "$1" "$X" "$Y" "$until" >> "$LOG"
 }
 
 # shot: write a full-size PNG of the desktop to stdout.
@@ -87,11 +96,12 @@ case "$cmd" in
     ;;
   type)
     # type LETTER_MS SETTLE_MS SHOT TEXT
-    log type
+    from=$(now)
     # -- keeps text that starts with a dash from reading as an xdotool flag.
     # The Base image's xdotool (3.20160805.1) waits half of --delay between
     # letters, so ask for twice the letter time.
     xdotool type --delay "$(( $1 * 2 ))" -- "$4"
+    log_type "$from"
     settle "$2"
     if [ "$3" = "1" ]; then
       shot
