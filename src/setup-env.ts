@@ -54,3 +54,24 @@ export const keepSetupEnv = Effect.fn("setupEnv.keepSetupEnv")(function* (
     });
   }
 });
+
+// The names in the Setup env the Sandbox holds, from a Setup script that
+// just ran or from a reused Snapshot; none when it has no Setup env.
+export const setupEnvNames = Effect.fn("setupEnv.setupEnvNames")(function* (
+  rawId: string,
+  files: Pick<SandboxFiles, "setupEnv">,
+) {
+  const read = yield* readSandboxFile(rawId, files.setupEnv);
+  if (read.code !== 0) {
+    return yield* new UploadFailedError({
+      id: rawId,
+      command: "sh",
+      code: read.code,
+    });
+  }
+  return read.text
+    .split("\n")
+    .flatMap(
+      (line) => /^export ([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1] ?? [],
+    );
+});

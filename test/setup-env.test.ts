@@ -34,6 +34,14 @@ const setupScript = (content: string) => {
   return path;
 };
 
+const secretsFile = (content: string) => {
+  const dir = mkdtempSync(join(tmpdir(), "proofbox-env-"));
+  trackTempDir(dir);
+  const path = join(dir, "app.env");
+  writeFileSync(path, content, { mode: 0o600 });
+  return path;
+};
+
 const snapshotsDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-snapshots-"));
   trackTempDir(dir);
@@ -272,5 +280,84 @@ describe("Setup env", () => {
       setupRan: second.stderr.includes("running Setup script"),
       reused: second.stderr.includes("Snapshot reused"),
     }).toEqual({ saved: [], setupRan: true, reused: false });
+  });
+
+  it("a name in both the Setup env and the Secrets file fails create without either value", async () => {
+    // Given: API_KEY in the Setup env and in the Secrets file
+    const env = makeEnv();
+    const script = setupScript(
+      '#!/bin/sh\necho API_KEY=from-setup-41c >> "$PROOFBOX_ENV"\n',
+    );
+    const path = secretsFile("API_KEY=tok-5f2a9c\n");
+    // When
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+      "--work",
+      workFixture(),
+      "--setup",
+      script,
+      "--secrets",
+      path,
+    ]);
+    const output = created.stdout + created.stderr;
+    // Then
+    expect({
+      exitCode: created.exitCode,
+      lastLine: created.stderr.split("\n").at(-2),
+      secretShown: output.includes("tok-5f2a9c"),
+      setupValueShown: output.includes("from-setup-41c"),
+      made: existsSync(env.root) ? readdirSync(env.root) : [],
+    }).toEqual({
+      exitCode: 125,
+      lastLine: `API_KEY is in both the Setup env and the Secrets file ${path}; remove it from one and create again. This Sandbox was deleted.`,
+      secretShown: false,
+      setupValueShown: false,
+      made: [],
+    });
+  });
+
+  it("a Secret that clashes with a reused Snapshot's Setup env fails create", async () => {
+    // Given: a first create that saved a Snapshot whose Setup env has API_KEY
+    const env = makeEnv();
+    const set = { PROOFBOX_FAKE_SNAPSHOTS: snapshotsDir() };
+    const folder = workFixture();
+    const script = setupScript(
+      '#!/bin/sh\necho API_KEY=from-setup-41c >> "$PROOFBOX_ENV"\n',
+    );
+    const path = secretsFile("API_KEY=tok-5f2a9c\n");
+    const first = await create(env, folder, script, set);
+    expect(first.exitCode).toBe(0);
+    // When
+    const second = await runCli(
+      env,
+      [
+        "create",
+        "--os",
+        "linux",
+        "--provider",
+        "fake",
+        "--work",
+        folder,
+        "--setup",
+        script,
+        "--secrets",
+        path,
+      ],
+      { set },
+    );
+    // Then
+    expect({
+      exitCode: second.exitCode,
+      reused: second.stderr.includes("Snapshot reused"),
+      lastLine: second.stderr.split("\n").at(-2),
+    }).toEqual({
+      exitCode: 125,
+      reused: true,
+      lastLine: `API_KEY is in both the Setup env and the Secrets file ${path}; remove it from one and create again. This Sandbox was deleted.`,
+    });
   });
 });

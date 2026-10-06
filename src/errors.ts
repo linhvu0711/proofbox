@@ -339,6 +339,15 @@ export class SetupEnvLineError extends Data.TaggedError("SetupEnvLineError")<{
   }
 }
 
+export class SetupEnvClashError extends Data.TaggedError("SetupEnvClashError")<{
+  readonly name: string;
+  readonly path: string;
+}> {
+  get message() {
+    return `${this.name} is in both the Setup env and the Secrets file ${this.path}; remove it from one and create again. This Sandbox was deleted.`;
+  }
+}
+
 export class BadSizeError extends Data.TaggedError("BadSizeError")<{
   readonly value: string;
 }> {

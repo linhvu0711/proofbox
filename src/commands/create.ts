@@ -11,6 +11,7 @@ import {
   MissingCapabilityError,
   ProviderError,
   platformReason,
+  SetupEnvClashError,
   SetupNeedsWorkError,
   SetupScriptMissingError,
   SizeNotOfferedError,
@@ -23,8 +24,10 @@ import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
 import { lacksFeature, liveViewOn, type Os, Providers } from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
+import { sandboxFiles } from "../sandbox-file.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { readSecretsFile, sendSecrets } from "../secrets.ts";
+import { setupEnvNames } from "../setup-env.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { Style } from "../style.ts";
@@ -178,6 +181,21 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         yield* progress.note(`Snapshot reused, Fingerprint ${fp}`);
       } else if (script !== undefined) {
         yield* runSetupScript(id, script);
+      }
+      // A Secret must not hide a Setup env value (ADR 0023). The check runs
+      // before the Snapshot save, so a clash saves no Snapshot.
+      if (secrets !== undefined && options.secretsFile !== undefined) {
+        const names = yield* setupEnvNames(
+          id,
+          sandboxFiles(provider, info.name, options.os),
+        );
+        const clash = secrets.find((secret) => names.includes(secret.name));
+        if (clash !== undefined) {
+          return yield* new SetupEnvClashError({
+            name: clash.name,
+            path: options.secretsFile,
+          });
+        }
       }
       // The Snapshot is saved before the Secrets go in, so it holds none.
       if (!reused && fp !== undefined && snapshots !== undefined) {
