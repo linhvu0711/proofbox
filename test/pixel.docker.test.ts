@@ -66,6 +66,69 @@ describe("Pixel actions", () => {
     expect(bytes.readUInt32BE(20)).toBe(900);
   });
 
+  it("a new Sandbox shows no xmessage window", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "sleep 3; xwininfo -root -tree | grep -c xmessage || true",
+    ]);
+    // Then
+    expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
+      exitCode: 0,
+      stdout: "0\n",
+    });
+  });
+
+  it("a new Sandbox keeps a black desktop", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "sleep 3; /opt/proofbox/tools/ffmpeg -loglevel error -f x11grab -video_size 1x1 -i :99+700,600 -frames:v 1 -f rawvideo -pix_fmt rgb24 - | od -An -tu1 | tr -s ' '",
+    ]);
+    // Then
+    expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
+      exitCode: 0,
+      stdout: " 0 0 0\n",
+    });
+  });
+
+  it("fluxbox runs and writes its files next to the overlay", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "sh",
+      "-c",
+      "sleep 3; pgrep -x fluxbox >/dev/null && ls -A /home/app/.fluxbox",
+    ]);
+    // Then
+    expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
+      exitCode: 0,
+      stdout: "apps\ninit\nkeys\nmenu\noverlay\nwindowmenu\n",
+    });
+  });
+
   it("a frozen screen makes screenshot give up twice with exit 125", async () => {
     // Given: a normal screenshot first, then a frozen X server
     const env = makeEnv({ docker: true });
