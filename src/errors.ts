@@ -308,6 +308,21 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   }
 }
 
+export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
+  readonly id: string;
+  readonly what:
+    | "sshd cannot be installed"
+    | "sshd cannot be started"
+    | "sshd cannot be reached";
+}> {
+  get message() {
+    return `Sandbox ${this.id} failed the Linux sshd step (${this.what}); deleted the Sandbox`;
+  }
+  get reason() {
+    return this.message;
+  }
+}
+
 export class SecretsFileUnreadableError extends Data.TaggedError(
   "SecretsFileUnreadableError",
 )<{

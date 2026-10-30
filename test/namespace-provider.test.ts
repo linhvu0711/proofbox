@@ -1189,6 +1189,130 @@ describe("Namespace Provider", () => {
     },
   );
 
+  it.effect(
+    "a Linux host whose sshd cannot be installed fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: exit 1 on `apk add`
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(
+          (line) =>
+            line === "apk add -q openssh-server"
+              ? Effect.succeed({
+                  exitCode: 1,
+                  stdout: "",
+                  stderr:
+                    "ERROR: unable to select packages:\n  openssh-server (no such package)\n",
+                })
+              : tenantRun(line),
+          false,
+        );
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be installed); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a Linux host whose sshd cannot be started fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: exit 255 from the sshd start
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(
+          (line) =>
+            line.includes("/usr/sbin/sshd")
+              ? Effect.succeed({
+                  exitCode: 255,
+                  stdout: "",
+                  stderr:
+                    "Bind to port 22 on 127.0.0.1 failed: Address in use.\n",
+                })
+              : tenantRun(line),
+          false,
+        );
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be started); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a Linux host whose sshd cannot be reached fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: an sshd that does not answer
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun, true);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be reached); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway", "cli sshd root"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
   it.effect("create goes to the region of an eu login", () =>
     Effect.gen(function* () {
       // Given: a login in eu

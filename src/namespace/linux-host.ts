@@ -12,6 +12,7 @@ import {
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
 import {
+  LinuxSshdError,
   type ProviderError,
   type ProviderUnavailableError,
   TokenExposedError,
@@ -329,10 +330,11 @@ export const makeLinuxHost = (deps: {
       gateway.run(INSTALL_SSHD).pipe(
         Effect.filterOrFail(
           (installed) => installed.exitCode === 0,
-          (installed) =>
-            fail(
-              `could not install sshd on the host: ${(installed.stderr || installed.stdout).trim()}`,
-            ),
+          () =>
+            new LinuxSshdError({
+              id: sandboxId(ref),
+              what: "sshd cannot be installed",
+            }),
         ),
       ),
     );
@@ -341,14 +343,26 @@ export const makeLinuxHost = (deps: {
       turnOnSshd(gateway, made.paths, deps.fs, START_SSHD).pipe(
         Effect.filterOrFail(
           (on) => on,
-          () => fail("could not start sshd on the host"),
+          () =>
+            new LinuxSshdError({
+              id: sandboxId(ref),
+              what: "sshd cannot be started",
+            }),
         ),
       ),
     );
-    const link = yield* deps.openLink(ref, made.paths, "cli", {
-      to: "sshd",
-      user: "root",
-    });
+    const link = yield* deps
+      .openLink(ref, made.paths, "cli", { to: "sshd", user: "root" })
+      .pipe(
+        Effect.catchTag("ProviderUnavailableError", () =>
+          Effect.fail(
+            new LinuxSshdError({
+              id: sandboxId(ref),
+              what: "sshd cannot be reached",
+            }),
+          ),
+        ),
+      );
     const registry = yield* readTenant(link);
     const version = yield* baseImageVersion(
       BASE_IMAGE_DIR,
