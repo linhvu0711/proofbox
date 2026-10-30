@@ -117,7 +117,7 @@ describe("ssh link", () => {
           { name: "abc123def4567", region: "us" },
           paths,
           "keeper",
-          "gateway",
+          { to: "gateway" },
         );
         // Then: GetSSHConfig was asked in the id's region for its instance
         expect(yield* Ref.get(asked)).toEqual([["us", "abc123def4567"]]);
@@ -250,7 +250,7 @@ describe("ssh link", () => {
         { name: "abc123def4567", region: "us" },
         paths,
         "keeper",
-        "gateway",
+        { to: "gateway" },
       );
       // Then
       expect(statSync(paths.knownHosts).mode & 0o777).toBe(0o600);
@@ -352,7 +352,7 @@ describe("ssh link", () => {
         { name: "abc123def4567", region: "us" },
         paths,
         "keeper",
-        "gateway",
+        { to: "gateway" },
       );
       // When
       const result = yield* link.run("x").pipe(
@@ -372,12 +372,18 @@ describe("ssh link", () => {
     );
   });
 
-  for (const [name, ride] of [
+  for (const [name, ride, user] of [
     [
       "a Mac link reaches runner@127.0.0.1 through the gateway with the Sandbox key and the pinned sshd host key",
       false,
+      "runner",
     ],
-    ["a CLI Mac link rides the Keeper's master over sshd", true],
+    ["a CLI Mac link rides the Keeper's master over sshd", true, "runner"],
+    [
+      "a Linux link reaches root@127.0.0.1 through the gateway with the Sandbox key and the pinned sshd host key",
+      false,
+      "root",
+    ],
   ] as const) {
     it.effect(name, () => {
       const fake = fakeSsh();
@@ -427,7 +433,7 @@ describe("ssh link", () => {
           { name: "abc123def4567", region: "us" },
           paths,
           ride ? "cli" : "keeper",
-          "sshd",
+          { to: "sshd", user },
         );
         // Then
         expect(yield* Ref.get(asked)).toEqual(
@@ -443,7 +449,9 @@ describe("ssh link", () => {
           `UserKnownHostsFile=${paths.sshdKnownHosts}`,
         );
         expect(link.ssh).toContain("StrictHostKeyChecking=yes");
-        expect(link.ssh.at(-1)).toBe("runner@127.0.0.1");
+        expect(link.ssh.at(-1)).toBe(
+          user === "root" ? "root@127.0.0.1" : "runner@127.0.0.1",
+        );
         expect(link.ssh).toContain(
           `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
         );

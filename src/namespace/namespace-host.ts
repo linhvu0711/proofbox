@@ -1,8 +1,10 @@
-import type { Effect, Scope } from "effect";
+import type { FileSystem } from "@effect/platform";
+import { Effect, type Scope } from "effect";
 import type { ChecksShell, Transport } from "../command-checks.ts";
 import {
   ProviderError,
   type ProviderUnavailableError,
+  platformReason,
   SandboxGoneError,
 } from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
@@ -17,17 +19,18 @@ import type {
   SandboxRef,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
+import { shellJoin } from "../shell.ts";
 import type { Size } from "../size.ts";
-import type { HostResult, Link, LinkVia } from "./ssh-link.ts";
+import type { HostResult, Link } from "./ssh-link.ts";
 
 // What the Namespace Provider asks of one host's OS. The Provider keeps the
 // Namespace API calls, list, and the create flow once; a Linux host and a
 // Mac host each do the steps that differ by OS.
 export interface NamespaceHost {
   readonly os: Os;
-  // The route every link after create takes to the host.
-  readonly via: LinkVia;
-  // Fails when this machine cannot reach the host over `via`.
+  // The user the host's own sshd logs in as (ADR 0024).
+  readonly sshdUser: string;
+  // Fails when this machine cannot reach the host's sshd.
   readonly reach: (
     ref: SandboxRef,
     paths: KeeperPaths,
@@ -110,4 +113,32 @@ export const gone = (ref: SandboxRef, unfinished?: true) =>
 export const brandFor = (ref: SandboxRef) => ({
   provider: "namespace",
   id: () => sandboxId(ref),
+});
+
+// Adds this Sandbox's key to the login's authorized_keys over the gateway
+// link, runs the OS's line that starts sshd and prints its ed25519 host key,
+// and pins that key (ADR 0024). False when the host gives no key.
+export const turnOnSshd = Effect.fn("namespaceHost.turnOnSshd")(function* (
+  link: Link,
+  paths: KeeperPaths,
+  fs: FileSystem.FileSystem,
+  start: string,
+) {
+  const pub = yield* fs.readFileString(`${paths.key}.pub`).pipe(
+    Effect.map((text) => text.trim()),
+    Effect.mapError((error) => fail(platformReason(error))),
+  );
+  const result = yield* link.run(
+    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && ${start}`,
+  );
+  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
+    return false;
+  }
+  const [type, key] = result.stdout.trim().split(/\s+/);
+  yield* fs
+    .writeFileString(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
+      mode: 0o600,
+    })
+    .pipe(Effect.mapError((error) => fail(platformReason(error))));
+  return true;
 });

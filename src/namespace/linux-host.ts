@@ -31,6 +31,7 @@ import {
   type MakeRequest,
   type NamespaceHost,
   sandboxId,
+  turnOnSshd,
 } from "./namespace-host.ts";
 import { registryRefs } from "./registry-refs.ts";
 import {
@@ -39,7 +40,7 @@ import {
   snapshotRef,
   snapshotTag,
 } from "./snapshot-image.ts";
-import type { Link } from "./ssh-link.ts";
+import type { Link, OpenLink } from "./ssh-link.ts";
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
 // container at its Deadline (`--rm`) while the host lives on a while, so
@@ -65,6 +66,14 @@ const MEMORY_RESERVE_GB = 1;
 // registry.
 const IMAGE_KEEP_HOURS = 336;
 
+// Wolfi's own OpenSSH server (ADR 0024).
+const INSTALL_SSHD = "apk add -q openssh-server";
+
+// The gateway's PATH goes to every sshd session: docker is in /vendor/docker,
+// which sshd's own PATH lacks. The pid file makes a second start a no-op.
+const START_SSHD =
+  'ssh-keygen -A >/dev/null && { kill -0 "$(cat /run/proofbox-sshd.pid 2>/dev/null)" 2>/dev/null || /usr/sbin/sshd -o ListenAddress=127.0.0.1:22 -o PidFile=/run/proofbox-sshd.pid -o PermitRootLogin=prohibit-password -o PasswordAuthentication=no -o "SetEnv=PATH=$PATH"; } && cat /etc/ssh/ssh_host_ed25519_key.pub';
+
 // What a Linux host adds: only it has a container, so only it saves
 // Snapshots.
 export interface LinuxHost extends NamespaceHost {
@@ -81,6 +90,7 @@ export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
   readonly fs: FileSystem.FileSystem;
   readonly dockerFor: (link: Link) => DockerClient;
+  readonly openLink: OpenLink;
 }): LinuxHost => {
   const read = Effect.fn("linuxHost.read")(function* (
     link: Link,
@@ -148,7 +158,6 @@ export const makeLinuxHost = (deps: {
     });
   });
 
-  // The SSH gateway reaches every Linux host.
   const reach = Effect.fn("linuxHost.reach")(function* (
     _ref: SandboxRef,
     _paths: KeeperPaths,
@@ -306,14 +315,40 @@ export const makeLinuxHost = (deps: {
     return tag;
   });
 
-  // Makes the Sandbox's container on the host, from a Snapshot when one
-  // is asked for and found, else from the Base image.
+  // Sets up the host's own sshd over the gateway, then makes the Sandbox's
+  // container over sshd (ADR 0024), from a Snapshot when one is asked for
+  // and found, else from the Base image.
   const make = Effect.fn("linuxHost.make")(function* (
-    link: Link,
+    gateway: Link,
     made: MakeRequest,
   ) {
     const { req, ref, size } = made;
     const progress = yield* Progress;
+    yield* progress.step(
+      "installing sshd",
+      gateway.run(INSTALL_SSHD).pipe(
+        Effect.filterOrFail(
+          (installed) => installed.exitCode === 0,
+          (installed) =>
+            fail(
+              `could not install sshd on the host: ${(installed.stderr || installed.stdout).trim()}`,
+            ),
+        ),
+      ),
+    );
+    yield* progress.step(
+      "starting sshd",
+      turnOnSshd(gateway, made.paths, deps.fs, START_SSHD).pipe(
+        Effect.filterOrFail(
+          (on) => on,
+          () => fail("could not start sshd on the host"),
+        ),
+      ),
+    );
+    const link = yield* deps.openLink(ref, made.paths, "cli", {
+      to: "sshd",
+      user: "root",
+    });
     const registry = yield* readTenant(link);
     const version = yield* baseImageVersion(
       BASE_IMAGE_DIR,
@@ -418,7 +453,7 @@ export const makeLinuxHost = (deps: {
 
   return {
     os: "linux",
-    via: "gateway",
+    sshdUser: "root",
     reach,
     read,
     writeDeadline,

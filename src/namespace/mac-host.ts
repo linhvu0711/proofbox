@@ -25,6 +25,7 @@ import {
   type MakeRequest,
   type NamespaceHost,
   sandboxId,
+  turnOnSshd,
 } from "./namespace-host.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
@@ -299,33 +300,6 @@ const startMemoryWatcher = `sudo -n sh -c ${shellJoin([
 const watchMemory = Effect.fn("macHost.watchMemory")((link: Link) =>
   step(link, "starting the memory watcher", startMemoryWatcher),
 );
-
-const turnOnSshd = Effect.fn("macHost.turnOnSshd")(function* (
-  link: Link,
-  ref: SandboxRef,
-  paths: KeeperPaths,
-  fs: FileSystem.FileSystem,
-) {
-  const pub = yield* fs.readFileString(`${paths.key}.pub`).pipe(
-    Effect.map((text) => text.trim()),
-    Effect.mapError((error) => fail(platformReason(error))),
-  );
-  const result = yield* link.run(
-    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub`,
-  );
-  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
-    return yield* new MacPrepareError({
-      id: sandboxId(ref),
-      what: "sshd cannot be turned on",
-    });
-  }
-  const [type, key] = result.stdout.trim().split(/\s+/);
-  yield* fs
-    .writeFileString(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
-      mode: 0o600,
-    })
-    .pipe(Effect.mapError((error) => fail(platformReason(error))));
-});
 
 // One hfs volume on 8 MiB of RAM, mounted mode 700 for runner alone. A
 // non-zero exit is a MacPrepareError so create deletes the Mac before any
@@ -692,18 +666,34 @@ export const makeMacHost = (deps: {
     const progress = yield* Progress;
     yield* progress.step(
       "turning on sshd",
-      turnOnSshd(link, ref, made.paths, deps.fs),
-    );
-    const sshd = yield* deps.openLink(ref, made.paths, "cli", "sshd").pipe(
-      Effect.catchTag("ProviderUnavailableError", () =>
-        Effect.fail(
-          new MacPrepareError({
-            id: sandboxId(ref),
-            what: "sshd cannot be reached",
-          }),
+      turnOnSshd(
+        link,
+        made.paths,
+        deps.fs,
+        "sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub",
+      ).pipe(
+        Effect.filterOrFail(
+          (on) => on,
+          () =>
+            new MacPrepareError({
+              id: sandboxId(ref),
+              what: "sshd cannot be turned on",
+            }),
         ),
       ),
     );
+    const sshd = yield* deps
+      .openLink(ref, made.paths, "cli", { to: "sshd", user: "runner" })
+      .pipe(
+        Effect.catchTag("ProviderUnavailableError", () =>
+          Effect.fail(
+            new MacPrepareError({
+              id: sandboxId(ref),
+              what: "sshd cannot be reached",
+            }),
+          ),
+        ),
+      );
     return yield* prepareMac(sshd, {
       ref,
       idle: made.req.idle,
@@ -714,7 +704,7 @@ export const makeMacHost = (deps: {
 
   return {
     os: "macos",
-    via: "sshd",
+    sshdUser: "runner",
     reach,
     read: readMac,
     writeDeadline: writeMacDeadline,

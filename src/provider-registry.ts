@@ -70,6 +70,7 @@ export const ProvidersLive = Layer.effect(
                   api: namespaceApi,
                   fs,
                   dockerFor,
+                  openLink,
                 }),
                 macos: macHost.makeMacHost({ openLink, fs }),
               },
