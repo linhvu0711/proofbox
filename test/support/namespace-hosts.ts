@@ -9,7 +9,6 @@ export const unusedHost = (os: Os): LinuxHost => {
   return {
     os,
     sshdUser: "root",
-    reach: () => Effect.die(why),
     read: () => Effect.die(why),
     writeDeadline: () => Effect.die(why),
     checks: { push: "", kills: "", run: "" },

@@ -6,13 +6,12 @@ import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
   MacPrepareError,
-  ProviderUnavailableError,
   platformReason,
   SandboxGoneError,
   TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
-import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
+import { keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
@@ -583,22 +582,6 @@ export const makeMacHost = (deps: {
   // File access, handed in when the host is built.
   readonly fs: FileSystem.FileSystem;
 }): NamespaceHost => {
-  // Only the machine that made the Mac pinned its sshd host key.
-  const reach = Effect.fn("macHost.reach")(function* (
-    ref: SandboxRef,
-    paths: KeeperPaths,
-  ) {
-    const pinned = yield* deps.fs
-      .exists(paths.sshdKnownHosts)
-      .pipe(Effect.orElseSucceed(() => false));
-    if (!pinned) {
-      return yield* new ProviderUnavailableError({
-        provider: "namespace",
-        reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
-      });
-    }
-  });
-
   // The VNC password one Live view uses; its finalizer turns VNC off once
   // the last view closes.
   const livePassword = Effect.fn("macHost.livePassword")(function* (
@@ -705,7 +688,6 @@ export const makeMacHost = (deps: {
   return {
     os: "macos",
     sshdUser: "runner",
-    reach,
     read: readMac,
     writeDeadline: writeMacDeadline,
     checks: macChecks(),

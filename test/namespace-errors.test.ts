@@ -66,6 +66,25 @@ describe("Namespace errors", () => {
     });
   });
 
+  it("exec on a Linux Sandbox made by an older proofbox says to delete it and create a new one", async () => {
+    // Given
+    const ns = await fakeNamespace(() => ({ json: {} }));
+    const env = makeEnv();
+    writeFileSync(join(env.runtime, "ns-us:abc123def4567.os"), "linux");
+    // When
+    const result = await runCli(
+      env,
+      ["exec", "ns:us:abc123def4567", "--", "true"],
+      { set: nsEnv(ns) },
+    );
+    // Then
+    expect({ stderr: result.stderr, exitCode: result.exitCode }).toEqual({
+      stderr:
+        "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567\n",
+      exitCode: 125,
+    });
+  });
+
   it("create with no Namespace login says how to log in", async () => {
     // Given: no env token and no saved login
     const env = makeEnv();
@@ -435,6 +454,10 @@ describe("Namespace errors", () => {
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
     const env = makeEnv();
+    writeFileSync(
+      join(env.runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     // When
     const result = await runCli(
       env,
@@ -491,6 +514,10 @@ describe("Namespace errors", () => {
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
     const env = makeEnv();
+    writeFileSync(
+      join(env.runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     // When
     const result = await runCli(
       env,
@@ -528,6 +555,10 @@ describe("Namespace errors", () => {
         : { json: {} };
     });
     const env = makeEnv();
+    writeFileSync(
+      join(env.runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     const log = join(env.runtime, "ssh.log");
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);
@@ -580,6 +611,10 @@ describe("Namespace errors", () => {
         : { json: {} };
     });
     const env = makeEnv();
+    writeFileSync(
+      join(env.runtime, "ns-us:abc123def4567.sshd-known-hosts"),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
     const log = join(env.runtime, "ssh.log");
     const binDir = mkdtempSync(join(tmpdir(), "proofbox-nossh-"));
     trackTempDir(binDir);

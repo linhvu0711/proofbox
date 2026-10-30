@@ -230,17 +230,20 @@ const liveLayers = (warnings?: Array<string>) =>
     ),
   );
 
-const runtimeConfig = () =>
-  Effect.withConfigProvider(
-    ConfigProvider.fromMap(
-      new Map([
-        [
-          "PROOFBOX_RUNTIME_DIR",
-          mkdtempSync(join(tmpdir(), "proofbox-runtime-")),
-        ],
-      ]),
-    ),
+// A fresh runtime folder; each `pinned` Sandbox (`<region>:<name>`) gets
+// the sshd host key pin create would have written.
+const runtimeConfig = (...pinned: ReadonlyArray<string>) => {
+  const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+  for (const stem of pinned) {
+    writeFileSync(
+      join(runtime, `ns-${stem}.sshd-known-hosts`),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
+  }
+  return Effect.withConfigProvider(
+    ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
   );
+};
 
 interface RunResult {
   readonly exitCode: number;
@@ -471,7 +474,7 @@ describe("Namespace Provider", () => {
       // Then
       expect(info.os).toBe("linux");
       expect(yield* Ref.get(calls)).toContain("list us");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect("a local Linux OS file needs no API lookup", () =>
@@ -493,7 +496,7 @@ describe("Namespace Provider", () => {
       // Then
       expect(info.os).toBe("linux");
       expect(yield* Ref.get(calls)).toEqual([]);
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -520,7 +523,7 @@ describe("Namespace Provider", () => {
         // Then
         expect(info.os).toBe("linux");
         expect(yield* Ref.get(calls)).toEqual([]);
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -585,7 +588,7 @@ describe("Namespace Provider", () => {
             ["us", "abc123def4567", "120"],
           ],
         ]);
-      }),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -636,7 +639,7 @@ describe("Namespace Provider", () => {
           password: "Pw4xQ9zT",
           forwarded: true,
         });
-      }).pipe(Effect.scoped, runtimeConfig()),
+      }).pipe(Effect.scoped, runtimeConfig("us:abc123def4567")),
   );
 
   it.effect("closing the last Linux Live view stops x11vnc", () =>
@@ -671,7 +674,7 @@ describe("Namespace Provider", () => {
       ).pipe(Effect.scoped);
       // Then
       expect(execs.at(-1)).toContain("pkill -x x11vnc");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -1055,7 +1058,7 @@ describe("Namespace Provider", () => {
           ],
           expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
         });
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("a failed push fails save with the docker error", () =>
@@ -1091,7 +1094,7 @@ describe("Namespace Provider", () => {
           "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
         expiry: [],
       });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+    }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("create in the login's region returns a region id", () =>
@@ -1313,6 +1316,37 @@ describe("Namespace Provider", () => {
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
+  it.effect(
+    "a call on a Linux Sandbox with no pinned sshd host key says an older proofbox made it",
+    () => {
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "linux");
+      return Effect.gen(function* () {
+        // Given: a Linux Sandbox this machine never pinned an sshd key for
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.get({ name: "abc123def4567", region: "us" }),
+        );
+        // Then
+        expect({
+          tag: error._tag,
+          message: error.message,
+          links: route.links,
+        }).toEqual({
+          tag: "ProviderUnavailableError",
+          message:
+            "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567",
+          links: [],
+        });
+      }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+    },
+  );
+
   it.effect("create goes to the region of an eu login", () =>
     Effect.gen(function* () {
       // Given: a login in eu
@@ -1440,7 +1474,10 @@ describe("Namespace Provider", () => {
           "list us",
           "list us",
         ]);
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(
+        runtimeConfig("us:abc123def4567", "eu:eu0000000000a"),
+        Effect.provide(liveLayers()),
+      ),
   );
 
   it.effect(
@@ -1482,7 +1519,7 @@ describe("Namespace Provider", () => {
               "Could not reach Namespace. Check your network and try again.",
           },
         ]);
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("list with every region down fails with the Namespace error", () =>
@@ -1554,7 +1591,7 @@ describe("Namespace Provider", () => {
           },
         ],
       });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+    }).pipe(runtimeConfig("us:lin000000000a"), Effect.provide(liveLayers())),
   );
 
   it.effect("list drops a Linux host whose container stopped", () =>
@@ -1755,7 +1792,7 @@ describe("Namespace Provider through the Keeper", () => {
       );
       yield* eventually(pushed);
       expect(yield* pushed).toBe(true);
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped(
@@ -1792,7 +1829,7 @@ describe("Namespace Provider through the Keeper", () => {
           "extend us abc123def4567 900",
           "extend us abc123def4567 900",
         ]);
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped("the Keeper and its gone-watch start no extend-main", () =>
@@ -1809,7 +1846,7 @@ describe("Namespace Provider through the Keeper", () => {
       const watched = ns.runs.slice(before);
       expect(watched).toHaveLength(1);
       expect(watched[0]).toContain("docker inspect");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped("a link that drops mid-command ends with the link message", () =>
@@ -1833,7 +1870,7 @@ describe("Namespace Provider through the Keeper", () => {
       expect(error.message).toBe(
         "Provider namespace failed: lost the link to the Namespace host: the ssh link dropped mid-command",
       );
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped(
@@ -1857,6 +1894,6 @@ describe("Namespace Provider through the Keeper", () => {
         expect(error.message).toBe(
           "Provider namespace failed: could not write the Deadline: mv: Read-only file system",
         );
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 });

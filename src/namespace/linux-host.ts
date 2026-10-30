@@ -17,7 +17,6 @@ import {
   type ProviderUnavailableError,
   TokenExposedError,
 } from "../errors.ts";
-import type { KeeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
@@ -158,11 +157,6 @@ export const makeLinuxHost = (deps: {
       size: info.size,
     });
   });
-
-  const reach = Effect.fn("linuxHost.reach")(function* (
-    _ref: SandboxRef,
-    _paths: KeeperPaths,
-  ) {});
 
   // The container's Deadline file, `seconds` from the host's own clock.
   const writeDeadline = Effect.fn("linuxHost.writeDeadline")(function* (
@@ -468,7 +462,6 @@ export const makeLinuxHost = (deps: {
   return {
     os: "linux",
     sshdUser: "root",
-    reach,
     read,
     writeDeadline,
     checks: LINUX_CHECKS,

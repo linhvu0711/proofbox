@@ -21,7 +21,7 @@ import {
   platformReason,
   UnknownRegionError,
 } from "../errors.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import type {
   ListResult,
@@ -36,7 +36,7 @@ import { pushHostLife } from "./host-life.ts";
 import type { LinuxHost } from "./linux-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { unreachable } from "./namespace-api.ts";
-import { fail, gone, type NamespaceHost } from "./namespace-host.ts";
+import { fail, gone, type NamespaceHost, sandboxId } from "./namespace-host.ts";
 import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
@@ -97,6 +97,23 @@ export const makeNamespaceProvider = (deps: {
     return hostFor(label);
   });
 
+  // Only the machine that made the Sandbox pinned its sshd host key (ADR
+  // 0024).
+  const reachSshd = Effect.fn("NamespaceProvider.reachSshd")(function* (
+    ref: SandboxRef,
+    paths: KeeperPaths,
+  ) {
+    const pinned = yield* deps.fs
+      .exists(paths.sshdKnownHosts)
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!pinned) {
+      return yield* new ProviderUnavailableError({
+        provider: "namespace",
+        reason: `Sandbox ${sandboxId(ref)} was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ${sandboxId(ref)}`,
+      });
+    }
+  });
+
   // Link bring-up can outlast a short host Deadline, so every open first
   // bumps the host's own lifetime: detached for a CLI link, a fiber of the
   // Keeper for its own.
@@ -107,7 +124,7 @@ export const makeNamespaceProvider = (deps: {
   ) {
     const host = knownHost ?? (yield* hostOf(ref));
     const hostPaths = yield* refPaths(ref);
-    yield* host.reach(ref, hostPaths);
+    yield* reachSshd(ref, hostPaths);
     if (owner === "keeper") {
       yield* Effect.forkScoped(
         pushHostLife(api, ref, 120).pipe(
@@ -344,9 +361,9 @@ export const makeNamespaceProvider = (deps: {
             return undefined;
           }
           const ref = { name: instance.id, region };
-          const reached = yield* host
-            .reach(ref, yield* refPaths(ref))
-            .pipe(Effect.either);
+          const reached = yield* reachSshd(ref, yield* refPaths(ref)).pipe(
+            Effect.either,
+          );
           if (Either.isLeft(reached)) {
             unreached.push({
               where: `Namespace region ${region}`,

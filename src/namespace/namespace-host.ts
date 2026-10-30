@@ -30,11 +30,6 @@ export interface NamespaceHost {
   readonly os: Os;
   // The user the host's own sshd logs in as (ADR 0024).
   readonly sshdUser: string;
-  // Fails when this machine cannot reach the host's sshd.
-  readonly reach: (
-    ref: SandboxRef,
-    paths: KeeperPaths,
-  ) => Effect.Effect<void, ProviderUnavailableError>;
   // Reads the Sandbox over the host's link.
   readonly read: (
     link: Link,
