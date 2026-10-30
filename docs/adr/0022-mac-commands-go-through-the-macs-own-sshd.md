@@ -1,5 +1,7 @@
 # Mac commands go through the Mac's own sshd
 
+Superseded by ADR 0024.
+
 Supersedes ADR 0021.
 
 On a Namespace Mac, `/opt/namespace/vmguest` (the program behind the Namespace ssh gateway) sometimes never ends a session, and sometimes it holds back the last 16 to 64 KB of stdout or stderr (issue #118). An End line on stderr can be held back too, so ADR 0021's plan did not stop the hang: on 2026-10-02, 3 of 25 calls still hung on the branch that built it. On one Mac on 2026-10-03, we ran proofbox's exact remote line with a 3.5 MB `cat` 25 times each way. Through vmguest, 7 runs hung. Through the Mac's own OpenSSH server, reached with `ProxyJump` over the same gateway, 0 runs hung.

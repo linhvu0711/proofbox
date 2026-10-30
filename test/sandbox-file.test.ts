@@ -48,7 +48,12 @@ const namespace = () =>
     forward: () => Effect.die("unused"),
     spawnDetached: () => Effect.die("unused"),
     hosts: {
-      linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => client }),
+      linux: makeLinuxHost({
+        api,
+        fs: nodeFs,
+        dockerFor: () => client,
+        openLink: () => Effect.die("unused"),
+      }),
       macos: makeMacHost({ openLink: () => Effect.die("unused"), fs: nodeFs }),
     },
   });

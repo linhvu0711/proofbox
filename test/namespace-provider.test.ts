@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -38,7 +45,12 @@ import type {
   NamespaceApi,
 } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
-import type { Link, SshForward } from "../src/namespace/ssh-link.ts";
+import type {
+  Link,
+  LinkRoute,
+  OpenLink,
+  SshForward,
+} from "../src/namespace/ssh-link.ts";
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
@@ -218,17 +230,20 @@ const liveLayers = (warnings?: Array<string>) =>
     ),
   );
 
-const runtimeConfig = () =>
-  Effect.withConfigProvider(
-    ConfigProvider.fromMap(
-      new Map([
-        [
-          "PROOFBOX_RUNTIME_DIR",
-          mkdtempSync(join(tmpdir(), "proofbox-runtime-")),
-        ],
-      ]),
-    ),
+// A fresh runtime folder; each `pinned` Sandbox (`<region>:<name>`) gets
+// the sshd host key pin create would have written.
+const runtimeConfig = (...pinned: ReadonlyArray<string>) => {
+  const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+  for (const stem of pinned) {
+    writeFileSync(
+      join(runtime, `ns-${stem}.sshd-known-hosts`),
+      "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+    );
+  }
+  return Effect.withConfigProvider(
+    ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
   );
+};
 
 interface RunResult {
   readonly exitCode: number;
@@ -251,7 +266,13 @@ const BASE_EXPIRY = [
   "ensureImageExpiry proofbox-base-linux@sha256:ef56 336",
 ];
 
+// The host key the sshd step prints, as a Linux host's sshd would.
+const SSHD_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n";
+
 const tenantRun = (commandLine: string) => {
+  if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
+    return Effect.succeed(done(SSHD_HOST_KEY));
+  }
   if (commandLine.startsWith("docker buildx imagetools inspect")) {
     return Effect.succeed(done(BASE_INDEX));
   }
@@ -295,6 +316,9 @@ const snapshotRun =
   (commandLine: string) =>
     Effect.sync(() => {
       ran?.push(commandLine);
+      if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
+        return done(SSHD_HOST_KEY);
+      }
       if (commandLine.startsWith("docker pull")) {
         return answers.pull ?? done();
       }
@@ -309,6 +333,43 @@ const snapshotRun =
       }
       return done(commandLine.includes("metadata.json") ? "tenant_x\n" : "");
     });
+
+// Links that keep where each one went, `<owner> <to>[ <user>]`, and which
+// route each command line took; `sshdDown` fails the sshd open as a dead
+// sshd would.
+const routedLinks = (run: Link["run"], sshdDown = false) => {
+  const links: Array<string> = [];
+  const routed: Array<readonly [LinkRoute["to"], string]> = [];
+  const openLink: OpenLink = (_ref, _paths, owner, route) =>
+    Effect.suspend(() => {
+      links.push(
+        `${owner} ${route.to}${route.to === "sshd" ? ` ${route.user}` : ""}`,
+      );
+      return route.to === "sshd" && sshdDown
+        ? Effect.fail(
+            new ProviderUnavailableError({
+              provider: "namespace",
+              reason:
+                "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
+            }),
+          )
+        : Effect.succeed<Link>({
+            ssh: [],
+            stream: () => Stream.empty,
+            run: (line) =>
+              Effect.suspend(() => {
+                routed.push([route.to, line]);
+                return run(line);
+              }),
+          });
+    });
+  return { openLink, links, routed };
+};
+
+const withRuntime = (runtime: string) =>
+  Effect.withConfigProvider(
+    ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+  );
 
 const BASE_IMAGE = /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/;
 
@@ -327,15 +388,18 @@ const makeProvider = (
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly region?: string;
     readonly forward?: SshForward;
+    readonly openLink?: OpenLink;
   },
 ) => {
   const api = fakeApi(calls, options);
-  const openLink = () =>
-    Effect.succeed<Link>({
-      ssh: [],
-      stream: () => Stream.empty,
-      run,
-    });
+  const openLink =
+    options?.openLink ??
+    (() =>
+      Effect.succeed<Link>({
+        ssh: [],
+        stream: () => Stream.empty,
+        run,
+      }));
   return makeNamespaceProvider({
     executor: nodeExecutor,
     fs: nodeFs,
@@ -348,7 +412,12 @@ const makeProvider = (
     forward: options?.forward ?? (() => Effect.die("unused")),
     spawnDetached: () => Effect.void,
     hosts: {
-      linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
+      linux: makeLinuxHost({
+        api,
+        fs: nodeFs,
+        dockerFor: () => docker,
+        openLink,
+      }),
       macos: unusedHost("macos"),
     },
   });
@@ -405,7 +474,7 @@ describe("Namespace Provider", () => {
       // Then
       expect(info.os).toBe("linux");
       expect(yield* Ref.get(calls)).toContain("list us");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect("a local Linux OS file needs no API lookup", () =>
@@ -427,7 +496,7 @@ describe("Namespace Provider", () => {
       // Then
       expect(info.os).toBe("linux");
       expect(yield* Ref.get(calls)).toEqual([]);
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -454,7 +523,7 @@ describe("Namespace Provider", () => {
         // Then
         expect(info.os).toBe("linux");
         expect(yield* Ref.get(calls)).toEqual([]);
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -492,7 +561,7 @@ describe("Namespace Provider", () => {
               [provider, rel, args] as const,
             ]),
           hosts: {
-            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor }),
+            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor, openLink }),
             macos: unusedHost("macos"),
           },
         });
@@ -519,7 +588,7 @@ describe("Namespace Provider", () => {
             ["us", "abc123def4567", "120"],
           ],
         ]);
-      }),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -570,7 +639,7 @@ describe("Namespace Provider", () => {
           password: "Pw4xQ9zT",
           forwarded: true,
         });
-      }).pipe(Effect.scoped, runtimeConfig()),
+      }).pipe(Effect.scoped, runtimeConfig("us:abc123def4567")),
   );
 
   it.effect("closing the last Linux Live view stops x11vnc", () =>
@@ -605,7 +674,7 @@ describe("Namespace Provider", () => {
       ).pipe(Effect.scoped);
       // Then
       expect(execs.at(-1)).toContain("pkill -x x11vnc");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.effect(
@@ -989,7 +1058,7 @@ describe("Namespace Provider", () => {
           ],
           expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
         });
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("a failed push fails save with the docker error", () =>
@@ -1025,7 +1094,7 @@ describe("Namespace Provider", () => {
           "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
         expiry: [],
       });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+    }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("create in the login's region returns a region id", () =>
@@ -1069,6 +1138,213 @@ describe("Namespace Provider", () => {
       // Then: the last command on the host is the mark
       expect(ran.at(-1)).toBe('touch "$HOME/.proofbox-made"');
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "Linux create installs sshd over the gateway, then makes the Sandbox over sshd as root",
+    () => {
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      return Effect.gen(function* () {
+        // Given: links that keep their route and every line they run
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        yield* provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+        });
+        // Then
+        const pub = readFileSync(
+          join(runtime, "ns-us:abc123def4567.key.pub"),
+          "utf8",
+        ).trim();
+        const pin = join(runtime, "ns-us:abc123def4567.sshd-known-hosts");
+        expect({
+          links: route.links,
+          install: route.routed[0],
+          startOn: route.routed[1]?.[0],
+          authorizes: route.routed[1]?.[1].includes(
+            `printf '%s\\n' '${pub}' >> ~/.ssh/authorized_keys`,
+          ),
+          starts: route.routed[1]?.[1].includes(
+            '/usr/sbin/sshd -o ListenAddress=127.0.0.1:22 -o PidFile=/run/proofbox-sshd.pid -o PermitRootLogin=prohibit-password -o PasswordAuthentication=no -o "SetEnv=PATH=$PATH"',
+          ),
+          later: [...new Set(route.routed.slice(2).map(([to]) => to))],
+          last: route.routed.at(-1)?.[1],
+          pin: readFileSync(pin, "utf8"),
+          mode: statSync(pin).mode & 0o777,
+        }).toEqual({
+          links: ["cli gateway", "cli sshd root"],
+          install: ["gateway", "apk add -q openssh-server"],
+          startOn: "gateway",
+          authorizes: true,
+          starts: true,
+          later: ["sshd"],
+          last: 'touch "$HOME/.proofbox-made"',
+          pin: "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n",
+          mode: 0o600,
+        });
+      }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+    },
+  );
+
+  it.effect(
+    "a Linux host whose sshd cannot be installed fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: exit 1 on `apk add`
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(
+          (line) =>
+            line === "apk add -q openssh-server"
+              ? Effect.succeed({
+                  exitCode: 1,
+                  stdout: "",
+                  stderr:
+                    "ERROR: unable to select packages:\n  openssh-server (no such package)\n",
+                })
+              : tenantRun(line),
+          false,
+        );
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be installed); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a Linux host whose sshd cannot be started fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: exit 255 from the sshd start
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(
+          (line) =>
+            line.includes("/usr/sbin/sshd")
+              ? Effect.succeed({
+                  exitCode: 255,
+                  stdout: "",
+                  stderr:
+                    "Bind to port 22 on 127.0.0.1 failed: Address in use.\n",
+                })
+              : tenantRun(line),
+          false,
+        );
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be started); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a Linux host whose sshd cannot be reached fails create and deletes the Sandbox",
+    () =>
+      Effect.gen(function* () {
+        // Given: an sshd that does not answer
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun, true);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          destroyed: (yield* Ref.get(calls)).includes(
+            "destroy us abc123def4567",
+          ),
+          links: route.links,
+        }).toEqual({
+          message:
+            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be reached); deleted the Sandbox",
+          destroyed: true,
+          links: ["cli gateway", "cli sshd root"],
+        });
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a call on a Linux Sandbox with no pinned sshd host key says an older proofbox made it",
+    () => {
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      writeFileSync(join(runtime, "ns-us:abc123def4567.os"), "linux");
+      return Effect.gen(function* () {
+        // Given: a Linux Sandbox this machine never pinned an sshd key for
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.get({ name: "abc123def4567", region: "us" }),
+        );
+        // Then
+        expect({
+          tag: error._tag,
+          message: error.message,
+          links: route.links,
+        }).toEqual({
+          tag: "ProviderUnavailableError",
+          message:
+            "Sandbox ns:us:abc123def4567 was made by an older proofbox, or on another machine, so this machine cannot reach its sshd. Delete it and create a new one. Run: proofbox delete ns:us:abc123def4567",
+          links: [],
+        });
+      }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+    },
   );
 
   it.effect("create goes to the region of an eu login", () =>
@@ -1198,7 +1474,10 @@ describe("Namespace Provider", () => {
           "list us",
           "list us",
         ]);
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(
+        runtimeConfig("us:abc123def4567", "eu:eu0000000000a"),
+        Effect.provide(liveLayers()),
+      ),
   );
 
   it.effect(
@@ -1240,7 +1519,7 @@ describe("Namespace Provider", () => {
               "Could not reach Namespace. Check your network and try again.",
           },
         ]);
-      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+      }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
   it.effect("list with every region down fails with the Namespace error", () =>
@@ -1312,7 +1591,7 @@ describe("Namespace Provider", () => {
           },
         ],
       });
-    }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+    }).pipe(runtimeConfig("us:lin000000000a"), Effect.provide(liveLayers())),
   );
 
   it.effect("list drops a Linux host whose container stopped", () =>
@@ -1465,7 +1744,12 @@ const warmNamespace = (
           spawned.push(`${rel} ${args.join(" ")}`);
         }),
       hosts: {
-        linux: makeLinuxHost({ api, fs: nodeFs, dockerFor: () => docker }),
+        linux: makeLinuxHost({
+          api,
+          fs: nodeFs,
+          dockerFor: () => docker,
+          openLink,
+        }),
         macos: unusedHost("macos"),
       },
     });
@@ -1508,7 +1792,7 @@ describe("Namespace Provider through the Keeper", () => {
       );
       yield* eventually(pushed);
       expect(yield* pushed).toBe(true);
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped(
@@ -1545,7 +1829,7 @@ describe("Namespace Provider through the Keeper", () => {
           "extend us abc123def4567 900",
           "extend us abc123def4567 900",
         ]);
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped("the Keeper and its gone-watch start no extend-main", () =>
@@ -1562,7 +1846,7 @@ describe("Namespace Provider through the Keeper", () => {
       const watched = ns.runs.slice(before);
       expect(watched).toHaveLength(1);
       expect(watched[0]).toContain("docker inspect");
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped("a link that drops mid-command ends with the link message", () =>
@@ -1586,7 +1870,7 @@ describe("Namespace Provider through the Keeper", () => {
       expect(error.message).toBe(
         "Provider namespace failed: lost the link to the Namespace host: the ssh link dropped mid-command",
       );
-    }).pipe(runtimeConfig()),
+    }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
   it.scoped(
@@ -1610,6 +1894,6 @@ describe("Namespace Provider through the Keeper", () => {
         expect(error.message).toBe(
           "Provider namespace failed: could not write the Deadline: mv: Read-only file system",
         );
-      }).pipe(runtimeConfig()),
+      }).pipe(runtimeConfig("us:abc123def4567")),
   );
 });

@@ -305,8 +305,8 @@ describe("Docker Provider", () => {
     // Then
     const sha256 =
       process.arch === "x64"
-        ? "9a380286db8a65bfadf83b67256e58b0e8fbe0a82781375ec7fd410ebee73f02"
-        : "583e6f13cdc325e4633d1d61f2d27bb8baeb234a4f75fca4e0b8f2b9aab09e60";
+        ? "0d709a0bed1a43f24cd2c420878c63afea4580671b6949ad19ed124572f3bc3d"
+        : "0b0b5ac30495b4e07ce1321b8d58200f901f57782884a8b6b264c7528c2c9e77";
     expect(sum.stdout).toBe(`${sha256}  /opt/proofbox/tools/ffmpeg\n`);
     expect(devices.stdout).toContain(" x11grab ");
   });

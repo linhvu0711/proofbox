@@ -41,7 +41,7 @@ import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import type {
   HostResult,
   Link,
-  LinkVia,
+  LinkRoute,
   OpenLink,
   SshForward,
 } from "../src/namespace/ssh-link.ts";
@@ -82,9 +82,9 @@ const makeMac = (
     const requests = yield* Ref.make<ReadonlyArray<CreateRequest>>([]);
     const commands = yield* Ref.make<ReadonlyArray<string>>([]);
     const links = yield* Ref.make<ReadonlyArray<string>>([]);
-    const routed = yield* Ref.make<ReadonlyArray<readonly [LinkVia, string]>>(
-      [],
-    );
+    const routed = yield* Ref.make<
+      ReadonlyArray<readonly [LinkRoute["to"], string]>
+    >([]);
     const detached = yield* Ref.make<
       ReadonlyArray<readonly [string, ReadonlyArray<string>]>
     >([]);
@@ -127,7 +127,7 @@ const makeMac = (
         stderr: found.stderr ?? "",
       };
     };
-    const link = (via: LinkVia): Link => ({
+    const link = (via: LinkRoute["to"]): Link => ({
       ssh: [],
       run: (line) =>
         note(commands, line).pipe(
@@ -175,10 +175,10 @@ const makeMac = (
           }),
         ),
     });
-    const openLink: OpenLink = (_ref, _paths, owner, via) =>
-      note(links, `${owner} ${via}`).pipe(
+    const openLink: OpenLink = (_ref, _paths, owner, route) =>
+      note(links, `${owner} ${route.to}`).pipe(
         Effect.zipRight(
-          via === "sshd" && sshdDown === true
+          route.to === "sshd" && sshdDown === true
             ? Effect.fail(
                 new ProviderUnavailableError({
                   provider: "namespace",
@@ -186,7 +186,7 @@ const makeMac = (
                     "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh exited). Try again in a minute.",
                 }),
               )
-            : Effect.succeed(link(via)),
+            : Effect.succeed(link(route.to)),
         ),
       );
     const provider = makeNamespaceProvider({

@@ -49,13 +49,17 @@ export interface Link {
 }
 
 export type LinkOwner = "keeper" | "cli";
-export type LinkVia = "gateway" | "sshd";
+// Where a link goes: the Namespace gateway itself, or the host's own sshd,
+// reached through the gateway, as `user`.
+export type LinkRoute =
+  | { readonly to: "gateway" }
+  | { readonly to: "sshd"; readonly user: string };
 
 export type OpenLink = (
   ref: SandboxRef,
   paths: KeeperPaths,
   owner: LinkOwner,
-  via: LinkVia,
+  route: LinkRoute,
 ) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
 
 const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
@@ -176,12 +180,12 @@ export const makeOpenLink = (
       Effect.asVoid,
     );
 
-  return (ref, paths, owner, via) =>
+  return (ref, paths, owner, route) =>
     Effect.gen(function* () {
       const targetOf = (gateway: string) =>
-        via === "sshd" ? "runner@127.0.0.1" : gateway;
+        route.to === "sshd" ? `${route.user}@127.0.0.1` : gateway;
       const sshFor = (ctl: string, key: string, gateway: string) =>
-        via === "sshd"
+        route.to === "sshd"
           ? sshBase(
               ctl,
               paths.key,

@@ -8,8 +8,7 @@ export const unusedHost = (os: Os): LinuxHost => {
   const why = `the ${os} host is not part of this test`;
   return {
     os,
-    via: "gateway",
-    reach: () => Effect.die(why),
+    sshdUser: "root",
     read: () => Effect.die(why),
     writeDeadline: () => Effect.die(why),
     checks: { push: "", kills: "", run: "" },
