@@ -36,6 +36,9 @@ esac
 log=$(mktemp) || exit 0
 if pnpm install --frozen-lockfile >"$log" 2>&1 && pnpm run build >>"$log" 2>&1; then
   echo "rebuild: built dist/"
+else
+  cat "$log"
+  echo "rebuild: build failed; run pnpm install && pnpm build"
 fi
 rm -f "$log"
 exit 0

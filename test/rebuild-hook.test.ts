@@ -152,6 +152,22 @@ describe("rebuild hook", () => {
     expect(readLog()).toBe("");
   });
 
+  it("a failed build prints the hand command and the pull succeeds", () => {
+    // Given: a fake pnpm whose build fails, and a new upstream commit `two`
+    const { git, upstream, clone } = makeClone(true);
+    git(upstream, "commit", "--allow-empty", "-qm", "two");
+    // When
+    const pull = git(clone, "pull", "-q", "--no-rebase");
+    // Then
+    expect({
+      status: pull.status,
+      line: `${pull.stdout}${pull.stderr}`.includes(
+        "rebuild: build failed; run pnpm install && pnpm build",
+      ),
+      head: git(clone, "log", "-1", "--format=%s").stdout,
+    }).toEqual({ status: 0, line: true, head: "two\n" });
+  });
+
   it("install-hooks twice leaves three hook entries", () => {
     // Given: a clone with the hooks on
     const { git, clone, env } = makeClone();
