@@ -140,6 +140,18 @@ describe("rebuild hook", () => {
     expect(readLog()).toBe("");
   });
 
+  it("a linked worktree installs and builds nothing", () => {
+    // Given: a clone with the hooks on, and a new upstream commit `two`
+    const { git, upstream, clone, readLog, clearLog } = makeClone();
+    clearLog();
+    // When
+    git(clone, "worktree", "add", "-q", "../wt", "-b", "wt");
+    git(upstream, "commit", "--allow-empty", "-qm", "two");
+    git(join(clone, "../wt"), "pull", "-q", "--no-rebase", "origin", "main");
+    // Then
+    expect(readLog()).toBe("");
+  });
+
   it("install-hooks twice leaves three hook entries", () => {
     // Given: a clone with the hooks on
     const { git, clone, env } = makeClone();

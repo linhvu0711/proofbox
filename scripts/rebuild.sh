@@ -13,6 +13,9 @@ cd "$(dirname "$0")/.." || exit 0
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+# A linked worktree builds nothing: the global link points at the main checkout.
+[[ "$git_dir" == "$common_dir" ]] || exit 0
 
 case "$event" in
   post-merge) ;;
