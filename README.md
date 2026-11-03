@@ -51,7 +51,7 @@ pnpm add -g --allow-build=proofbox@https://codeload.github.com/linhvu0711/proofb
 
 After that, `proofbox update` installs the newest commit on main, and `proofbox update --commit <hash>` the commit you name (a short hash works).
 
-To work on proofbox itself, link a clone instead. `pnpm install` builds `dist/` and fetches the source in `repos/`:
+To work on proofbox itself, link a clone instead. `pnpm install` builds `dist/`, fetches the source in `repos/`, and turns on git hooks that build `dist/` again after each `git pull`, rebase, and branch switch in this checkout (Git 2.54 or later):
 
 ```sh
 git clone https://github.com/linhvu0711/proofbox.git
@@ -60,7 +60,7 @@ pnpm install
 pnpm link --global
 ```
 
-In a linked clone, update with `git pull` and `pnpm install`; `proofbox update` would replace the link with a GitHub install.
+In a linked clone, `git pull` builds `dist/` again by itself. To build by hand, run `pnpm install` and then `pnpm build`: a second `pnpm install` alone builds nothing when the lockfile did not change. `proofbox update` would replace the link with a GitHub install.
 
 Then, for the `namespace` Provider, log in first: `proofbox auth login namespace` opens the Namespace login page in your browser and saves a 30-day login (add `--region eu` for Europe; the default is `us`). A token works too: `echo <token> | proofbox auth login namespace --token`, or `PROOFBOX_NAMESPACE_TOKEN`. For CI, make that token while logged in with the browser: `proofbox auth token namespace --name ci --expires 30d` prints it once (at most `1y`). The `docker` Provider needs Docker.
 
