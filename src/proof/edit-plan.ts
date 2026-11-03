@@ -226,7 +226,9 @@ export const planEdit = (input: PlanInput): EditPlan => {
       // An action at the Recording's very end splits off an empty Still
       // part there; it is kept, so the action stays an instant change.
       // freezedetect never starts a Still part at the end on its own.
-      .filter(([a, b]) => b > a || (a === input.duration && a > start));
+      .filter(
+        ([a, b]) => b > a || (a === b && a === input.duration && a > start),
+      );
     const changing: [number, number][] = [];
     let position = start;
     for (const [a, b] of stills) {

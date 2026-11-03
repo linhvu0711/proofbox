@@ -980,6 +980,28 @@ describe("edit-plan", () => {
     ).toEqual([{ x: 5, y: 5, from: 6, to: 6.8 }]);
   });
 
+  it("a click at the very end of the Recording leaves the earlier steps as they were", () => {
+    // Given
+    const lines = [{ kind: "click", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 10,
+      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 10)),
+      marks: [1, 5],
+      clicks: [{ t: 10, x: 5, y: 5 }],
+      actions: [10],
+    });
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 1, step: 0 },
+      { kind: "cut", from: 1, to: 5, step: 1 },
+      { kind: "still", at: 5, seconds: 1, step: 1 },
+      { kind: "still", at: 5, seconds: 3, step: 2 },
+      { kind: "cut", from: 9, to: 10, step: 2 },
+      { kind: "still", at: 10, seconds: 4, step: 2 },
+    ]);
+  });
+
   it("a Recording with no action in the Action log is edited as today", () => {
     // Given
     const lines = [
