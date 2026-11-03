@@ -538,6 +538,53 @@ describe("Recording and the Proof video", () => {
     expect(edit.stdout).not.toContain("later");
   });
 
+  it("a click that changes few pixels rings in the Proof video", async () => {
+    // Given: fluxbox does nothing on a left click on the bare desktop, so
+    // the click at 100,100 moves only the pointer
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, ["mark", id, "step 1: open the menu"]);
+    await wait(6000);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(1000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(6000);
+    await runCli(env, ["mark", id, "step 2: click the bare desktop"]);
+    await runCli(env, ["click", id, "100", "100"]);
+    await wait(6000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then: the ring at 100,100 is x 100 - 24 and y 100 + 72 - 24 in the
+    // 1440 px wide Proof video
+    expect(result.exitCode, result.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/recordings/1/edit.txt",
+    ]);
+    expect(edit.stdout).toContain("overlay=x=76:y=148");
+  });
+
   it("a Still part that exec ends keeps its label in the Proof video", async () => {
     // Given
     const env = makeEnv({ docker: true });
