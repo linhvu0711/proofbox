@@ -101,6 +101,45 @@ describe("rebuild hook", () => {
     });
   });
 
+  it("a rebase pull over a local commit builds once, at the rebased commit", () => {
+    // Given: a local commit `local`, and a new upstream commit `two`
+    const { git, upstream, clone, readLog } = makeClone();
+    git(clone, "commit", "--allow-empty", "-qm", "local");
+    git(upstream, "commit", "--allow-empty", "-qm", "two");
+    // When
+    git(clone, "pull", "-q", "--rebase");
+    // Then
+    expect(readLog()).toBe(
+      "install --frozen-lockfile @ local\nrun build @ local\n",
+    );
+  });
+
+  it("a branch switch builds at that branch's commit", () => {
+    // Given: branch `other` holding commit `side`, and main checked out
+    const { git, clone, readLog, clearLog } = makeClone();
+    git(clone, "switch", "-q", "-c", "other");
+    git(clone, "commit", "--allow-empty", "-qm", "side");
+    git(clone, "switch", "-q", "main");
+    clearLog();
+    // When
+    git(clone, "switch", "-q", "other");
+    // Then
+    expect(readLog()).toBe(
+      "install --frozen-lockfile @ side\nrun build @ side\n",
+    );
+  });
+
+  it("a switch that keeps the commit, or an amend, builds nothing", () => {
+    // Given: a clone with the hooks on
+    const { git, clone, readLog, clearLog } = makeClone();
+    clearLog();
+    // When
+    git(clone, "switch", "-q", "-c", "same");
+    git(clone, "commit", "--amend", "-q", "--no-edit", "--allow-empty");
+    // Then
+    expect(readLog()).toBe("");
+  });
+
   it("install-hooks twice leaves three hook entries", () => {
     // Given: a clone with the hooks on
     const { git, clone, env } = makeClone();

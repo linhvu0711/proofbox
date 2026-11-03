@@ -12,8 +12,20 @@ cd "$(dirname "$0")/.." || exit 0
 # Git sets these for a hook, and pnpm install runs sync-repos.sh, which clones.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
+git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+
 case "$event" in
   post-merge) ;;
+  post-checkout)
+    # Args: old head, new head, 1 for a branch checkout. A rebase builds once,
+    # at its end, from post-rewrite.
+    [[ "${3:-}" == "1" && "${1:-}" != "${2:-}" ]] || exit 0
+    [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]] || exit 0
+    ;;
+  post-rewrite)
+    # An amend leaves the files as they were.
+    [[ "${1:-}" == "rebase" ]] || exit 0
+    ;;
   *) exit 0 ;;
 esac
 
