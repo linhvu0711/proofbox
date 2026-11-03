@@ -962,6 +962,24 @@ describe("edit-plan", () => {
     });
   });
 
+  it("a click at the very end of the Recording rings in the video", () => {
+    // Given: record stop came right after the click, so its time is the
+    // Recording's end
+    const lines = [{ kind: "click", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 10,
+      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 10)),
+      marks: [1],
+      clicks: [{ t: 10, x: 5, y: 5 }],
+      actions: [10],
+    });
+    // Then
+    expect(
+      plan.rings.map((r) => ({ ...r, from: round2(r.from), to: round2(r.to) })),
+    ).toEqual([{ x: 5, y: 5, from: 6, to: 6.8 }]);
+  });
+
   it("a Recording with no action in the Action log is edited as today", () => {
     // Given
     const lines = [
