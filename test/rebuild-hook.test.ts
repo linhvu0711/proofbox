@@ -114,6 +114,19 @@ describe("rebuild hook", () => {
     );
   });
 
+  it("a rebase with no local commits builds at the new commit", () => {
+    // Given: a new upstream commit `two`, fetched, and no local commit
+    const { git, upstream, clone, readLog } = makeClone();
+    git(upstream, "commit", "--allow-empty", "-qm", "two");
+    git(clone, "fetch", "-q");
+    // When
+    git(clone, "rebase", "-q", "origin/main");
+    // Then
+    expect(readLog()).toBe(
+      "install --frozen-lockfile @ two\nrun build @ two\n",
+    );
+  });
+
   it("a branch switch builds at that branch's commit", () => {
     // Given: branch `other` holding commit `side`, and main checked out
     const { git, clone, readLog, clearLog } = makeClone();

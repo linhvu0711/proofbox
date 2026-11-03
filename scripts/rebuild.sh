@@ -20,10 +20,13 @@ common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) 
 case "$event" in
   post-merge) ;;
   post-checkout)
-    # Args: old head, new head, 1 for a branch checkout. A rebase builds once,
-    # at its end, from post-rewrite.
+    # Args: old head, new head, 1 for a branch checkout.
     [[ "${3:-}" == "1" && "${1:-}" != "${2:-}" ]] || exit 0
-    [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]] || exit 0
+    # A rebase that replays commits builds once, at its end, from post-rewrite.
+    # One with nothing to replay gets no post-rewrite, so it builds here.
+    todo="$git_dir/rebase-merge/git-rebase-todo"
+    if [[ -f "$todo" ]] && grep -qvE '^(#|$)' "$todo"; then exit 0; fi
+    [[ ! -d "$git_dir/rebase-apply" ]] || exit 0
     ;;
   post-rewrite)
     # An amend leaves the files as they were.
