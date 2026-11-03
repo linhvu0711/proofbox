@@ -88,8 +88,8 @@ export const parseProbe = (text: string): ProbeResult => {
   };
 };
 
-// Takes each span out of the Still parts it overlaps, so the edit keeps
-// it at real speed. Only the edit uses it: the nothing-changed check still
+// Takes each action's span out of the Still parts it overlaps, so the edit
+// keeps it at real speed. Only the edit uses it: the nothing-changed check still
 // needs a change freezedetect saw.
 export const withoutSpans = (
   freezes: ReadonlyArray<readonly [number, number | undefined]>,
@@ -113,10 +113,19 @@ export const withoutSpans = (
     freezes,
   );
 
-// The time each type action ran, from its `type` line (before the first
-// letter) to its `typed` line (after the last). Typing still running at
-// record stop runs to the end of the Recording.
-export const typingSpans = (
+const POINT_ACTIONS: ReadonlySet<string> = new Set([
+  "click",
+  "key",
+  "scroll",
+  "drag",
+]);
+
+// The time each action ran: typing from its `type` line (before the first
+// letter) to its `typed` line (after the last), and a click, key, scroll, or
+// drag at its line's time, which `planEdit` widens by 1 s each side like
+// any change. Typing still running at record stop runs to the end of the
+// Recording.
+export const actionSpans = (
   lines: ReadonlyArray<{ readonly kind: string; readonly t: number }>,
   duration: number,
 ): ReadonlyArray<readonly [number, number]> => {
@@ -128,6 +137,8 @@ export const typingSpans = (
     } else if (kind === "typed") {
       spans.push([open ?? 0, t]);
       open = undefined;
+    } else if (POINT_ACTIONS.has(kind)) {
+      spans.push([t, t]);
     }
   }
   if (open !== undefined) {

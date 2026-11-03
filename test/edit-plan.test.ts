@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionSpans,
   labelText,
   nothingChanged,
   parseProbe,
   planEdit,
-  typingSpans,
   withoutSpans,
 } from "../src/proof/edit-plan.ts";
 
@@ -776,7 +776,7 @@ describe("edit-plan", () => {
       { kind: "typed", t: 8 },
     ];
     // When
-    const spans = typingSpans(lines, 10);
+    const spans = actionSpans(lines, 10);
     // Then
     expect(spans).toEqual([[2, 8]]);
   });
@@ -785,8 +785,210 @@ describe("edit-plan", () => {
     // Given
     const lines = [{ kind: "type", t: 2 }];
     // When
-    const spans = typingSpans(lines, 10);
+    const spans = actionSpans(lines, 10);
     // Then
     expect(spans).toEqual([[2, 10]]);
+  });
+  // freezedetect saw 2 s to 25 s as still: the click at 10 s changed only a
+  // small icon, and the app's popup at 25 s ended the Still part.
+  const iconFreezes: ReadonlyArray<readonly [number, number | undefined]> = [
+    [2, 25],
+    [26, undefined],
+  ];
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  it("a click that changes only a small icon plays at real speed", () => {
+    // Given
+    const lines = [{ kind: "click", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [{ t: 10, x: 1214, y: 24 }],
+      actions: [10],
+    });
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 1, step: 0 },
+      { kind: "cut", from: 1, to: 3, step: 1 },
+      { kind: "still", at: 3, seconds: 2, step: 1 },
+      { kind: "cut", from: 9, to: 11, step: 1 },
+      { kind: "still", at: 11, seconds: 2, label: "» 15 s later", step: 1 },
+      { kind: "cut", from: 24, to: 27, step: 1 },
+      { kind: "still", at: 27, seconds: 3, step: 1 },
+    ]);
+  });
+
+  it("a click that changes only a small icon rings for 0.8 s", () => {
+    // Given
+    const lines = [{ kind: "click", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [{ t: 10, x: 1214, y: 24 }],
+      actions: [10],
+    });
+    // Then
+    expect(
+      plan.rings.map((r) => ({ ...r, from: round2(r.from), to: round2(r.to) })),
+    ).toEqual([{ x: 1214, y: 24, from: 6, to: 6.8 }]);
+  });
+
+  it("each click, key, scroll, and drag is kept out of the Still parts, like typing", () => {
+    // Given
+    const lines = [
+      { kind: "click", t: 3 },
+      { kind: "key", t: 5 },
+      { kind: "scroll", t: 9 },
+      { kind: "drag", t: 14 },
+      { kind: "type", t: 16 },
+      { kind: "typed", t: 18 },
+      { kind: "mark", t: 20 },
+      { kind: "wait", t: 21 },
+      { kind: "screenshot", t: 22 },
+    ];
+    // When
+    const spans = actionSpans(lines, 30);
+    // Then
+    expect(spans).toEqual([
+      [3, 3],
+      [5, 5],
+      [9, 9],
+      [14, 14],
+      [16, 18],
+    ]);
+  });
+
+  it("an Escape that changes few pixels plays at real speed", () => {
+    // Given
+    const lines = [{ kind: "key", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [],
+      actions: [10],
+    });
+    // Then
+    expect(plan.clips[3]).toEqual({ kind: "cut", from: 9, to: 11, step: 1 });
+  });
+
+  it("a Wait mark names the Still part after a click", () => {
+    // Given
+    const lines = [{ kind: "click", t: 10 }];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [{ t: 10, x: 1214, y: 24 }],
+      actions: [10],
+      waits: [{ t: 12, reason: "the error popup" }],
+    });
+    // Then
+    expect(plan.clips[4]).toEqual({
+      kind: "still",
+      at: 11,
+      seconds: 2,
+      label: "» 15 s later · the error popup",
+      step: 1,
+    });
+  });
+
+  it("a Still part that a second click ends has no label", () => {
+    // Given
+    const lines = [
+      { kind: "click", t: 10 },
+      { kind: "click", t: 25 },
+    ];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [
+        { t: 10, x: 1214, y: 24 },
+        { t: 25, x: 700, y: 400 },
+      ],
+      actions: [10, 25],
+    });
+    // Then
+    expect(plan.clips[4]).toEqual({
+      kind: "still",
+      at: 11,
+      seconds: 2,
+      step: 1,
+    });
+  });
+
+  it("captions and rings stay with their steps when clicks split Still parts", () => {
+    // Given
+    const lines = [
+      { kind: "click", t: 10 },
+      { kind: "click", t: 30 },
+    ];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 40)),
+      marks: [1, 20],
+      clicks: [
+        { t: 10, x: 1214, y: 24 },
+        { t: 30, x: 700, y: 400 },
+      ],
+      actions: [10, 30],
+    });
+    // Then
+    expect({
+      captions: plan.captions,
+      rings: plan.rings.map((r) => ({
+        ...r,
+        from: round2(r.from),
+        to: round2(r.to),
+      })),
+    }).toEqual({
+      captions: [
+        { step: 1, from: 1, to: 10 },
+        { step: 2, from: 10, to: 18 },
+      ],
+      rings: [
+        { x: 1214, y: 24, from: 6, to: 6.8 },
+        { x: 700, y: 400, from: 14, to: 14.8 },
+      ],
+    });
+  });
+
+  it("a Recording with no action in the Action log is edited as today", () => {
+    // Given
+    const lines = [
+      { kind: "mark", t: 1 },
+      { kind: "wait", t: 12 },
+    ];
+    // When
+    const plan = planEdit({
+      duration: 40,
+      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      marks: [1],
+      clicks: [],
+      waits: [{ t: 12, reason: "the error popup" }],
+    });
+    // Then
+    expect(plan.clips).toEqual([
+      { kind: "cut", from: 0, to: 1, step: 0 },
+      { kind: "cut", from: 1, to: 3, step: 1 },
+      {
+        kind: "still",
+        at: 3,
+        seconds: 2,
+        label: "» 23 s later · the error popup",
+        step: 1,
+      },
+      { kind: "cut", from: 24, to: 27, step: 1 },
+      { kind: "still", at: 27, seconds: 3, step: 1 },
+    ]);
   });
 });

@@ -17,10 +17,10 @@ import {
 import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import {
+  actionSpans,
   nothingChanged,
   parseProbe,
   planEdit,
-  typingSpans,
   withoutSpans,
 } from "../proof/edit-plan.ts";
 import { renderEdit } from "../proof/render-edit.ts";
@@ -242,7 +242,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       const clicks: { t: number; x: number; y: number }[] = [];
       const actions: number[] = [];
       const waits: { t: number; reason: string }[] = [];
-      const typing: { kind: string; t: number }[] = [];
+      const acting: { kind: string; t: number }[] = [];
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -255,7 +255,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           (entry.kind === "type" || entry.kind === "typed") &&
           entry.t <= info.stop
         ) {
-          typing.push({
+          acting.push({
             kind: entry.kind,
             t: Math.max(0, Math.min(entry.t - info.start, probe.duration)),
           });
@@ -264,6 +264,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           continue;
         }
         const t = Math.min(entry.t - info.start, probe.duration);
+        // Typing went in above, with the typing from before the Recording.
+        if (entry.kind !== "type" && entry.kind !== "typed") {
+          acting.push({ kind: entry.kind, t });
+        }
         if (entry.kind === "mark") {
           marks.push(t);
         } else if (entry.kind === "click") {
@@ -283,11 +287,12 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const plan = planEdit({
         duration: probe.duration,
-        // One letter changes too few pixels for freezedetect, so the time
-        // typing ran is never a Still part (ADR 0006).
+        // An action can change too few pixels for freezedetect, such as one
+        // letter or a small toolbar icon, so the time an action ran is never
+        // a Still part (ADR 0006).
         freezes: withoutSpans(
           probe.freezes,
-          typingSpans(typing, probe.duration),
+          actionSpans(acting, probe.duration),
         ),
         marks,
         clicks,
