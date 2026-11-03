@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img">
+  <title>proofbox</title>
+  <path d="M16 3 29 9.5 16 16 3 9.5Z" fill="#FCD34D"/>
+  <path d="M3 9.5 16 16v13L3 22.5Z" fill="#F59E0B"/>
+  <path d="M29 9.5 16 16v13l13-6.5Z" fill="#D97706"/>
+  <path d="m9.5 17.5 4.5 4.5 9-9.5" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m9.5 17.5 4.5 4.5 9-9.5" fill="none" stroke="#14532D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
