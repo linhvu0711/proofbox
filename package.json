@@ -13,10 +13,11 @@
   "files": [
     "dist",
     "images",
+    "scripts/install-hooks.sh",
     "scripts/sync-repos.sh"
   ],
   "scripts": {
-    "postinstall": "bash scripts/sync-repos.sh",
+    "postinstall": "bash scripts/sync-repos.sh && bash scripts/install-hooks.sh",
     "prepare": "node scripts/build.ts",
     "test": "vitest run",
     "test:docker": "vitest run --config vitest.docker.config.ts",
