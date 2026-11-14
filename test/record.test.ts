@@ -790,9 +790,9 @@ describe("Recording and the Proof video", () => {
 });
 
 describe("record stop counts the Action log as change", () => {
-  const StillProbe =
+  const stillProbe =
     "Duration: 00:05:00.00\nlavfi.freezedetect.freeze_start: 0\n";
-  const ClickLog =
+  const clickLog =
     '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n' +
     '{"t":1005,"kind":"click","x":720,"y":450}\n' +
     '{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n';
@@ -842,7 +842,7 @@ describe("record stop counts the Action log as change", () => {
     () =>
       // Given: a 300 s Recording with one freeze from 0 and no end, as a
       // 44x24 switch flip gives, and one click between two Step marks
-      onStoppedMac(StillProbe, ClickLog, (id, out) =>
+      onStoppedMac(stillProbe, clickLog, (id, out) =>
         Effect.gen(function* () {
           // When
           yield* stopRecording({ id, out });
@@ -874,7 +874,7 @@ describe("record stop counts the Action log as change", () => {
     () =>
       // Given: no seen change, a right-click and an Escape in the Action log
       onStoppedMac(
-        StillProbe,
+        stillProbe,
         '{"t":1001,"kind":"click","x":720,"y":450}\n{"t":1003,"kind":"key","x":0,"y":0}\n',
         (id, out) =>
           Effect.gen(function* () {
@@ -887,11 +887,47 @@ describe("record stop counts the Action log as change", () => {
   );
 
   effectIt.effect(
+    "record stop makes a Proof video from typing under 1 s that changed too little for the screen check",
+    () =>
+      // Given: no seen change, and two letters typed in 0.2 s
+      onStoppedMac(
+        stillProbe,
+        '{"t":1005,"kind":"type","x":0,"y":0}\n{"t":1005.2,"kind":"typed","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop refuses a Recording whose only typing ended before it started",
+    () =>
+      // Given: no seen change, and typing that ended before the Recording
+      onStoppedMac(
+        stillProbe,
+        '{"t":990,"kind":"type","x":0,"y":0}\n{"t":995,"kind":"typed","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            const error = yield* Effect.flip(stopRecording({ id, out }));
+            // Then
+            expect(error.message).toBe(
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+            );
+          }),
+      ),
+  );
+
+  effectIt.effect(
     "record stop refuses a Recording whose Action log holds only Step marks and no change was seen",
     () =>
       // Given: the click Recording with its click taken out
       onStoppedMac(
-        StillProbe,
+        stillProbe,
         '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n',
         (id, out) =>
           Effect.gen(function* () {
@@ -915,7 +951,7 @@ describe("record stop counts the Action log as change", () => {
     "record stop fails with the helper error when the Action log cannot be fetched",
     () =>
       // Given: the click Recording, with an Action log that cannot be fetched
-      onStoppedMac(StillProbe, null, (id, out) =>
+      onStoppedMac(stillProbe, null, (id, out) =>
         Effect.gen(function* () {
           // When
           const error = yield* Effect.flip(stopRecording({ id, out }));

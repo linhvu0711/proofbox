@@ -942,7 +942,7 @@ describe("Recording and the Proof video", () => {
     expect(result.stdout).toBe(`${out}\n${join(dir, "proof-1.png")}\n`);
   });
 
-  it("a Recording where typing changed nothing on screen makes no video", async () => {
+  it("a Recording where typing changed nothing on screen makes a video", async () => {
     // Given: no window shows the letters
     const env = makeEnv({ docker: true });
     const created = await create(env);
@@ -961,7 +961,7 @@ describe("Recording and the Proof video", () => {
       join(dir, "typing.mp4"),
     ]);
     // Then
-    expect(result.exitCode).toBe(125);
+    expect(result.exitCode, result.stderr).toBe(0);
   });
 
   it("a Recording where nothing changed on screen makes no video", async () => {

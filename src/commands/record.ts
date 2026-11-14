@@ -281,14 +281,12 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       // An action can change too few pixels for freezedetect, such as one
       // letter or a small toolbar icon, so the time an action ran is never
-      // a Still part, for the check and the edit alike (ADR 0006).
+      // a Still part, and an action in the Recording is change enough
+      // (ADR 0006).
       const spans = actionSpans(acting, probe.duration);
-      if (
-        nothingChanged({
-          duration: check.duration,
-          freezes: withoutSpans(check.freezes, spans),
-        })
-      ) {
+      // Typing that ended before the Recording leaves a span at 0 only.
+      const acted = actions.length > 0 || spans.some(([, to]) => to > 0);
+      if (!acted && nothingChanged(check)) {
         return yield* new NothingChangedError({
           id: options.id,
           raw: `${info.dir}/raw.mkv`,
