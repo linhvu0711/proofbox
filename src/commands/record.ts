@@ -237,6 +237,8 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       const actions: number[] = [];
       const waits: { t: number; reason: string }[] = [];
       const acting: { kind: string; t: number }[] = [];
+      // Typing that began before the Recording and ended in it.
+      let typedInside = false;
       for (const line of actionLog.stdout.toString("utf8").split("\n")) {
         if (line.trim() === "") {
           continue;
@@ -258,6 +260,9 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           continue;
         }
         const t = Math.min(entry.t - info.start, probe.duration);
+        if (entry.kind === "typed") {
+          typedInside = true;
+        }
         // Typing went in above, with the typing from before the Recording.
         if (entry.kind !== "type" && entry.kind !== "typed") {
           acting.push({ kind: entry.kind, t });
@@ -284,8 +289,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       // a Still part, and an action in the Recording is change enough
       // (ADR 0006).
       const spans = actionSpans(acting, probe.duration);
-      // Typing that ended before the Recording leaves a span at 0 only.
-      const acted = actions.length > 0 || spans.some(([, to]) => to > 0);
+      // Only a line inside the Recording counts: a `type` line whose
+      // helper failed before its `typed` line stays open in the Action log
+      // for the Sandbox's life.
+      const acted = actions.length > 0 || typedInside;
       if (!acted && nothingChanged(check)) {
         return yield* new NothingChangedError({
           id: options.id,

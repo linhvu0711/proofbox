@@ -923,6 +923,42 @@ describe("record stop counts the Action log as change", () => {
   );
 
   effectIt.effect(
+    "record stop makes a Proof video from typing that began before the Recording and ended in it",
+    () =>
+      // Given: no seen change, and typing from 995 to 1002
+      onStoppedMac(
+        stillProbe,
+        '{"t":995,"kind":"type","x":0,"y":0}\n{"t":1002,"kind":"typed","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop refuses a Recording whose only typing line is an unclosed one from before it",
+    () =>
+      // Given: no seen change, and a type line from an earlier, failed type
+      onStoppedMac(
+        stillProbe,
+        '{"t":990,"kind":"type","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            const error = yield* Effect.flip(stopRecording({ id, out }));
+            // Then
+            expect(error.message).toBe(
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+            );
+          }),
+      ),
+  );
+
+  effectIt.effect(
     "record stop refuses a Recording whose Action log holds only Step marks and no change was seen",
     () =>
       // Given: the click Recording with its click taken out
