@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -18,7 +18,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { setMark } from "../src/commands/mark.ts";
 import { stopRecording } from "../src/commands/record.ts";
-import { CaptureBlockedError, NothingChangedError } from "../src/errors.ts";
+import {
+  CaptureBlockedError,
+  NothingChangedError,
+  ProviderError,
+} from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
@@ -86,15 +90,48 @@ const blockedMac = (root: string, blocked: string): Provider => {
   };
 };
 
-// A fake Mac whose Recording ran 300 s (start 1000, stop 1300) and whose
-// check (`probe`) answers with `probe`.
+// A fake Mac whose Recording ran 300 s (start 1000, stop 1300), whose check
+// (`probe`) answers with `probe`, and whose Action log holds `actionLog`;
+// a `null` Action log cannot be fetched. The Proof video builds and
+// downloads.
 const stoppingMac = (
   root: string,
   probe: Stream.Stream<ExecEvent>,
+  actionLog: string | null = "",
 ): Provider => {
   const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+  const dir = "/var/lib/proofbox/recordings/1";
   const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
-    const [, action] = argv;
+    const [, action, remote] = argv;
+    if (action === "fetch" && remote === "/var/lib/proofbox/action-log.jsonl") {
+      return actionLog === null
+        ? Stream.make(
+            {
+              _tag: "Stderr" as const,
+              bytes: new TextEncoder().encode("no such file"),
+            },
+            { _tag: "Exit" as const, code: 1 },
+          )
+        : Stream.make(
+            {
+              _tag: "Stdout" as const,
+              bytes: new TextEncoder().encode(actionLog),
+            },
+            { _tag: "Exit" as const, code: 0 },
+          );
+    }
+    if (action === "build") {
+      return Stream.make(
+        { _tag: "Stdout" as const, bytes: new TextEncoder().encode("1000") },
+        { _tag: "Exit" as const, code: 0 },
+      );
+    }
+    if (action === "fetch" && remote === `${dir}/proof.mp4`) {
+      return Stream.make(
+        { _tag: "Stdout" as const, bytes: PNG_HEAD },
+        { _tag: "Exit" as const, code: 0 },
+      );
+    }
     if (action === "stop") {
       return Stream.make(
         {
@@ -749,5 +786,151 @@ describe("Recording and the Proof video", () => {
         ),
       );
     },
+  );
+});
+
+describe("record stop counts the Action log as change", () => {
+  const StillProbe =
+    "Duration: 00:05:00.00\nlavfi.freezedetect.freeze_start: 0\n";
+  const ClickLog =
+    '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n' +
+    '{"t":1005,"kind":"click","x":720,"y":450}\n' +
+    '{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n';
+
+  // Runs `body` on a macos fake Sandbox from `stoppingMac` whose check
+  // answers `probe` and whose Action log holds `actionLog`.
+  const onStoppedMac = <A, E, R>(
+    probe: string,
+    actionLog: string | null,
+    body: (id: string, out: string) => Effect.Effect<A, E, R>,
+  ) => {
+    const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
+    tempRoots.push(root, runtime, dir);
+    const mac = stoppingMac(
+      root,
+      Stream.make(
+        { _tag: "Stdout" as const, bytes: new TextEncoder().encode(probe) },
+        { _tag: "Exit" as const, code: 0 },
+      ),
+      actionLog,
+    );
+    return Effect.gen(function* () {
+      const info = yield* mac.create({
+        os: "macos",
+        idle: Duration.minutes(5),
+        maxLife: Duration.hours(1),
+      });
+      return yield* body(`fake:${info.name}`, join(dir, "proof.mp4"));
+    }).pipe(
+      Effect.provide(layers(mac)),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+    );
+  };
+
+  const stdoutOf = Effect.gen(function* () {
+    const output = yield* CliOutput;
+    const stdout = yield* Ref.get(output.captured.out);
+    return Chunk.toReadonlyArray(stdout).join("");
+  });
+
+  effectIt.effect(
+    "record stop makes a Proof video when a click changed too little for the screen check",
+    () =>
+      // Given: a 300 s Recording with one freeze from 0 and no end, as a
+      // 44x24 switch flip gives, and one click between two Step marks
+      onStoppedMac(StillProbe, ClickLog, (id, out) =>
+        Effect.gen(function* () {
+          // When
+          yield* stopRecording({ id, out });
+          // Then
+          expect(yield* stdoutOf).toBe(`${out}\n`);
+        }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop makes a Proof video when a key started a page load under 1 s",
+    () =>
+      // Given: 0.467 s of seen change, right after a key
+      onStoppedMac(
+        "Duration: 00:05:00.00\nlavfi.freezedetect.freeze_start: 0\nlavfi.freezedetect.freeze_end: 5.033\nlavfi.freezedetect.freeze_start: 5.5\n",
+        '{"t":1004.6,"kind":"key","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop makes a Proof video from a right-click and Escape whose menu was never filmed",
+    () =>
+      // Given: no seen change, a right-click and an Escape in the Action log
+      onStoppedMac(
+        StillProbe,
+        '{"t":1001,"kind":"click","x":720,"y":450}\n{"t":1003,"kind":"key","x":0,"y":0}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop refuses a Recording whose Action log holds only Step marks and no change was seen",
+    () =>
+      // Given: the click Recording with its click taken out
+      onStoppedMac(
+        StillProbe,
+        '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            const error = yield* Effect.flip(stopRecording({ id, out }));
+            // Then
+            expect({
+              error: error instanceof NothingChangedError,
+              message: error.message,
+              video: existsSync(out),
+            }).toEqual({
+              error: true,
+              message: `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+              video: false,
+            });
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop fails with the helper error when the Action log cannot be fetched",
+    () =>
+      // Given: the click Recording, with an Action log that cannot be fetched
+      onStoppedMac(StillProbe, null, (id, out) =>
+        Effect.gen(function* () {
+          // When
+          const error = yield* Effect.flip(stopRecording({ id, out }));
+          // Then
+          expect({
+            error: error instanceof ProviderError,
+            message: error.message,
+            video: existsSync(out),
+          }).toEqual({
+            error: true,
+            message:
+              "Provider fake failed: Recording helper failed: no such file",
+            video: false,
+          });
+        }),
+      ),
   );
 });

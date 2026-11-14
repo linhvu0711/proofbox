@@ -220,12 +220,6 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         }
         check = parseProbe(again.stdout.toString("utf8"));
       }
-      if (nothingChanged(check)) {
-        return yield* new NothingChangedError({
-          id: options.id,
-          raw: `${info.dir}/raw.mkv`,
-        });
-      }
       const actionLog = yield* runHelper(
         options.id,
         RECORD_HELPER,
@@ -285,15 +279,24 @@ export const stopRecording = Effect.fn("record.stopRecording")(
           actions.push(t);
         }
       }
+      // An action can change too few pixels for freezedetect, such as one
+      // letter or a small toolbar icon, so the time an action ran is never
+      // a Still part, for the check and the edit alike (ADR 0006).
+      const spans = actionSpans(acting, probe.duration);
+      if (
+        nothingChanged({
+          duration: check.duration,
+          freezes: withoutSpans(check.freezes, spans),
+        })
+      ) {
+        return yield* new NothingChangedError({
+          id: options.id,
+          raw: `${info.dir}/raw.mkv`,
+        });
+      }
       const plan = planEdit({
         duration: probe.duration,
-        // An action can change too few pixels for freezedetect, such as one
-        // letter or a small toolbar icon, so the time an action ran is never
-        // a Still part (ADR 0006).
-        freezes: withoutSpans(
-          probe.freezes,
-          actionSpans(acting, probe.duration),
-        ),
+        freezes: withoutSpans(probe.freezes, spans),
         marks,
         clicks,
         actions,
