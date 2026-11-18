@@ -465,8 +465,12 @@ describe("ssh link", () => {
           user === "root" ? "root@127.0.0.1" : "runner@127.0.0.1",
         );
         expect(link.ssh).toContain(
-          `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
+          `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-o' 'ServerAliveInterval=10' '-o' 'ServerAliveCountMax=3' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
         );
+        // ... and the master carries keep-alive, so a stalled link ends in
+        // 30 to 40 s, not at the 120 s helper limit
+        expect(link.ssh).toContain("ServerAliveInterval=10");
+        expect(link.ssh).toContain("ServerAliveCountMax=3");
         expect(link.ssh).not.toContain("abc123def4567@ssh.iad4.namespace.so");
       }).pipe(
         Effect.scoped,

@@ -97,6 +97,17 @@ const linkWaitText = Config.string("PROOFBOX_NS_LINK_WAIT").pipe(
   Config.withDefault("120s"),
 );
 
+// A stalled link ends after three unanswered probes 10 s apart, 30 to 40
+// s in all: well inside the 120 s helper limit (ADR 0019), with room for
+// one lost answer. Both the master and the gateway hop carry it, since
+// either one can sit on the stalled path.
+const KEEP_ALIVE = [
+  "-o",
+  "ServerAliveInterval=10",
+  "-o",
+  "ServerAliveCountMax=3",
+] as const;
+
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
@@ -173,6 +184,7 @@ export const makeOpenLink = (
     `UserKnownHostsFile=${hosts}`,
     "-o",
     "LogLevel=ERROR",
+    ...KEEP_ALIVE,
     ...(proxy === undefined ? [] : ["-o", `ProxyCommand=${proxy}`]),
     target,
   ];
@@ -218,6 +230,7 @@ export const makeOpenLink = (
                 `UserKnownHostsFile=${paths.knownHosts}`,
                 "-o",
                 "LogLevel=ERROR",
+                ...KEEP_ALIVE,
                 "-W",
                 "127.0.0.1:22",
                 gateway,
