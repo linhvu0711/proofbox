@@ -15,6 +15,7 @@ import {
   LinuxSshdError,
   type ProviderError,
   type ProviderUnavailableError,
+  type SandboxGoneError,
   TokenExposedError,
 } from "../errors.ts";
 import { Progress } from "../progress.ts";
@@ -82,7 +83,11 @@ export interface LinuxHost extends NamespaceHost {
     link: Link,
     ref: SandboxRef,
     fingerprint: string,
-  ) => Effect.Effect<void, ProviderError | ProviderUnavailableError, Progress>;
+  ) => Effect.Effect<
+    void,
+    ProviderError | ProviderUnavailableError | SandboxGoneError,
+    Progress
+  >;
 }
 
 // A Linux host runs the Sandbox in one Docker container.
@@ -213,19 +218,28 @@ export const makeLinuxHost = (deps: {
           }
           return { exitCode, stdout, stderr };
         }),
-        Effect.mapError((error) => `docker exec failed: ${error.message}`),
+        // A gone Sandbox or a lost link keeps its own error and ends the
+        // tries; only a failed exec or start is worth one more go.
+        Effect.catchTag("ProviderError", (error) =>
+          Effect.fail(`docker exec failed: ${error.message}`),
+        ),
         Effect.filterOrFail(
           (result) => result.exitCode === 0 && result.stdout !== "",
           (result) => `x11vnc did not start: ${result.stderr.trim()}`,
         ),
         Effect.map((result) => result.stdout),
       );
-    const password = yield* Effect.retry(
-      startX11vnc,
-      Schedule.spaced(Duration.seconds(1)).pipe(
+    const password = yield* Effect.retry(startX11vnc, {
+      schedule: Schedule.spaced(Duration.seconds(1)).pipe(
         Schedule.upTo(Duration.seconds(10)),
       ),
-    ).pipe(Effect.mapError((error) => fail(describe(error))));
+      while: (error) => typeof error === "string",
+    }).pipe(
+      Effect.catchIf(
+        (error): error is string => typeof error === "string",
+        (error) => Effect.fail(fail(describe(error))),
+      ),
+    );
     yield* Effect.addFinalizer(() =>
       docker
         .execText(container, "app", [

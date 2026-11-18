@@ -2,6 +2,7 @@ import type { FileSystem } from "@effect/platform";
 import { Effect, type Scope } from "effect";
 import type { ChecksShell, Transport } from "../command-checks.ts";
 import {
+  type LinkDroppedError,
   ProviderError,
   type ProviderUnavailableError,
   platformReason,
@@ -40,7 +41,10 @@ export interface NamespaceHost {
     link: Link,
     ref: SandboxRef,
     seconds: number,
-  ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
+  ) => Effect.Effect<
+    HostResult,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
   // The shell the command run's checks are written in (ADR 0015).
   readonly checks: ChecksShell;
   // How one argv reaches the Sandbox over the host's link.
@@ -52,7 +56,10 @@ export interface NamespaceHost {
     ref: SandboxRef,
   ) => Effect.Effect<
     string,
-    ProviderError | ProviderUnavailableError,
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | LinkDroppedError,
     Scope.Scope
   >;
   // What create offers on this OS.
@@ -73,7 +80,7 @@ export interface NamespaceHost {
     made: MakeRequest,
   ) => Effect.Effect<
     SandboxInfo,
-    CreateError | SandboxGoneError,
+    CreateError | SandboxGoneError | LinkDroppedError,
     Progress | Scope.Scope
   >;
   // Where proofbox keeps its own files in the Sandbox.

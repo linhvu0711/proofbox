@@ -3,13 +3,14 @@ import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { formatTime } from "../format-time.ts";
 
-// The Keeper log (ADR 0019): one line per request, on the Caller's
-// machine. It names only the program, never the arguments, the input, or
-// the output, so a Secret in a command never lands in the file.
+// The Keeper log (ADR 0019): one line per request, and one each time the
+// Keeper opens its link to the Sandbox again, on the Caller's machine. It
+// names only the program, never the arguments, the input, or the output,
+// so a Secret in a command never lands in the file.
 
 export type KeeperLogEntry = {
   readonly at: Date;
-  readonly kind: "exec" | "info";
+  readonly kind: "exec" | "info" | "link";
   // "-" for an info request.
   readonly program: string;
   readonly out: number;

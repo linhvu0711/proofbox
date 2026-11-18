@@ -4,6 +4,7 @@ import { runCommand } from "../command-checks.ts";
 import {
   AnswerTimeoutError,
   KeeperLostError,
+  LinkDroppedError,
   ProviderError,
   SandboxGoneError,
   type UploadFailedError,
@@ -67,6 +68,7 @@ export interface KeeperExecOptions {
 
 export type KeeperExecError =
   | SandboxCallError
+  | LinkDroppedError
   | UploadFailedError
   | WorkFileGrewError
   | AnswerTimeoutError;
@@ -262,7 +264,10 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             Stream.mapEffect(
               (
                 frame,
-              ): Effect.Effect<ExecEvent, ProviderError | SandboxGoneError> => {
+              ): Effect.Effect<
+                ExecEvent,
+                ProviderError | SandboxGoneError | LinkDroppedError
+              > => {
                 if ("out" in frame) {
                   return Effect.succeed({
                     _tag: "Stdout",
@@ -291,6 +296,11 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                 }
                 if ("gone" in frame) {
                   return Effect.fail(new SandboxGoneError({ id: frame.gone }));
+                }
+                if ("dropped" in frame) {
+                  return Effect.fail(
+                    new LinkDroppedError({ reason: frame.dropped }),
+                  );
                 }
                 return Effect.fail(
                   new ProviderError({

@@ -27,6 +27,8 @@ export const ReplyFrame = Schema.Union(
   Schema.Struct({ fail: Schema.String }),
   // The Sandbox is gone; the id is the one its Provider names it by.
   Schema.Struct({ gone: Schema.String }),
+  // The link broke after the command was sent: it may have run.
+  Schema.Struct({ dropped: Schema.String }),
   Schema.Struct({ info: SandboxInfo }),
 );
 export type ReplyFrame = typeof ReplyFrame.Type;

@@ -31,9 +31,11 @@ import {
 import { execInSandbox } from "../src/commands/exec.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
+  LinkDroppedError,
   NotLoggedInError,
   ProviderLimitError,
   ProviderUnavailableError,
+  SandboxGoneError,
   TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
@@ -138,6 +140,8 @@ const fakeDocker = (options: {
   readonly pushed?: Array<string>;
   // What every `execStream` sends, such as the Live view's x11vnc start.
   readonly liveEvents?: ReadonlyArray<ExecEvent>;
+  // What every `execStream` fails with in place of its events.
+  readonly liveError?: SandboxGoneError | LinkDroppedError;
   // Collects the argv of every `execText`, joined by spaces.
   readonly execs?: Array<string>;
 }): DockerClient => {
@@ -201,9 +205,11 @@ const fakeDocker = (options: {
       return ok();
     },
     execStream: () =>
-      options.liveEvents === undefined
-        ? Stream.empty
-        : Stream.fromIterable(options.liveEvents),
+      options.liveError !== undefined
+        ? Stream.fail(options.liveError)
+        : options.liveEvents === undefined
+          ? Stream.empty
+          : Stream.fromIterable(options.liveEvents),
     inspect: () =>
       Effect.succeed(Option.some({ labels: { ...labels }, running: true })),
     listNames: Effect.succeed([]),
@@ -641,6 +647,57 @@ describe("Namespace Provider", () => {
         });
       }).pipe(Effect.scoped, runtimeConfig("us:abc123def4567")),
   );
+
+  for (const [name, liveError, expected] of [
+    [
+      "a Linux Live view whose link drops while it starts x11vnc fails link-lost",
+      new LinkDroppedError({
+        reason:
+          "Could not connect to Sandbox ns:us:abc123def4567 over SSH (the ssh link dropped mid-command). Try again in a minute.",
+      }),
+      {
+        _tag: "ProviderUnavailableError",
+        message:
+          "Could not connect to Sandbox ns:us:abc123def4567 over SSH (the ssh link dropped mid-command). Try again in a minute.",
+      },
+    ],
+    [
+      "a Linux Live view on a Sandbox deleted while it starts x11vnc fails gone",
+      new SandboxGoneError({ id: "ns:us:abc123def4567" }),
+      {
+        _tag: "SandboxGoneError",
+        message: "Sandbox ns:us:abc123def4567 is gone",
+      },
+    ],
+  ] as const) {
+    it.live(name, () =>
+      Effect.gen(function* () {
+        // Given
+        const paths = yield* keeperPaths({
+          provider: "ns",
+          name: "us:abc123def4567",
+        }).pipe(Effect.provide(NodeContext.layer));
+        writeFileSync(paths.os, "linux\n");
+        const provider = makeProvider(
+          yield* Ref.make<ReadonlyArray<string>>([]),
+          fakeDocker({ liveError }),
+          tenantRun,
+          {
+            forward: () => Effect.succeed({ port: 50124, gone: Effect.never }),
+          },
+        );
+        const liveView = provider.liveView;
+        // When
+        const error = yield* (
+          liveView === undefined
+            ? Effect.die("no liveView")
+            : liveView({ name: "abc123def4567", region: "us" })
+        ).pipe(Effect.scoped, Effect.flip);
+        // Then
+        expect({ _tag: error._tag, message: error.message }).toEqual(expected);
+      }).pipe(runtimeConfig("us:abc123def4567")),
+    );
+  }
 
   it.effect("closing the last Linux Live view stops x11vnc", () =>
     Effect.gen(function* () {

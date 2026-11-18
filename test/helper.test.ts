@@ -28,6 +28,7 @@ import {
 import { takeScreenshot } from "../src/commands/screenshot.ts";
 import { scrollAt } from "../src/commands/scroll.ts";
 import { typeText } from "../src/commands/type.ts";
+import { LinkDroppedError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { fetchHelper } from "../src/helper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -56,7 +57,9 @@ const tempDir = (prefix: string) => {
   return dir;
 };
 
-type Answer = (argv: ReadonlyArray<string>) => Stream.Stream<ExecEvent>;
+type Answer = (
+  argv: ReadonlyArray<string>,
+) => Stream.Stream<ExecEvent, LinkDroppedError>;
 
 // A fake Sandbox that reports itself as a Mac with a desktop, whose exec
 // gives each helper call the answer `answer` returns, and counts the calls.
@@ -366,6 +369,47 @@ describe("Helper call time limits", () => {
         // Then
         expect({ message: error.message, calls: sandbox.calls.exec }).toEqual({
           message: `Sandbox ${sandbox.id} did not answer the ${name} in 2 min. The ${name} may have happened; take a screenshot to check before you try again. Keeper log: ${sandbox.log}`,
+          calls: 1,
+        });
+      }),
+  );
+
+  const dropped = new LinkDroppedError({
+    reason:
+      "Could not connect to Sandbox x over SSH (the ssh link dropped mid-command). Try again in a minute.",
+  });
+
+  it.effect.each(actions)(
+    "an action cut off by a dropped link fails once and says it may have happened: $name",
+    ({ name, run }) =>
+      Effect.gen(function* () {
+        // Given: the link drops while every helper call runs
+        const sandbox = yield* macSandbox(() => Stream.fail(dropped));
+        // When
+        const error = yield* sandbox.provide(Effect.flip(run(sandbox.id)));
+        // Then
+        expect({ message: error.message, calls: sandbox.calls.exec }).toEqual({
+          message: `Lost the link to Sandbox ${sandbox.id} during the ${name}. The ${name} may have happened; take a screenshot to check before you try again. Keeper log: ${sandbox.log}`,
+          calls: 1,
+        });
+      }),
+  );
+
+  it.effect(
+    "a screenshot cut off by a dropped link keeps the link-lost text",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const sandbox = yield* macSandbox(() => Stream.fail(dropped));
+        const out = join(tempDir("proofbox-out-"), "s.png");
+        // When
+        const error = yield* sandbox.provide(
+          Effect.flip(takeScreenshot(sandbox.id, out)),
+        );
+        // Then
+        expect({ message: error.message, calls: sandbox.calls.exec }).toEqual({
+          message:
+            "Could not connect to Sandbox x over SSH (the ssh link dropped mid-command). Try again in a minute.",
           calls: 1,
         });
       }),

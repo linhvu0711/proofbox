@@ -127,7 +127,7 @@ The timed list of commands, Step marks, and Wait marks during a Recording, kept 
 _Avoid_: trace, event log
 
 **Keeper log**:
-The file on the Caller's machine where the Keeper writes one line per request: the program, how long it took, and how it ended, never the arguments, the input, or the output.
+The file on the Caller's machine where the Keeper writes one line per request, and one each time it opens its link to the Sandbox again: the program, how long it took, and how it ended, never the arguments, the input, or the output.
 _Avoid_: trace, debug log
 
 **Step mark**:

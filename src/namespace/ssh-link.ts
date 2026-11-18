@@ -3,11 +3,14 @@ import { dirname, join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Chunk,
+  Clock,
   Config,
   Data,
   Deferred,
+  Duration,
   Effect,
   Exit,
+  Option,
   Ref,
   Schedule,
   Scope,
@@ -16,11 +19,13 @@ import {
 import { commandEvents } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
+  LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
   platformReason,
   SandboxGoneError,
 } from "../errors.ts";
+import { writeKeeperLog } from "../keeper/keeper-log.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
@@ -41,12 +46,26 @@ export interface Link {
   readonly ssh: ReadonlyArray<string>;
   readonly run: (
     commandLine: string,
-  ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
+  ) => Effect.Effect<
+    HostResult,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
   readonly stream: (
     commandLine: string,
     options?: ExecOptions,
-  ) => Stream.Stream<ExecEvent, ProviderError | ProviderUnavailableError>;
+  ) => Stream.Stream<
+    ExecEvent,
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | LinkDroppedError
+  >;
 }
+
+type LinkUp = Effect.Effect<
+  void,
+  ProviderError | ProviderUnavailableError | SandboxGoneError
+>;
 
 export type LinkOwner = "keeper" | "cli";
 // Where a link goes: the Namespace gateway itself, or the host's own sshd,
@@ -81,6 +100,17 @@ const lastLine = (text: string) => {
 const linkWaitText = Config.string("PROOFBOX_NS_LINK_WAIT").pipe(
   Config.withDefault("120s"),
 );
+
+// A stalled link ends after three unanswered probes 10 s apart, 30 to 40
+// s in all: well inside the 120 s helper limit (ADR 0019), with room for
+// one lost answer. Both the master and the gateway hop carry it, since
+// either one can sit on the stalled path.
+const KEEP_ALIVE = [
+  "-o",
+  "ServerAliveInterval=10",
+  "-o",
+  "ServerAliveCountMax=3",
+] as const;
 
 const describe = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -158,6 +188,7 @@ export const makeOpenLink = (
     `UserKnownHostsFile=${hosts}`,
     "-o",
     "LogLevel=ERROR",
+    ...KEEP_ALIVE,
     ...(proxy === undefined ? [] : ["-o", `ProxyCommand=${proxy}`]),
     target,
   ];
@@ -203,73 +234,96 @@ export const makeOpenLink = (
                 `UserKnownHostsFile=${paths.knownHosts}`,
                 "-o",
                 "LogLevel=ERROR",
+                ...KEEP_ALIVE,
                 "-W",
                 "127.0.0.1:22",
                 gateway,
               ]),
             )
           : sshBase(ctl, key, paths.knownHosts, gateway);
-      const runWith = (ssh: ReadonlyArray<string>) => (commandLine: string) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            // An empty stdin, as in commandEvents: ssh forwards an open
-            // pipe, and a remote command that reads it would wait forever.
-            const process = yield* Command.start(
-              Command.stdin(
-                Command.make(sshBin, ...ssh, commandLine),
-                Stream.empty,
-              ),
-            ).pipe(
-              Effect.provideService(CommandExecutor.CommandExecutor, executor),
-              Effect.mapError((error) => sshError(error)),
-            );
-            const [outBytes, errBytes, exitCode] = yield* Effect.all(
-              [
-                Stream.runCollect(process.stdout),
-                Stream.runCollect(process.stderr),
-                process.exitCode,
-              ],
-              { concurrency: "unbounded" },
-            ).pipe(
-              Effect.mapError(
-                (error) =>
-                  new ProviderError({
-                    provider: "namespace",
-                    reason: describe(error),
-                  }),
-              ),
-            );
-            const stderr = toText(errBytes);
-            if (exitCode === 255) {
-              return stderr.includes("Host key verification failed")
-                ? yield* hostKeyRefused(ref)
-                : yield* linkLost(ref, lastLine(stderr));
-            }
-            return {
-              exitCode,
-              stdout: toText(outBytes),
-              stderr,
-            } satisfies HostResult;
-          }),
-        );
+      // `up` makes sure the master is there before a command spawns: a
+      // command on a dead master falls back to a new double ssh
+      // connection, 5 to 14 s each (#259).
+      const runWith =
+        (ssh: ReadonlyArray<string>, up: LinkUp) => (commandLine: string) =>
+          Effect.zipRight(
+            up,
+            Effect.scoped(
+              Effect.gen(function* () {
+                // An empty stdin, as in commandEvents: ssh forwards an open
+                // pipe, and a remote command that reads it would wait forever.
+                const process = yield* Command.start(
+                  Command.stdin(
+                    Command.make(sshBin, ...ssh, commandLine),
+                    Stream.empty,
+                  ),
+                ).pipe(
+                  Effect.provideService(
+                    CommandExecutor.CommandExecutor,
+                    executor,
+                  ),
+                  Effect.mapError((error) => sshError(error)),
+                );
+                const [outBytes, errBytes, exitCode] = yield* Effect.all(
+                  [
+                    Stream.runCollect(process.stdout),
+                    Stream.runCollect(process.stderr),
+                    process.exitCode,
+                  ],
+                  { concurrency: "unbounded" },
+                ).pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new ProviderError({
+                        provider: "namespace",
+                        reason: describe(error),
+                      }),
+                  ),
+                );
+                const stderr = toText(errBytes);
+                if (exitCode === 255) {
+                  return stderr.includes("Host key verification failed")
+                    ? yield* hostKeyRefused(ref)
+                    : yield* linkLost(ref, lastLine(stderr));
+                }
+                return {
+                  exitCode,
+                  stdout: toText(outBytes),
+                  stderr,
+                } satisfies HostResult;
+              }),
+            ),
+          );
       const streamWith =
-        (ssh: ReadonlyArray<string>) =>
+        (ssh: ReadonlyArray<string>, up: LinkUp) =>
         (commandLine: string, options?: ExecOptions) =>
-          commandEvents<ProviderError | ProviderUnavailableError>(
-            executor,
-            Command.make(sshBin, "-T", ...ssh, commandLine),
-            options,
-            {
-              spawn: sshError,
-              fail: (reason) =>
-                new ProviderError({ provider: "namespace", reason }),
-              exit: (code) =>
-                code === 255
-                  ? Effect.fail(
-                      linkLost(ref, "the ssh link dropped mid-command"),
-                    )
-                  : Effect.succeed(code),
-            },
+          Stream.unwrap(
+            Effect.as(
+              up,
+              commandEvents<
+                ProviderError | ProviderUnavailableError | LinkDroppedError
+              >(
+                executor,
+                Command.make(sshBin, "-T", ...ssh, commandLine),
+                options,
+                {
+                  spawn: sshError,
+                  fail: (reason) =>
+                    new ProviderError({ provider: "namespace", reason }),
+                  exit: (code) =>
+                    code === 255
+                      ? Effect.fail(
+                          new LinkDroppedError({
+                            reason: linkLost(
+                              ref,
+                              "the ssh link dropped mid-command",
+                            ).reason,
+                          }),
+                        )
+                      : Effect.succeed(code),
+                },
+              ),
+            ),
           );
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
@@ -292,8 +346,8 @@ export const makeOpenLink = (
           const ssh = sshFor(paths.control, keeperKey, stored);
           return {
             ssh,
-            run: runWith(ssh),
-            stream: streamWith(ssh),
+            run: runWith(ssh, Effect.void),
+            stream: streamWith(ssh, Effect.void),
           } satisfies Link;
         }
       }
@@ -313,8 +367,8 @@ export const makeOpenLink = (
         const ssh = sshFor(paths.control, keeperKey, gateway);
         return {
           ssh,
-          run: runWith(ssh),
-          stream: streamWith(ssh),
+          run: runWith(ssh, Effect.void),
+          stream: streamWith(ssh, Effect.void),
         } satisfies Link;
       }
       const ctl =
@@ -368,16 +422,13 @@ export const makeOpenLink = (
         fs.remove(key, { force: true }).pipe(Effect.ignore),
       );
       const ssh = sshFor(ctl, key, gateway);
-      const run = runWith(ssh);
-      const stream = streamWith(ssh);
-      if (yield* checkCtl(ctl, target)) {
-        return { ssh, run, stream } satisfies Link;
-      }
       // A master that died mid-attempt can leave its socket file; each
       // attempt runs in its own scope so a failure drops the half-built
       // master before the next try. On success the attempt's scope is
-      // parked on the caller's scope so the master lives until then.
+      // parked on the caller's scope so the master lives until then, and
+      // held so a reopen can drop the dead one first.
       const outerScope = yield* Scope.Scope;
+      const held = yield* Ref.make(Option.none<Scope.CloseableScope>());
       const bringup = Effect.gen(function* () {
         const attemptScope = yield* Scope.make();
         return yield* Effect.gen(function* () {
@@ -447,9 +498,13 @@ export const makeOpenLink = (
             Scope.close(attemptScope, Exit.fail("attempt failed")),
           ),
           Effect.tap(() =>
-            Scope.addFinalizer(
-              outerScope,
-              Scope.close(attemptScope, Exit.void),
+            Ref.set(held, Option.some(attemptScope)).pipe(
+              Effect.zipRight(
+                Scope.addFinalizer(
+                  outerScope,
+                  Scope.close(attemptScope, Exit.void),
+                ),
+              ),
             ),
           ),
         );
@@ -504,15 +559,67 @@ export const makeOpenLink = (
             new ProviderError({ provider: "namespace", reason: error.message }),
         ),
       );
-      yield* Effect.retry(attempt, {
-        while: (error) => error instanceof LinkDownError,
-        schedule: Schedule.spaced("1 second").pipe(Schedule.upTo(linkWait)),
-      }).pipe(
-        Effect.catchTag("LinkDownError", (error) =>
-          Effect.fail(linkLost(ref, error.detail)),
-        ),
+      const open = (wait: Duration.Duration) =>
+        Effect.retry(attempt, {
+          while: (error) => error instanceof LinkDownError,
+          schedule: Schedule.spaced("1 second").pipe(Schedule.upTo(wait)),
+        }).pipe(
+          Effect.catchTag("LinkDownError", (error) =>
+            Effect.fail(linkLost(ref, error.detail)),
+          ),
+        );
+      // A reopen runs inside a command's 120 s helper limit (ADR 0019): a
+      // command can wait behind one failed reopen and then run its own,
+      // and each can run one 15 s bring-up past its budget, so two must
+      // fit.
+      const reopenWait = Duration.min(linkWait, Duration.seconds(20));
+      // One reopen at a time: two would each remove the other's socket.
+      const permit = yield* Effect.makeSemaphore(1);
+      const reopen: LinkUp = permit.withPermits(1)(
+        Effect.gen(function* () {
+          if (yield* checkCtl(ctl, target)) {
+            return;
+          }
+          // The old attempt's release sends `-O exit` on `ctl`, so it must
+          // run before a new master binds there.
+          const dead = yield* Ref.getAndSet(held, Option.none());
+          if (Option.isSome(dead)) {
+            yield* Scope.close(dead.value, Exit.void);
+          }
+          const start = yield* Clock.currentTimeMillis;
+          yield* open(reopenWait);
+          if (owner === "keeper") {
+            const now = yield* Clock.currentTimeMillis;
+            yield* writeKeeperLog(paths.log, {
+              at: new Date(now),
+              kind: "link",
+              program: "reopen",
+              out: 0,
+              err: 0,
+              exit: undefined,
+              firstMs: undefined,
+              tookMs: now - start,
+              ended: "done",
+            }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+          }
+        }),
       );
-      return { ssh, run, stream } satisfies Link;
+      if (yield* checkCtl(ctl, target)) {
+        // A master another process left on the Keeper's socket, as a Keeper
+        // killed with SIGKILL leaves it.
+        const up = owner === "keeper" ? reopen : Effect.void;
+        return {
+          ssh,
+          run: runWith(ssh, up),
+          stream: streamWith(ssh, up),
+        } satisfies Link;
+      }
+      yield* open(linkWait);
+      return {
+        ssh,
+        run: runWith(ssh, reopen),
+        stream: streamWith(ssh, reopen),
+      } satisfies Link;
     });
 };
 

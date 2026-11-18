@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -11,12 +12,24 @@ import { join } from "node:path";
 import { CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { ConfigProvider, Effect, Ref } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Fiber,
+  Ref,
+  Schedule,
+  type Scope,
+  Stream,
+} from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { keeperPaths } from "../src/keeper/paths.ts";
-import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
+import type {
+  InstanceListed,
+  NamespaceApi,
+} from "../src/namespace/namespace-api.ts";
 import { makeOpenLink, makeSshForward } from "../src/namespace/ssh-link.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
+import { fakeSshMaster, openKeeperLink } from "./support/fake-ssh.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 const PEM = Buffer.from(
@@ -453,8 +466,12 @@ describe("ssh link", () => {
           user === "root" ? "root@127.0.0.1" : "runner@127.0.0.1",
         );
         expect(link.ssh).toContain(
-          `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
+          `ProxyCommand='${fake.path}' '-i' '${sshKey}' '-o' 'BatchMode=yes' '-o' 'StrictHostKeyChecking=yes' '-o' 'UserKnownHostsFile=${paths.knownHosts}' '-o' 'LogLevel=ERROR' '-o' 'ServerAliveInterval=10' '-o' 'ServerAliveCountMax=3' '-W' '127.0.0.1:22' 'abc123def4567@ssh.iad4.namespace.so'`,
         );
+        // ... and the master carries keep-alive, so a stalled link ends in
+        // 30 to 40 s, not at the 120 s helper limit
+        expect(link.ssh).toContain("ServerAliveInterval=10");
+        expect(link.ssh).toContain("ServerAliveCountMax=3");
         expect(link.ssh).not.toContain("abc123def4567@ssh.iad4.namespace.so");
       }).pipe(
         Effect.scoped,
@@ -465,4 +482,216 @@ describe("ssh link", () => {
       );
     });
   }
+});
+
+describe("Keeper link reopen", () => {
+  afterEach(() => {
+    cleanupEnvs();
+  });
+
+  const here: ReadonlyArray<InstanceListed> = [
+    { id: "abc123def4567", labels: {} },
+  ];
+
+  const inSandbox = <A, E>(
+    runtime: string,
+    effect: Effect.Effect<A, E, Scope.Scope | NodeContext.NodeContext>,
+  ) =>
+    effect.pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(
+          new Map([
+            ["PROOFBOX_RUNTIME_DIR", runtime],
+            ["PROOFBOX_NS_LINK_WAIT", "0s"],
+          ]),
+        ),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+
+  const tempDirs = () => {
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-ssh-"));
+    trackTempDir(dir);
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    trackTempDir(runtime);
+    return { dir, runtime };
+  };
+
+  it.live(
+    "a Keeper link whose master died opens a new master on the next run",
+    () => {
+      const { dir, runtime } = tempDirs();
+      const fake = fakeSshMaster(dir);
+      return inSandbox(
+        runtime,
+        Effect.gen(function* () {
+          // Given: a Keeper link whose first run went over its master
+          const { link } = yield* openKeeperLink(fake, here);
+          yield* link.run("true");
+          // When: the master drops
+          rmSync(join(dir, "alive"));
+          const result = yield* link.run("true");
+          // Then
+          expect({ masterStarts: fake.masterStarts(), result }).toEqual({
+            masterStarts: 2,
+            result: { exitCode: 0, stdout: "ok\n", stderr: "" },
+          });
+        }),
+      );
+    },
+  );
+
+  it.live(
+    "a Keeper link that cannot open again fails link-lost, and the next run tries again",
+    () => {
+      const { dir, runtime } = tempDirs();
+      const fake = fakeSshMaster(dir);
+      return inSandbox(
+        runtime,
+        Effect.gen(function* () {
+          // Given
+          const { link } = yield* openKeeperLink(fake, here);
+          yield* link.run("true");
+          // When: the master drops and the gateway does not answer
+          rmSync(join(dir, "alive"));
+          writeFileSync(join(dir, "refuse"), "");
+          const first = yield* Effect.flip(link.run("true"));
+          yield* Effect.flip(link.run("true"));
+          // Then
+          expect({
+            first: first.message,
+            masterStarts: fake.masterStarts(),
+          }).toEqual({
+            first:
+              "Could not connect to Sandbox ns:us:abc123def4567 over SSH (ssh: connect to host ssh.iad4.namespace.so port 22: Operation timed out). Try again in a minute.",
+            masterStarts: 3,
+          });
+        }),
+      );
+    },
+  );
+
+  it.live(
+    "a Keeper link whose Sandbox was deleted while it was down fails gone",
+    () => {
+      const { dir, runtime } = tempDirs();
+      const fake = fakeSshMaster(dir);
+      return inSandbox(
+        runtime,
+        Effect.gen(function* () {
+          // Given: the Namespace list no longer holds the Sandbox
+          const { link } = yield* openKeeperLink(fake, []);
+          yield* link.run("true");
+          // When
+          rmSync(join(dir, "alive"));
+          writeFileSync(join(dir, "refuse"), "");
+          const error = yield* Effect.flip(link.run("true"));
+          // Then
+          expect({ _tag: error._tag, message: error.message }).toEqual({
+            _tag: "SandboxGoneError",
+            message: "Sandbox ns:us:abc123def4567 is gone",
+          });
+        }),
+      );
+    },
+  );
+
+  it.live("a Keeper link logs one line each time it opens again", () => {
+    const { dir, runtime } = tempDirs();
+    const fake = fakeSshMaster(dir);
+    return inSandbox(
+      runtime,
+      Effect.gen(function* () {
+        // Given
+        const { link, paths } = yield* openKeeperLink(fake, here);
+        // When: the master drops twice
+        yield* link.run("true");
+        rmSync(join(dir, "alive"));
+        yield* link.run("true");
+        rmSync(join(dir, "alive"));
+        yield* link.run("true");
+        // Then
+        const lines = readFileSync(paths.log, "utf8")
+          .trimEnd()
+          .split("\n")
+          .map((line) => {
+            const fields = line.split(" ");
+            return [...fields.slice(1, 7), fields.at(-1)];
+          });
+        expect(lines).toEqual([
+          ["link", "reopen", "out=0", "err=0", "exit=-", "first=-", "done"],
+          ["link", "reopen", "out=0", "err=0", "exit=-", "first=-", "done"],
+        ]);
+      }),
+    );
+  });
+
+  it.live(
+    "a Keeper link command cut off mid-way fails as a dropped link",
+    () => {
+      const { dir, runtime } = tempDirs();
+      const fake = fakeSshMaster(dir);
+      return inSandbox(
+        runtime,
+        Effect.gen(function* () {
+          // Given: the master goes on answering, and the command's own ssh
+          // exits 255 as a mux client does when its master dies
+          const { link } = yield* openKeeperLink(fake, here);
+          writeFileSync(join(dir, "cut"), "");
+          // When
+          const error = yield* Effect.flip(
+            Stream.runDrain(link.stream("true")),
+          );
+          // Then
+          expect({
+            tag: error._tag,
+            message: error.message,
+            plainCalls: fake.plainCalls(),
+          }).toEqual({
+            tag: "LinkDroppedError",
+            message:
+              "Could not connect to Sandbox ns:us:abc123def4567 over SSH (the ssh link dropped mid-command). Try again in a minute.",
+            plainCalls: 1,
+          });
+        }),
+      );
+    },
+  );
+
+  it.live("two runs on a dropped Keeper link open it once", () => {
+    const { dir, runtime } = tempDirs();
+    const fake = fakeSshMaster(dir);
+    return inSandbox(
+      runtime,
+      Effect.gen(function* () {
+        // Given: a new master waits for `go` between its start and its socket
+        const { link } = yield* openKeeperLink(fake, here);
+        yield* link.run("true");
+        writeFileSync(join(dir, "hold"), "");
+        // When: two runs find the master dropped at once
+        rmSync(join(dir, "alive"));
+        const runs = yield* Effect.fork(
+          Effect.all([link.run("true"), link.run("true")], {
+            concurrency: "unbounded",
+          }),
+        );
+        yield* Effect.sync(() => fake.masterStarts() >= 2).pipe(
+          Effect.repeat({
+            until: (started) => started,
+            schedule: Schedule.spaced("20 millis"),
+          }),
+          Effect.timeout("10 seconds"),
+        );
+        yield* Effect.sleep("300 millis");
+        writeFileSync(join(dir, "go"), "");
+        const results = yield* Fiber.join(runs);
+        // Then
+        expect({
+          masterStarts: fake.masterStarts(),
+          results: results.map((result) => result.stdout),
+        }).toEqual({ masterStarts: 2, results: ["ok\n", "ok\n"] });
+      }),
+    );
+  });
 });

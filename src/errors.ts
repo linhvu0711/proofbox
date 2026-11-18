@@ -565,6 +565,28 @@ export class NoAnswerError extends Data.TaggedError("NoAnswerError")<{
   }
 }
 
+// The link to the Sandbox broke after a command was sent, so the command
+// may or may not have run there. A link that never opened is a
+// ProviderUnavailableError instead: the command surely did not run.
+export class LinkDroppedError extends Data.TaggedError("LinkDroppedError")<{
+  readonly reason: string;
+}> {
+  get message() {
+    return this.reason;
+  }
+}
+
+// A call that changes something lost its link while it ran (ADR 0019).
+export class ActCutOffError extends Data.TaggedError("ActCutOffError")<{
+  readonly id: string;
+  readonly call: string;
+  readonly log: string;
+}> {
+  get message() {
+    return `Lost the link to Sandbox ${this.id} during the ${this.call}. The ${this.call} may have happened; take a screenshot to check before you try again. Keeper log: ${this.log}`;
+  }
+}
+
 export class NoSuchProviderError extends Data.TaggedError(
   "NoSuchProviderError",
 )<{

@@ -2,7 +2,9 @@ import { FileSystem } from "@effect/platform";
 import { Config, Duration, Effect, Exit, Stream } from "effect";
 import { parseSpan } from "./deadline.ts";
 import {
+  ActCutOffError,
   type AnswerTimeoutError,
+  LinkDroppedError,
   MissingCapabilityError,
   NoAnswerError,
   OutFileError,
@@ -122,6 +124,18 @@ const withHelperLimit = Effect.fn("helper.withHelperLimit")(function* <A, E, R>(
       return yield* attempt({ whole }).pipe(
         Effect.catchTag("AnswerTimeoutError", () =>
           Effect.fail(noAnswer("act", whole)),
+        ),
+        // `E` is open here, so `catchTag` cannot narrow it.
+        Effect.catchIf(
+          (error) => error instanceof LinkDroppedError,
+          () =>
+            Effect.fail(
+              new ActCutOffError({
+                id: rawId,
+                call: limit.name,
+                log: paths.log,
+              }),
+            ),
         ),
       );
     }

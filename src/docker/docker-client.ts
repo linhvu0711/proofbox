@@ -1,7 +1,13 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Option, Stream } from "effect";
 import { commandEvents } from "../command-events.ts";
-import { ProviderError, ProviderUnavailableError } from "../errors.ts";
+import {
+  type LinkDroppedError,
+  ProviderError,
+  ProviderUnavailableError,
+  type SandboxGoneError,
+} from "../errors.ts";
+import type { Link } from "../namespace/ssh-link.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
 
@@ -42,7 +48,10 @@ export interface DockerClient {
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
     user?: "app" | "root",
-  ) => Stream.Stream<ExecEvent, DockerError>;
+  ) => Stream.Stream<
+    ExecEvent,
+    DockerError | SandboxGoneError | LinkDroppedError
+  >;
   readonly inspect: (
     container: string,
   ) => Effect.Effect<Option.Option<DockerInspection>, DockerError>;
@@ -70,7 +79,9 @@ const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
 
 export const makeDockerClient = (
   executor: CommandExecutor.CommandExecutor,
-  remote?: { readonly ssh: ReadonlyArray<string> },
+  // A Namespace host's link: every docker line but a build goes through
+  // its `run` and `stream`, which open the link again when it dropped.
+  remote?: Link,
 ): DockerClient => {
   const provider = remote === undefined ? "docker" : "namespace";
   const linkLost = (detail: string) =>
@@ -110,17 +121,24 @@ export const makeDockerClient = (
   const capture = (
     argv: ReadonlyArray<string>,
   ): Effect.Effect<DockerExecResult, DockerError> =>
+    remote !== undefined
+      ? remote
+          .run(shellJoin(["docker", ...argv]))
+          .pipe(
+            Effect.catchTag("SandboxGoneError", (error) =>
+              Effect.fail(fail(error.message)),
+            ),
+          )
+      : captureLocal(argv);
+
+  const captureLocal = (
+    argv: ReadonlyArray<string>,
+  ): Effect.Effect<DockerExecResult, DockerError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const command =
-          remote === undefined
-            ? Command.make("docker", ...argv)
-            : Command.make(
-                "ssh",
-                ...remote.ssh,
-                shellJoin(["docker", ...argv]),
-              );
-        const process = yield* Command.start(command).pipe(
+        const process = yield* Command.start(
+          Command.make("docker", ...argv),
+        ).pipe(
           Effect.provideService(CommandExecutor.CommandExecutor, executor),
           Effect.mapError((error) => spawnError(error)),
         );
@@ -132,15 +150,11 @@ export const makeDockerClient = (
           ],
           { concurrency: "unbounded" },
         ).pipe(Effect.mapError((error) => fail(describe(error))));
-        const result = {
+        return {
           exitCode,
           stdout: toText(outBytes),
           stderr: toText(errBytes),
         } satisfies DockerExecResult;
-        if (remote !== undefined && exitCode === 255) {
-          return yield* linkLost(tail(result.stderr, 3));
-        }
-        return result;
       }),
     );
 
@@ -253,7 +267,10 @@ export const makeDockerClient = (
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
     user: "app" | "root" = "app",
-  ): Stream.Stream<ExecEvent, DockerError> => {
+  ): Stream.Stream<
+    ExecEvent,
+    DockerError | SandboxGoneError | LinkDroppedError
+  > => {
     const dockerExec = [
       "exec",
       ...(options?.stdin === undefined ? [] : ["-i"]),
@@ -264,25 +281,14 @@ export const makeDockerClient = (
       container,
       ...argv,
     ];
+    if (remote !== undefined) {
+      return remote.stream(shellJoin(["docker", ...dockerExec]), options);
+    }
     return commandEvents<DockerError>(
       executor,
-      remote === undefined
-        ? Command.make("docker", ...dockerExec)
-        : Command.make(
-            "ssh",
-            "-T",
-            ...remote.ssh,
-            shellJoin(["docker", ...dockerExec]),
-          ),
+      Command.make("docker", ...dockerExec),
       options,
-      {
-        spawn: spawnError,
-        fail,
-        exit: (code) =>
-          remote !== undefined && code === 255
-            ? Effect.fail(linkLost("the ssh link dropped mid-command"))
-            : Effect.succeed(code),
-      },
+      { spawn: spawnError, fail, exit: (code) => Effect.succeed(code) },
     );
   };
 
