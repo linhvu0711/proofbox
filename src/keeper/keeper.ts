@@ -12,7 +12,11 @@ import {
   Stream,
 } from "effect";
 import { runCommand } from "../command-checks.ts";
-import { ProviderError, SandboxGoneError } from "../errors.ts";
+import {
+  LinkDroppedError,
+  ProviderError,
+  SandboxGoneError,
+} from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
 import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
@@ -200,7 +204,9 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                       socket,
                       error instanceof SandboxGoneError
                         ? { gone: error.id }
-                        : { fail: failText(error) },
+                        : error instanceof LinkDroppedError
+                          ? { dropped: error.reason }
+                          : { fail: failText(error) },
                     ),
                   ),
                   Effect.orElseSucceed(() => undefined),

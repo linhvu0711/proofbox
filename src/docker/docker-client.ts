@@ -2,6 +2,7 @@ import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Option, Stream } from "effect";
 import { commandEvents } from "../command-events.ts";
 import {
+  type LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
   type SandboxGoneError,
@@ -47,7 +48,10 @@ export interface DockerClient {
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
     user?: "app" | "root",
-  ) => Stream.Stream<ExecEvent, DockerError | SandboxGoneError>;
+  ) => Stream.Stream<
+    ExecEvent,
+    DockerError | SandboxGoneError | LinkDroppedError
+  >;
   readonly inspect: (
     container: string,
   ) => Effect.Effect<Option.Option<DockerInspection>, DockerError>;
@@ -263,7 +267,10 @@ export const makeDockerClient = (
     argv: ReadonlyArray<string>,
     options?: ExecOptions,
     user: "app" | "root" = "app",
-  ): Stream.Stream<ExecEvent, DockerError | SandboxGoneError> => {
+  ): Stream.Stream<
+    ExecEvent,
+    DockerError | SandboxGoneError | LinkDroppedError
+  > => {
     const dockerExec = [
       "exec",
       ...(options?.stdin === undefined ? [] : ["-i"]),

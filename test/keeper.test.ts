@@ -26,7 +26,11 @@ import {
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
-import { ProviderError, ProviderUnavailableError } from "../src/errors.ts";
+import {
+  LinkDroppedError,
+  ProviderError,
+  ProviderUnavailableError,
+} from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
@@ -1529,6 +1533,62 @@ describe("Keeper", () => {
       }).toEqual({ ended: "error: ProviderError", secret: false });
     }).pipe(runtimeConfig(env));
   });
+
+  it.scoped(
+    "a command cut off by a dropped link reaches the Caller as a dropped link",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a Provider whose exec loses its link mid-command
+        const fake = makeFakeProvider({
+          fs: nodeFs,
+          root: env.root,
+          watch: "none",
+        });
+        const info = yield* fake
+          .create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          })
+          .pipe(Effect.provideService(Progress, noProgress));
+        const dropping: Provider = {
+          ...fake,
+          connect: (ref) =>
+            Effect.map(fake.connect(ref), (connection) =>
+              withCall(connection, () =>
+                Stream.fail(
+                  new LinkDroppedError({
+                    reason: "the ssh link dropped mid-command",
+                  }),
+                ),
+              ),
+            ),
+        };
+        const id = `fake:${info.name}`;
+        const layers = yield* startKeeper(id, dropping);
+        // When
+        const error = yield* execInSandbox(id, ["true"]).pipe(
+          Effect.provide(layers),
+          Effect.flip,
+        );
+        // Then
+        const log = readFileSync(
+          join(env.runtime, `fake-${info.name}.log`),
+          "utf8",
+        );
+        expect({
+          tag: error._tag,
+          message: error.message,
+          ended: log.trimEnd().split(" ").slice(-2).join(" "),
+        }).toEqual({
+          tag: "LinkDroppedError",
+          message: "the ssh link dropped mid-command",
+          ended: "error: LinkDroppedError",
+        });
+      }).pipe(runtimeConfig(env));
+    },
+  );
 
   it.scoped("the Keeper writes one log line per request", () => {
     const env = makeEnv();

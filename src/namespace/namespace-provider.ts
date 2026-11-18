@@ -724,9 +724,9 @@ export const makeNamespaceProvider = (deps: {
         maxLifeAt: new Date(maxLifeSeconds * 1000),
       });
     }).pipe(
-      // A host that vanishes mid-create is a Provider error, not a gone
-      // Sandbox — the id was never handed out.
-      Effect.catchTag("SandboxGoneError", (error) =>
+      // A host that vanishes or drops its link mid-create is a Provider
+      // error, not a gone Sandbox — the id was never handed out.
+      Effect.catchTag("SandboxGoneError", "LinkDroppedError", (error) =>
         Effect.fail(fail(error.message)),
       ),
       Effect.onError(() => Effect.ignoreLogged(cleanup)),
@@ -799,7 +799,18 @@ export const makeNamespaceProvider = (deps: {
   ) {
     const host = yield* hostOf(ref);
     const link = yield* openLink(ref, "cli", host);
-    const password = yield* host.livePassword(link, ref);
+    // Reading the password changes nothing, so a cut-off read is a plain
+    // link-lost error the Caller may try again.
+    const password = yield* host.livePassword(link, ref).pipe(
+      Effect.catchTag("LinkDroppedError", (error) =>
+        Effect.fail(
+          new ProviderUnavailableError({
+            provider: "namespace",
+            reason: error.reason,
+          }),
+        ),
+      ),
+    );
     const live = yield* forward(ref, 5900);
     return {
       address: `127.0.0.1:${live.port}`,

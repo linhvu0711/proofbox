@@ -2,6 +2,7 @@ import type { FileSystem } from "@effect/platform";
 import { Effect, type Scope } from "effect";
 import type { ChecksShell, Transport } from "../command-checks.ts";
 import {
+  type LinkDroppedError,
   ProviderError,
   type ProviderUnavailableError,
   platformReason,
@@ -55,7 +56,10 @@ export interface NamespaceHost {
     ref: SandboxRef,
   ) => Effect.Effect<
     string,
-    ProviderError | ProviderUnavailableError | SandboxGoneError,
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | LinkDroppedError,
     Scope.Scope
   >;
   // What create offers on this OS.
@@ -76,7 +80,7 @@ export interface NamespaceHost {
     made: MakeRequest,
   ) => Effect.Effect<
     SandboxInfo,
-    CreateError | SandboxGoneError,
+    CreateError | SandboxGoneError | LinkDroppedError,
     Progress | Scope.Scope
   >;
   // Where proofbox keeps its own files in the Sandbox.

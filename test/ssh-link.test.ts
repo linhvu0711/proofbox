@@ -19,6 +19,7 @@ import {
   Ref,
   Schedule,
   type Scope,
+  Stream,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { keeperPaths } from "../src/keeper/paths.ts";
@@ -625,6 +626,38 @@ describe("Keeper link reopen", () => {
       }),
     );
   });
+
+  it.live(
+    "a Keeper link command cut off mid-way fails as a dropped link",
+    () => {
+      const { dir, runtime } = tempDirs();
+      const fake = fakeSshMaster(dir);
+      return inSandbox(
+        runtime,
+        Effect.gen(function* () {
+          // Given: the master goes on answering, and the command's own ssh
+          // exits 255 as a mux client does when its master dies
+          const { link } = yield* openKeeperLink(fake, here);
+          writeFileSync(join(dir, "cut"), "");
+          // When
+          const error = yield* Effect.flip(
+            Stream.runDrain(link.stream("true")),
+          );
+          // Then
+          expect({
+            tag: error._tag,
+            message: error.message,
+            plainCalls: fake.plainCalls(),
+          }).toEqual({
+            tag: "LinkDroppedError",
+            message:
+              "Could not connect to Sandbox ns:us:abc123def4567 over SSH (the ssh link dropped mid-command). Try again in a minute.",
+            plainCalls: 1,
+          });
+        }),
+      );
+    },
+  );
 
   it.live("two runs on a dropped Keeper link open it once", () => {
     const { dir, runtime } = tempDirs();

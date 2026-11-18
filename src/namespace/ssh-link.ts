@@ -19,6 +19,7 @@ import {
 import { commandEvents } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
+  LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
   platformReason,
@@ -54,7 +55,10 @@ export interface Link {
     options?: ExecOptions,
   ) => Stream.Stream<
     ExecEvent,
-    ProviderError | ProviderUnavailableError | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | LinkDroppedError
   >;
 }
 
@@ -296,7 +300,9 @@ export const makeOpenLink = (
           Stream.unwrap(
             Effect.as(
               up,
-              commandEvents<ProviderError | ProviderUnavailableError>(
+              commandEvents<
+                ProviderError | ProviderUnavailableError | LinkDroppedError
+              >(
                 executor,
                 Command.make(sshBin, "-T", ...ssh, commandLine),
                 options,
@@ -307,7 +313,12 @@ export const makeOpenLink = (
                   exit: (code) =>
                     code === 255
                       ? Effect.fail(
-                          linkLost(ref, "the ssh link dropped mid-command"),
+                          new LinkDroppedError({
+                            reason: linkLost(
+                              ref,
+                              "the ssh link dropped mid-command",
+                            ).reason,
+                          }),
                         )
                       : Effect.succeed(code),
                 },

@@ -1,6 +1,7 @@
 import { Clock, Duration, Effect, Fiber, Stream } from "effect";
 import { pushedDeadline } from "./deadline.ts";
 import type {
+  LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
   SandboxGoneError,
@@ -43,7 +44,10 @@ export interface Transport {
     options?: ExecOptions,
   ) => Stream.Stream<
     ExecEvent,
-    ProviderError | ProviderUnavailableError | SandboxGoneError
+    | ProviderError
+    | ProviderUnavailableError
+    | SandboxGoneError
+    | LinkDroppedError
   >;
   readonly gone: () => SandboxGoneError;
   readonly fail: (reason: string) => ProviderError;
@@ -260,7 +264,7 @@ export const runCommand = (
   connection: Connection,
   argv: ReadonlyArray<string>,
   options?: ExecOptions,
-): Stream.Stream<ExecEvent, SandboxCallError> => {
+): Stream.Stream<ExecEvent, SandboxCallError | LinkDroppedError> => {
   const transport = connection.transport;
   const push = transport.pushHost;
   const pushHost =
