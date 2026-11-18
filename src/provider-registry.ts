@@ -2,6 +2,7 @@ import { CommandExecutor, FileSystem } from "@effect/platform";
 import { Config, Effect, Layer, Option } from "effect";
 import { ProviderError } from "./errors.ts";
 import { loginFor } from "./login/provider-login.ts";
+import type { Link } from "./namespace/ssh-link.ts";
 import { type ProviderEntry, Providers } from "./provider.ts";
 import { spawnDetached } from "./spawn-detached.ts";
 
@@ -54,9 +55,8 @@ export const ProvidersLive = Layer.effect(
               login: namespaceLogin,
             });
             const openLink = link.makeOpenLink(namespaceApi, executor, fs);
-            const dockerFor = (sandbox: {
-              readonly ssh: ReadonlyArray<string>;
-            }) => client.makeDockerClient(executor, { ssh: sandbox.ssh });
+            const dockerFor = (sandbox: Link) =>
+              client.makeDockerClient(executor, sandbox);
             return provider.makeNamespaceProvider({
               api: namespaceApi,
               executor,

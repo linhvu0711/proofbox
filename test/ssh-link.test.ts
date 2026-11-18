@@ -28,7 +28,7 @@ import type {
 } from "../src/namespace/namespace-api.ts";
 import { makeOpenLink, makeSshForward } from "../src/namespace/ssh-link.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
-import { fakeSshMaster } from "./support/fake-ssh.ts";
+import { fakeSshMaster, openKeeperLink } from "./support/fake-ssh.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 const PEM = Buffer.from(
@@ -484,44 +484,6 @@ describe("Keeper link reopen", () => {
     cleanupEnvs();
   });
 
-  // A Keeper link on the fake whose master the test can drop, over sshd
-  // as root, with the Namespace list answering `listed`.
-  const keeperLink = (
-    fake: ReturnType<typeof fakeSshMaster>,
-    listed: ReadonlyArray<InstanceListed>,
-  ) =>
-    Effect.gen(function* () {
-      const api: NamespaceApi = {
-        create: () => Effect.die("unused"),
-        wait: () => Effect.die("unused"),
-        destroy: () => Effect.die("unused"),
-        extend: () => Effect.die("unused"),
-        list: () => Effect.succeed(listed),
-        checkToken: () => Effect.die("unused"),
-        ensureImageExpiry: () => Effect.die("unused"),
-        makeToken: () => Effect.die("unused"),
-        sshConfig: () =>
-          Effect.succeed({
-            username: "abc123def4567",
-            endpoint: "ssh.iad4.namespace.so",
-            privateKey: new Uint8Array(PEM),
-            hostKeys: [HOST_KEY],
-          }),
-      };
-      const executor = yield* CommandExecutor.CommandExecutor;
-      const paths = yield* keeperPaths({
-        provider: "ns",
-        name: "abc123def4567",
-      });
-      const link = yield* makeOpenLink(api, executor, nodeFs, fake.path)(
-        { name: "abc123def4567", region: "us" },
-        paths,
-        "keeper",
-        { to: "sshd", user: "root" },
-      );
-      return { link, paths };
-    });
-
   const here: ReadonlyArray<InstanceListed> = [
     { id: "abc123def4567", labels: {} },
   ];
@@ -560,7 +522,7 @@ describe("Keeper link reopen", () => {
         runtime,
         Effect.gen(function* () {
           // Given: a Keeper link whose first run went over its master
-          const { link } = yield* keeperLink(fake, here);
+          const { link } = yield* openKeeperLink(fake, here);
           yield* link.run("true");
           // When: the master drops
           rmSync(join(dir, "alive"));
@@ -584,7 +546,7 @@ describe("Keeper link reopen", () => {
         runtime,
         Effect.gen(function* () {
           // Given
-          const { link } = yield* keeperLink(fake, here);
+          const { link } = yield* openKeeperLink(fake, here);
           yield* link.run("true");
           // When: the master drops and the gateway does not answer
           rmSync(join(dir, "alive"));
@@ -614,7 +576,7 @@ describe("Keeper link reopen", () => {
         runtime,
         Effect.gen(function* () {
           // Given: the Namespace list no longer holds the Sandbox
-          const { link } = yield* keeperLink(fake, []);
+          const { link } = yield* openKeeperLink(fake, []);
           yield* link.run("true");
           // When
           rmSync(join(dir, "alive"));
@@ -637,7 +599,7 @@ describe("Keeper link reopen", () => {
       runtime,
       Effect.gen(function* () {
         // Given
-        const { link, paths } = yield* keeperLink(fake, here);
+        const { link, paths } = yield* openKeeperLink(fake, here);
         // When: the master drops twice
         yield* link.run("true");
         rmSync(join(dir, "alive"));
@@ -667,7 +629,7 @@ describe("Keeper link reopen", () => {
       runtime,
       Effect.gen(function* () {
         // Given: a new master waits for `go` between its start and its socket
-        const { link } = yield* keeperLink(fake, here);
+        const { link } = yield* openKeeperLink(fake, here);
         yield* link.run("true");
         writeFileSync(join(dir, "hold"), "");
         // When: two runs find the master dropped at once
