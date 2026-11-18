@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
   Chunk,
+  Clock,
   Config,
   Data,
   Deferred,
@@ -23,6 +24,7 @@ import {
   platformReason,
   SandboxGoneError,
 } from "../errors.ts";
+import { writeKeeperLog } from "../keeper/keeper-log.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
@@ -560,7 +562,22 @@ export const makeOpenLink = (
           if (Option.isSome(dead)) {
             yield* Scope.close(dead.value, Exit.void);
           }
+          const start = yield* Clock.currentTimeMillis;
           yield* open(reopenWait);
+          if (owner === "keeper") {
+            const now = yield* Clock.currentTimeMillis;
+            yield* writeKeeperLog(paths.log, {
+              at: new Date(now),
+              kind: "link",
+              program: "reopen",
+              out: 0,
+              err: 0,
+              exit: undefined,
+              firstMs: undefined,
+              tookMs: now - start,
+              ended: "done",
+            }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+          }
         }),
       );
       if (yield* checkCtl(ctl, target)) {

@@ -630,6 +630,36 @@ describe("Keeper link reopen", () => {
     },
   );
 
+  it.live("a Keeper link logs one line each time it opens again", () => {
+    const { dir, runtime } = tempDirs();
+    const fake = fakeSshMaster(dir);
+    return inSandbox(
+      runtime,
+      Effect.gen(function* () {
+        // Given
+        const { link, paths } = yield* keeperLink(fake, here);
+        // When: the master drops twice
+        yield* link.run("true");
+        rmSync(join(dir, "alive"));
+        yield* link.run("true");
+        rmSync(join(dir, "alive"));
+        yield* link.run("true");
+        // Then
+        const lines = readFileSync(paths.log, "utf8")
+          .trimEnd()
+          .split("\n")
+          .map((line) => {
+            const fields = line.split(" ");
+            return [...fields.slice(1, 7), fields.at(-1)];
+          });
+        expect(lines).toEqual([
+          ["link", "reopen", "out=0", "err=0", "exit=-", "first=-", "done"],
+          ["link", "reopen", "out=0", "err=0", "exit=-", "first=-", "done"],
+        ]);
+      }),
+    );
+  });
+
   it.live("two runs on a dropped Keeper link open it once", () => {
     const { dir, runtime } = tempDirs();
     const fake = fakeSshMaster(dir);

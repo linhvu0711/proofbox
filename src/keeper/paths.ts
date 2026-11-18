@@ -11,6 +11,7 @@ export interface KeeperPaths {
   readonly pid: string;
   // Held by a Keeper from its socket check until it listens.
   readonly startLock: string;
+  readonly log: string;
   readonly key: string;
   // The host keys the Namespace SSH gateway pinned for the host.
   readonly knownHosts: string;
