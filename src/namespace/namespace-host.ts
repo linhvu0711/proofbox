@@ -40,7 +40,10 @@ export interface NamespaceHost {
     link: Link,
     ref: SandboxRef,
     seconds: number,
-  ) => Effect.Effect<HostResult, ProviderError | ProviderUnavailableError>;
+  ) => Effect.Effect<
+    HostResult,
+    ProviderError | ProviderUnavailableError | SandboxGoneError
+  >;
   // The shell the command run's checks are written in (ADR 0015).
   readonly checks: ChecksShell;
   // How one argv reaches the Sandbox over the host's link.
@@ -52,7 +55,7 @@ export interface NamespaceHost {
     ref: SandboxRef,
   ) => Effect.Effect<
     string,
-    ProviderError | ProviderUnavailableError,
+    ProviderError | ProviderUnavailableError | SandboxGoneError,
     Scope.Scope
   >;
   // What create offers on this OS.

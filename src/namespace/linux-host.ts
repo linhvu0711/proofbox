@@ -15,6 +15,7 @@ import {
   LinuxSshdError,
   type ProviderError,
   type ProviderUnavailableError,
+  type SandboxGoneError,
   TokenExposedError,
 } from "../errors.ts";
 import { Progress } from "../progress.ts";
@@ -82,7 +83,11 @@ export interface LinuxHost extends NamespaceHost {
     link: Link,
     ref: SandboxRef,
     fingerprint: string,
-  ) => Effect.Effect<void, ProviderError | ProviderUnavailableError, Progress>;
+  ) => Effect.Effect<
+    void,
+    ProviderError | ProviderUnavailableError | SandboxGoneError,
+    Progress
+  >;
 }
 
 // A Linux host runs the Sandbox in one Docker container.
