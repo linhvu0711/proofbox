@@ -403,8 +403,18 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
       }
       // The gone-watch reads over the Keeper's own link, first one interval
       // after the Keeper serves: connect has just read the Sandbox. A gone
-      // Sandbox fails it and ends the Keeper.
-      yield* Effect.schedule(connection.get, Schedule.spaced("2 seconds"));
+      // Sandbox ends the Keeper. A link error does not: the next read or
+      // command opens the link again, and the command that meets the error
+      // gets it.
+      yield* Effect.schedule(
+        connection.get.pipe(
+          Effect.catchIf(
+            (error) => !(error instanceof SandboxGoneError),
+            () => Effect.void,
+          ),
+        ),
+        Schedule.spaced("2 seconds"),
+      );
     }),
   );
 

@@ -35,6 +35,7 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { runHelper } from "../src/helper.ts";
 import { runKeeper } from "../src/keeper/keeper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { keeperAnswers } from "../src/keeper/lifecycle.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
 import {
@@ -95,12 +96,13 @@ const runtimeConfig = (env: { runtime: string }) =>
 // A fake Sandbox made at t=0, and a Provider that counts the `get` and
 // `extend` calls made to it from the CLI side in `calls`, and the Keeper's
 // own reads of the Sandbox over its Connection (the gone-watch) in
-// `watched`.
+// `watched`. The first `linkLostReads` gone-watch reads fail link-lost.
 const countedSandbox = (
   env: { root: string; runtime: string },
   options: {
     readonly maxLife?: Duration.Duration;
     readonly desktop?: boolean;
+    readonly linkLostReads?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -145,7 +147,14 @@ const countedSandbox = (
           ...connection,
           get: Effect.suspend(() => {
             watched.get += 1;
-            return connection.get;
+            return watched.get <= (options.linkLostReads ?? 0)
+              ? Effect.fail(
+                  new ProviderUnavailableError({
+                    provider: "fake",
+                    reason: "Could not connect to the Sandbox over SSH",
+                  }),
+                )
+              : connection.get;
           }),
           extend: (deadline: Date) =>
             Effect.suspend(() => {
@@ -171,6 +180,7 @@ const warmKeeper = (
   options: {
     readonly maxLife?: Duration.Duration;
     readonly desktop?: boolean;
+    readonly linkLostReads?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -999,6 +1009,42 @@ describe("Keeper", () => {
         yield* eventually(Effect.sync(() => keeper.watched.get >= 1));
         // Then
         expect([before, keeper.watched.get]).toEqual([0, 1]);
+      }).pipe(runtimeConfig(env));
+    },
+  );
+
+  it.scoped(
+    "a gone-watch read that fails link-lost does not end the Keeper, and the next exec runs",
+    () => {
+      const env = makeEnv();
+      return Effect.gen(function* () {
+        // Given: a warm Keeper whose first gone-watch read fails link-lost
+        const keeper = yield* warmKeeper(env, { linkLostReads: 1 });
+        const { socket } = yield* keeperPaths({
+          provider: "fake",
+          name: keeper.name,
+        }).pipe(Effect.provide(NodeContext.layer));
+        yield* TestServices.provideLive(Effect.sleep("200 millis"));
+        // When
+        yield* TestClock.adjust("2 seconds");
+        yield* eventually(Effect.sync(() => keeper.watched.get >= 1));
+        yield* TestServices.provideLive(Effect.sleep("200 millis"));
+        // Then: the Keeper still answers (checked first, as a client with no
+        // Keeper would wait to start one), and it runs the next exec
+        expect(yield* keeperAnswers(socket)).toBe(true);
+        const out = yield* execInSandbox(keeper.id, [
+          "sh",
+          "-c",
+          "echo hi",
+        ]).pipe(
+          Effect.zipRight(capturedOut),
+          Effect.zip(Effect.flatMap(CliOutput, (output) => output.exitCode)),
+          Effect.provide(keeper.layers),
+        );
+        expect({ out, calls: keeper.calls }).toEqual({
+          out: ["hi\n", 0],
+          calls: { get: 0, extend: 0 },
+        });
       }).pipe(runtimeConfig(env));
     },
   );
