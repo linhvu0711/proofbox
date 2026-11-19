@@ -192,6 +192,56 @@ describe("Namespace errors", () => {
     ).toBe(true);
   });
 
+  it("a bad prep timeout fails before Namespace makes a host", async () => {
+    // Given: a Namespace that makes the host but never says it is ready
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "WaitInstanceSync") {
+        return "hang";
+      }
+      if (call.method === "ListInstances") {
+        return { json: { instances: [{ instanceId: "abc123def4567" }] } };
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const runs = [];
+    for (const value of ["abc", "-1s"]) {
+      const result = await runCli(env, CREATE, {
+        set: {
+          ...nsEnv(ns),
+          PROOFBOX_NS_CREATE_TIMEOUT: "1s",
+          PROOFBOX_NS_PREPARE_TIMEOUT: value,
+        },
+      });
+      runs.push({ stderr: result.stderr, exitCode: result.exitCode });
+    }
+    // Then
+    expect({
+      runs,
+      creates: ns.calls
+        .map((call) => call.method)
+        .filter((method) => method === "CreateInstance"),
+    }).toEqual({
+      runs: [
+        {
+          stderr:
+            'Provider namespace failed: Bad --PROOFBOX_NS_PREPARE_TIMEOUT "abc": use a whole number with s, m, or h, for example 15m\n',
+          exitCode: 125,
+        },
+        {
+          stderr:
+            'Provider namespace failed: Bad --PROOFBOX_NS_PREPARE_TIMEOUT "-1s": use a whole number with s, m, or h, for example 15m\n',
+          exitCode: 125,
+        },
+      ],
+      creates: [],
+    });
+  });
+
   it("Ctrl-C while Namespace makes the host deletes it", async () => {
     // Given: create answers; wait sends Ctrl-C and never answers; list
     // finds the host by its create token

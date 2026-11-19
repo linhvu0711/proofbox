@@ -21,6 +21,7 @@ import {
   platformReason,
   UnknownRegionError,
 } from "../errors.ts";
+import { formatWait } from "../format-time.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import type {
@@ -447,6 +448,12 @@ export const makeNamespaceProvider = (deps: {
     Config.withDefault("60s"),
   );
 
+  // Host prep can stall on any host command; bound the whole part, then
+  // delete the host, so a stall never holds the host's quota (#261).
+  const prepareTimeout = Config.string("PROOFBOX_NS_PREPARE_TIMEOUT").pipe(
+    Config.withDefault("15m"),
+  );
+
   // A destroy frees the host's quota a moment after it returns, so a
   // create right behind a delete can land on a full-looking account:
   // give a plan-limit refusal this long to lift before reporting it.
@@ -479,6 +486,9 @@ export const makeNamespaceProvider = (deps: {
     // nothing behind on a failed create.
     const createToken = makeSandboxName();
     let hostRef: SandboxRef | undefined;
+    // Set once the prep timeout has deleted the host, so cleanup does not
+    // delete it again.
+    let hostDeleted = false;
     let deadlineAt = 0;
     const cleanup = Effect.gen(function* () {
       yield* Effect.all(
@@ -506,9 +516,11 @@ export const makeNamespaceProvider = (deps: {
           ],
           { concurrency: "unbounded" },
         );
-        yield* api
-          .destroy(hostRef.region ?? "", hostRef.name)
-          .pipe(Effect.orElseSucceed(() => {}));
+        if (!hostDeleted) {
+          yield* api
+            .destroy(hostRef.region ?? "", hostRef.name)
+            .pipe(Effect.orElseSucceed(() => {}));
+        }
       }
     });
     return yield* Effect.gen(function* () {
@@ -563,6 +575,12 @@ export const makeNamespaceProvider = (deps: {
       const span = yield* parseSpan(
         "PROOFBOX_NS_CREATE_TIMEOUT",
         spanText,
+      ).pipe(Effect.mapError((error) => fail(error.message)));
+      const prepSpan = yield* parseSpan(
+        "PROOFBOX_NS_PREPARE_TIMEOUT",
+        yield* prepareTimeout.pipe(
+          Effect.mapError((error) => fail(error.message)),
+        ),
       ).pipe(Effect.mapError((error) => fail(error.message)));
       const limitSpan = yield* parseSpan(
         "PROOFBOX_NS_LIMIT_WAIT",
@@ -688,40 +706,86 @@ export const makeNamespaceProvider = (deps: {
         instanceId,
         String(maxLifeSeconds),
       ]);
-      // Provisioning can outlast the create duration (a cold image build):
-      // keep the host's own Deadline ahead until the Sandbox takes over,
-      // but never past the Max life. The recorded Deadline moves with it —
-      // otherwise the host-expiry destroys a host that is still being
-      // prepared once its initial allowance runs out.
-      yield* Effect.forkScoped(
-        Effect.repeat(
+      // The step host prep is in, for the timeout message: Progress keeps
+      // the running label only when the output is live.
+      const stuckAt = yield* Ref.make("opening the link to the host");
+      const tracked = new Progress({
+        ...progress,
+        step: (label, effect) =>
+          Ref.set(stuckAt, label).pipe(
+            Effect.zipRight(progress.step(label, effect)),
+          ),
+      });
+      // One scope, so the extend loop and the link end when the limit
+      // runs out, before the host is deleted.
+      const prepared = yield* Effect.timeoutOption(
+        Effect.scoped(
           Effect.gen(function* () {
-            const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
-            if (left > 0) {
-              const pushedAt =
-                Math.floor(Date.now() / 1000) + Math.min(durationSeconds, left);
-              yield* deps.fs
-                .writeFileString(hostPaths.deadline, String(pushedAt), {
-                  mode: 0o600,
-                })
-                .pipe(Effect.ignore);
-              yield* api
-                .extend(region, instanceId, Math.min(durationSeconds, left))
-                .pipe(Effect.ignore);
-            }
+            // Provisioning can outlast the create duration (a cold image
+            // build): keep the host's own Deadline ahead until the Sandbox
+            // takes over, but never past the Max life. The recorded Deadline
+            // moves with it — otherwise the host-expiry destroys a host that
+            // is still being prepared once its initial allowance runs out.
+            yield* Effect.forkScoped(
+              Effect.repeat(
+                Effect.gen(function* () {
+                  const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
+                  if (left > 0) {
+                    const pushedAt =
+                      Math.floor(Date.now() / 1000) +
+                      Math.min(durationSeconds, left);
+                    yield* deps.fs
+                      .writeFileString(hostPaths.deadline, String(pushedAt), {
+                        mode: 0o600,
+                      })
+                      .pipe(Effect.ignore);
+                    yield* api
+                      .extend(
+                        region,
+                        instanceId,
+                        Math.min(durationSeconds, left),
+                      )
+                      .pipe(Effect.ignore);
+                  }
+                }),
+                Schedule.spaced(Duration.seconds(15)),
+              ),
+            );
+            const link = yield* deps.openLink(ref, hostPaths, "cli", {
+              to: "gateway",
+            });
+            return yield* host
+              .make(link, {
+                req,
+                ref,
+                paths: hostPaths,
+                size,
+                maxLifeAt: new Date(maxLifeSeconds * 1000),
+              })
+              .pipe(Effect.provideService(Progress, tracked));
           }),
-          Schedule.spaced(Duration.seconds(15)),
+        ),
+        prepSpan,
+      );
+      if (Option.isSome(prepared)) {
+        return prepared.value;
+      }
+      const label = yield* Ref.get(stuckAt);
+      hostDeleted = true;
+      const deleted = yield* api.destroy(region, instanceId).pipe(
+        Effect.catchTag("SandboxGoneError", () => Effect.void),
+        Effect.as(true),
+        Effect.catchAll(() =>
+          progress
+            .warn(
+              "could not delete the host this create started; it may be left. Run: proofbox list",
+            )
+            .pipe(Effect.as(false)),
         ),
       );
-      const link = yield* deps.openLink(ref, hostPaths, "cli", {
-        to: "gateway",
-      });
-      return yield* host.make(link, {
-        req,
-        ref,
-        paths: hostPaths,
-        size,
-        maxLifeAt: new Date(maxLifeSeconds * 1000),
+      return yield* new ProviderUnavailableError({
+        provider: "namespace",
+        reason: `Namespace did not prepare the host in ${formatWait(prepSpan)} (stuck at: ${label})${deleted ? "; deleted the host" : ""}. Try again`,
       });
     }).pipe(
       // A host that vanishes or drops its link mid-create is a Provider
