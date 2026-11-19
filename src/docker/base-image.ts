@@ -102,10 +102,13 @@ export const ensureBaseImage = Effect.fn("baseImage.ensureBaseImage")(
     if (yield* client.imageExists(image.tag)) {
       return;
     }
-    if (options?.registry === true && (yield* client.pull(image.tag))) {
+    const progress = yield* Progress;
+    if (
+      options?.registry === true &&
+      (yield* progress.step("pulling the Base image", client.pull(image.tag)))
+    ) {
       return;
     }
-    const progress = yield* Progress;
     yield* progress.step("building the Base image", client.build(image));
     if (options?.registry === true) {
       yield* client.push(image.tag);

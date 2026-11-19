@@ -12,6 +12,7 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
   Cause,
+  Chunk,
   ConfigProvider,
   Duration,
   Effect,
@@ -1161,6 +1162,33 @@ describe("Namespace Provider", () => {
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
   });
+
+  it.effect(
+    "a Linux create from a Snapshot prints a line for each prep step",
+    () =>
+      Effect.gen(function* () {
+        // Given: every command on the link succeeds
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), snapshotRun({}));
+        // When
+        yield* provider
+          .create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          })
+          .pipe(Effect.provide(Progress.Default));
+        // Then
+        const output = yield* CliOutput;
+        const err = Chunk.toReadonlyArray(
+          yield* Ref.get(output.captured.err),
+        ).join("");
+        expect(err).toBe(
+          "proofbox: installing sshd\nproofbox: starting sshd\nproofbox: reading the Namespace tenant\nproofbox: pulling the Snapshot\nproofbox: setting the Snapshot expiry\nproofbox: creating docker Sandbox\nproofbox: setting the Base image expiry\nproofbox: checking the Namespace token is out of reach\n",
+        );
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
 
   it.effect(
     "a Linux create whose docker pull never ends stops at the prep limit and deletes the host",

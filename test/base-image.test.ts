@@ -116,6 +116,41 @@ describe("Base image", () => {
     ),
   );
 
+  it.effect("a slow Base image pull prints progress on stderr", () =>
+    Effect.gen(function* () {
+      // Given: no cached image and a registry pull that takes 20 seconds
+      const client: DockerClient = {
+        ...stubClient(false, Effect.void),
+        pull: () => Effect.sleep("20 seconds").pipe(Effect.as(true)),
+      };
+      const fiber = yield* Effect.fork(
+        ensureBaseImage(
+          client,
+          { dir: "/unused", tag: "proofbox-base-linux:test", buildArgs: {} },
+          { registry: true },
+        ),
+      );
+      // When
+      yield* TestClock.adjust("20 seconds");
+      yield* Fiber.join(fiber);
+      // Then
+      const output = yield* CliOutput;
+      const err = Chunk.toReadonlyArray(
+        yield* Ref.get(output.captured.err),
+      ).join("");
+      expect(err).toBe(
+        "proofbox: pulling the Base image\nproofbox: still pulling the Base image (15 s)\n",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          CliOutput.Test,
+          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+        ),
+      ),
+    ),
+  );
+
   it.effect("a Base image that exists is not built again", () =>
     Effect.gen(function* () {
       // Given: the image tag already exists
