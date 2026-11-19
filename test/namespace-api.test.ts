@@ -100,6 +100,35 @@ describe("Namespace API", () => {
       }),
   );
 
+  it.effect("a GetSSHConfig call that never answers fails as unreachable", () =>
+    Effect.gen(function* () {
+      // Given: GetSSHConfig never answers; the request limit is 1s
+      const ns = yield* Effect.promise(() =>
+        fakeNamespace((call) =>
+          call.method === "GetSSHConfig" ? "hang" : { json: {} },
+        ),
+      );
+      // When
+      const error = yield* makeNamespaceApi({ login })
+        .sshConfig("us", "abc123def4567")
+        .pipe(
+          Effect.withConfigProvider(
+            ConfigProvider.fromMap(
+              new Map([
+                ["PROOFBOX_NAMESPACE_COMPUTE_URL", ns.url],
+                ["PROOFBOX_NS_REQUEST_TIMEOUT", "1s"],
+              ]),
+            ),
+          ),
+          Effect.flip,
+        );
+      // Then
+      expect(error.message).toBe(
+        "Could not reach Namespace. Check your network and try again.",
+      );
+    }),
+  );
+
   it.effect(
     "list gives when each instance started and whether Namespace still makes it",
     () =>

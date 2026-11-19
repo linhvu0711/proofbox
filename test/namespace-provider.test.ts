@@ -545,6 +545,34 @@ describe("Namespace Provider", () => {
     }
   });
 
+  it("list fails as unreachable when ListInstances never answers", async () => {
+    // Given: ListInstances never answers; the request limit is 1s
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances" ? "hang" : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(env, ["list"], {
+        set: {
+          PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          PROOFBOX_NS_REQUEST_TIMEOUT: "1s",
+        },
+      });
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Could not list Sandboxes in namespace: Could not reach Namespace. Check your network and try again.\nNo live Sandboxes\n",
+        exitCode: 0,
+      });
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
   it.effect("a host with no local OS file and no OS label stays Linux", () =>
     Effect.gen(function* () {
       // Given: another host is a Mac; the requested host has no OS label.
