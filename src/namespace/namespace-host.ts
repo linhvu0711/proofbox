@@ -114,6 +114,38 @@ export const brandFor = (ref: SandboxRef) => ({
   id: () => sandboxId(ref),
 });
 
+// The gateway key and the stored gateway target sit next to a link's
+// control socket.
+export const linkFiles = (control: string) => {
+  const stem = control.replace(/\.ctl$/, "");
+  return { key: `${stem}.sshkey`, target: `${stem}.sshtarget` };
+};
+
+// Create's cleanup, delete, and the list prune all remove a host's local
+// files, so they share one list.
+export const removeHostFiles = Effect.fn("namespaceHost.removeHostFiles")(
+  function* (paths: KeeperPaths, fs: FileSystem.FileSystem) {
+    const link = linkFiles(paths.control);
+    yield* Effect.forEach(
+      [
+        paths.key,
+        `${paths.key}.pub`,
+        paths.maxLife,
+        paths.deadline,
+        paths.os,
+        paths.control,
+        paths.socket,
+        link.key,
+        link.target,
+        paths.knownHosts,
+        paths.sshdKnownHosts,
+      ],
+      (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
+      { concurrency: "unbounded", discard: true },
+    );
+  },
+);
+
 // Adds this Sandbox's key to the login's authorized_keys over the gateway
 // link, runs the OS's line that starts sshd and prints its ed25519 host key,
 // and pins that key (ADR 0024). False when the host gives no key.

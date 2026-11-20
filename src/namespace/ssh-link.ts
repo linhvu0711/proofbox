@@ -35,7 +35,7 @@ import type {
   NamespaceApi,
   SshConfig,
 } from "./namespace-api.ts";
-import { gone, sandboxId } from "./namespace-host.ts";
+import { gone, linkFiles, sandboxId } from "./namespace-host.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -369,8 +369,7 @@ export const makeOpenLink = (
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
       // handshake.
-      const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
-      const targetFile = `${paths.control.replace(/\.ctl$/, "")}.sshtarget`;
+      const { key: keeperKey, target: targetFile } = linkFiles(paths.control);
       // A warm open rides the Keeper's ControlMaster; the stored target
       // saves the GetSSHConfig call a ride does not need.
       if (owner === "cli") {
@@ -402,7 +401,7 @@ export const makeOpenLink = (
       // and the .pub there belongs to the local keypair create made. The
       // host keys go to the per-Sandbox known_hosts file every open
       // refreshes.
-      const key = `${ctl.replace(/\.ctl$/, "")}.sshkey`;
+      const { key } = linkFiles(ctl);
       yield* pinGateway(fs, config, { key, knownHosts: paths.knownHosts });
       yield* fs
         .writeFileString(targetFile, `${gateway}\n`, { mode: 0o600 })

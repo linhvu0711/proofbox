@@ -1898,6 +1898,70 @@ describe("Namespace Provider", () => {
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
+  it.effect("delete removes every local file of the host", () => {
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    for (const suffix of [
+      ".key",
+      ".key.pub",
+      ".max-life",
+      ".deadline",
+      ".os",
+      ".ctl",
+      ".sock",
+      ".sshkey",
+      ".sshtarget",
+      ".known-hosts",
+      ".sshd-known-hosts",
+    ]) {
+      writeFileSync(join(runtime, `ns-us:abc123def4567${suffix}`), "");
+    }
+    return Effect.gen(function* () {
+      // Given: every local file a host can have
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+        instances: [
+          { id: "abc123def4567", labels: { "proofbox.os": "linux" } },
+        ],
+      });
+      // When: deleted twice, so the second finds the files gone
+      yield* provider.delete({ name: "abc123def4567", region: "us" });
+      yield* provider.delete({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(
+        readdirSync(runtime).filter((name) =>
+          name.startsWith("ns-us:abc123def4567"),
+        ),
+      ).toEqual([]);
+    }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+  });
+
+  it.effect(
+    "a create that fails after the host is stored leaves no local file of the host",
+    () => {
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      return Effect.gen(function* () {
+        // Given: an sshd that does not answer, after the host files are written
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun, true);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect(
+          readdirSync(runtime).filter((name) => name.startsWith("ns-")),
+        ).toEqual([]);
+      }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+    },
+  );
+
   // Live clock: the retry's 5 s pace has to actually elapse.
   it.live(
     "a create refused for the plan limit tries again while the quota frees",

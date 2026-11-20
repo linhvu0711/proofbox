@@ -15,7 +15,13 @@ import { pushHostLife } from "./host-life.ts";
 import type { LinuxHost } from "./linux-host.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
 import { makeNamespaceCreate } from "./namespace-create.ts";
-import { fail, gone, type NamespaceHost, sandboxId } from "./namespace-host.ts";
+import {
+  fail,
+  gone,
+  type NamespaceHost,
+  removeHostFiles,
+  sandboxId,
+} from "./namespace-host.ts";
 import { NAMESPACE_LOGIN_FILES, tenantTokenFor } from "./namespace-login.ts";
 import { unreachable } from "./namespace-request.ts";
 import { completeLogin, startLogin } from "./namespace-signin.ts";
@@ -301,26 +307,7 @@ export const makeNamespaceProvider = (deps: {
       (name) =>
         Effect.gen(function* () {
           if (!(yield* stale(`ns-${name}.key`))) return;
-          yield* Effect.forEach(
-            [
-              ".key",
-              ".key.pub",
-              ".max-life",
-              ".deadline",
-              ".os",
-              ".ctl",
-              ".sock",
-              ".sshkey",
-              ".sshtarget",
-              ".known-hosts",
-              ".sshd-known-hosts",
-            ],
-            (suffix) =>
-              deps.fs
-                .remove(join(dir, `ns-${name}${suffix}`), { force: true })
-                .pipe(Effect.ignore),
-            { concurrency: "unbounded" },
-          );
+          yield* removeHostFiles(yield* paths(name), deps.fs);
         }),
       { concurrency: "unbounded" },
     );
@@ -397,29 +384,7 @@ export const makeNamespaceProvider = (deps: {
     // Hosts that expire on their own never reach destroy, so the local
     // keypair and Max-life cap are removed whether or not the host is
     // still listed.
-    const dir = yield* refPaths(ref);
-    yield* Effect.all(
-      [
-        deps.fs.remove(dir.key, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(`${dir.key}.pub`, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(dir.maxLife, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(dir.deadline, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(dir.os, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(dir.knownHosts, { force: true }).pipe(Effect.ignore),
-        deps.fs.remove(dir.sshdKnownHosts, { force: true }).pipe(Effect.ignore),
-        deps.fs
-          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshkey`, {
-            force: true,
-          })
-          .pipe(Effect.ignore),
-        deps.fs
-          .remove(`${dir.control.replace(/\.ctl$/, "")}.sshtarget`, {
-            force: true,
-          })
-          .pipe(Effect.ignore),
-      ],
-      { concurrency: "unbounded" },
-    );
+    yield* removeHostFiles(yield* refPaths(ref), deps.fs);
     return present ? ("deleted" as const) : ("gone" as const);
   });
 

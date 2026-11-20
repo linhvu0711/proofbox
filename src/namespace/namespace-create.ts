@@ -26,7 +26,7 @@ import type { Provider, ProviderLogin, SandboxRef } from "../provider.ts";
 import { fileStem, makeSandboxName } from "../sandbox-id.ts";
 import { formatSize, type Size } from "../size.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
-import { fail, type NamespaceHost } from "./namespace-host.ts";
+import { fail, type NamespaceHost, removeHostFiles } from "./namespace-host.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import type { OpenLink } from "./ssh-link.ts";
 
@@ -107,23 +107,7 @@ export const makeNamespaceCreate = (deps: {
         { concurrency: "unbounded" },
       );
       if (hostRef !== undefined) {
-        const hostPaths = yield* refPaths(hostRef);
-        yield* Effect.all(
-          [
-            deps.fs.remove(hostPaths.key, { force: true }).pipe(Effect.ignore),
-            deps.fs
-              .remove(`${hostPaths.key}.pub`, { force: true })
-              .pipe(Effect.ignore),
-            deps.fs
-              .remove(hostPaths.maxLife, { force: true })
-              .pipe(Effect.ignore),
-            deps.fs.remove(hostPaths.os, { force: true }).pipe(Effect.ignore),
-            deps.fs
-              .remove(hostPaths.sshdKnownHosts, { force: true })
-              .pipe(Effect.ignore),
-          ],
-          { concurrency: "unbounded" },
-        );
+        yield* removeHostFiles(yield* refPaths(hostRef), deps.fs);
         if (!hostDeleted) {
           yield* api
             .destroy(hostRef.region ?? "", hostRef.name)
