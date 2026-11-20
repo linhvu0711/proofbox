@@ -251,18 +251,7 @@ export interface Provider {
   readonly extend: (
     sandbox: SandboxRef,
     deadline: Date,
-  ) => Effect.Effect<
-    void,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
-  >;
+  ) => Effect.Effect<void, SandboxCallError>;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
   readonly liveView?: (sandbox: SandboxRef) => Effect.Effect<
@@ -279,15 +268,7 @@ export interface Provider {
         | ProviderUnavailableError
       >;
     },
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError,
+    SandboxCallError,
     Scope.Scope
   >;
   // Only where an OS offer has the "snapshot" feature. `save` stores the
@@ -297,34 +278,11 @@ export interface Provider {
     readonly save: (
       sandbox: SandboxRef,
       fingerprint: string,
-    ) => Effect.Effect<
-      void,
-      | BadLoginsFileError
-      | LoginExpiredError
-      | NotLoggedInError
-      | ProviderError
-      | ProviderLimitError
-      | ProviderUnavailableError
-      | SandboxGoneError
-      | TokenRejectedError
-      | TokenPermissionError,
-      Progress
-    >;
+    ) => Effect.Effect<void, SandboxCallError, Progress>;
   };
   readonly get: (
     sandbox: SandboxRef,
-  ) => Effect.Effect<
-    SandboxInfo,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
-  >;
+  ) => Effect.Effect<SandboxInfo, SandboxCallError>;
   readonly list: Effect.Effect<
     ListResult,
     | ProviderError
@@ -338,32 +296,13 @@ export interface Provider {
   >;
   readonly delete: (
     sandbox: SandboxRef,
-  ) => Effect.Effect<
-    "deleted" | "gone",
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | SandboxGoneError
-    | TokenRejectedError
-    | TokenPermissionError
-    | NotLoggedInError
-    | LoginExpiredError
-    | BadLoginsFileError
-  >;
+  ) => Effect.Effect<"deleted" | "gone", SandboxCallError>;
   readonly sandboxFolders: (name: string, os: Os) => SandboxFolders;
   readonly connect: (
     sandbox: SandboxRef,
   ) => Effect.Effect<
     Connection,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError,
+    SandboxCallError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
 }
