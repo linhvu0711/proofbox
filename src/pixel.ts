@@ -49,21 +49,21 @@ const WaitLine = Schema.Struct({
 
 export const ActionLogLine = Schema.Union(ActionLine, WaitLine);
 
-const PACE_HUMAN = {
+export const PACE_HUMAN = {
   glideMs: 400,
   letterMs: 100,
   typeMaxMs: 10000,
   settleMs: 700,
 };
 
-const PACE_FAST = {
+export const PACE_FAST = {
   glideMs: 0,
   letterMs: 12,
   typeMaxMs: 3000,
   settleMs: 0,
 };
 
-interface Pace {
+export interface Pace {
   readonly glideMs: number;
   readonly letterMs: number;
   readonly typeMaxMs: number;

@@ -21,5 +21,11 @@ export const parseMaxSize = Effect.fn("maxSize.parseMaxSize")(
   },
 );
 
+// The inverse of parseMaxSize: GB when the bytes are whole GB, else MB.
+export const formatMaxSize = (bytes: number): string =>
+  bytes % 1_000_000_000 === 0
+    ? `${bytes / 1_000_000_000}GB`
+    : `${bytes / 1_000_000}MB`;
+
 export const formatMb = (bytes: number): string =>
   (bytes / 1_000_000).toFixed(1);

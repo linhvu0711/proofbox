@@ -207,13 +207,9 @@ describe("Help text", () => {
     const env = makeEnv();
     // When
     const [create, login, click, type, scroll] = await Promise.all(
-      [
-        ["create"],
-        ["auth", "login"],
-        ["click"],
-        ["type"],
-        ["scroll"],
-      ].map((words) => runCli(env, [...words, "--help"])),
+      [["create"], ["auth", "login"], ["click"], ["type"], ["scroll"]].map(
+        (words) => runCli(env, [...words, "--help"]),
+      ),
     );
     // Then
     expect({
@@ -238,6 +234,17 @@ describe("Help text", () => {
         (text) => !scroll?.stdout.includes(text),
       ),
     }).toEqual({ create: [], login: [], click: [], type: [], scroll: [] });
+  });
+
+  it("type --help gives the --type-max defaults in the units it reads", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["type", "--help"]);
+    // Then
+    expect(result.stdout).toContain(
+      "the most time all the typing may take, ms or s, for example 5s; default 10s with --pace human, 3s with fast",
+    );
   });
 
   it("record stop --help says --max-size limits the Proof video", async () => {

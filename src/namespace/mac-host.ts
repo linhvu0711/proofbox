@@ -28,6 +28,7 @@ import {
   sandboxId,
   turnOnSshd,
 } from "./namespace-host.ts";
+import { DEFAULT_MACOS_SIZE, MACOS_SIZES } from "./sizes.ts";
 import type { Link, OpenLink } from "./ssh-link.ts";
 
 // proofbox's own Mac files: the input helper and the Pixel script.
@@ -565,11 +566,6 @@ const writeMacDeadline = Effect.fn("macHost.writeDeadline")(function* (
   );
 });
 
-const MACOS_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 7 },
-  { cpu: 6, ramGb: 14 },
-];
-const DEFAULT_MACOS_SIZE: Size = { cpu: 4, ramGb: 7 };
 // Every Known line about the Mac was proved on macOS 26; with no selector
 // Namespace gives 15.
 const MACOS_SELECTORS = { "macos.version": "26.x" } as const;

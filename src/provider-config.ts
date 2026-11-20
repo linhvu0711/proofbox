@@ -9,6 +9,8 @@ const ConfigFile = Schema.Struct({
   macos: Schema.optional(Schema.String),
 });
 
+export const DEFAULT_PROVIDER = "namespace";
+
 const KNOWN_KEYS = new Set(["linux", "macos"]);
 
 const providerReason = (os: Os) => `"${os}" must be a Provider name`;
@@ -31,7 +33,7 @@ export const providerForOs = Effect.fn("providerConfig.providerForOs")(
         ),
       );
     if (text === undefined) {
-      return "namespace";
+      return DEFAULT_PROVIDER;
     }
     const json = yield* Effect.try({
       try: () => JSON.parse(text) as unknown,
@@ -48,7 +50,7 @@ export const providerForOs = Effect.fn("providerConfig.providerForOs")(
     const parsed = yield* Schema.decodeUnknown(ConfigFile, {
       onExcessProperty: "error",
     })(json).pipe(Effect.mapError(() => bad(providerReason(os))));
-    const name = parsed[os] ?? "namespace";
+    const name = parsed[os] ?? DEFAULT_PROVIDER;
     const providers = yield* Providers;
     if (!providers.has(name)) {
       return yield* new UnknownProviderError({
