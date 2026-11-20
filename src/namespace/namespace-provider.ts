@@ -1,7 +1,11 @@
 import { join } from "node:path";
 import { type CommandExecutor, FileSystem } from "@effect/platform";
 import { Clock, Effect, Either, Fiber, Option, Ref } from "effect";
-import { type ProviderError, ProviderUnavailableError } from "../errors.ts";
+import {
+  type ProviderError,
+  ProviderUnavailableError,
+  platformReason,
+} from "../errors.ts";
 import { type KeeperPaths, keeperPaths, runtimeDir } from "../keeper/paths.ts";
 import type {
   ListResult,
@@ -66,11 +70,13 @@ export const makeNamespaceProvider = (deps: {
       .readFileString(file)
       .pipe(
         Effect.catchAll((error) =>
-          Effect.succeed(
-            error._tag === "SystemError" && error.reason === "NotFound"
-              ? undefined
-              : "linux",
-          ),
+          error._tag === "SystemError" && error.reason === "NotFound"
+            ? Effect.succeed(undefined)
+            : Effect.fail(
+                fail(
+                  `could not read the OS file ${file}: ${platformReason(error)}`,
+                ),
+              ),
         ),
       );
     if (text !== undefined) {

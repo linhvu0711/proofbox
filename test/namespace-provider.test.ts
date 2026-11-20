@@ -633,12 +633,18 @@ describe("Namespace Provider", () => {
   );
 
   it.effect(
-    "an unreadable local OS file reads as Linux with no API lookup",
+    "an unreadable local OS file fails with a Provider error that names the file",
     () =>
       Effect.gen(function* () {
-        // Given: the local OS file takes precedence over the API label.
+        // Given: an OS file that is a folder, so reading it fails
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        const ran: Array<string> = [];
+        const recordingRun: Link["run"] = (commandLine) =>
+          Effect.suspend(() => {
+            ran.push(commandLine);
+            return listRun(commandLine);
+          });
+        const provider = makeProvider(calls, fakeDocker({}), recordingRun, {
           instances: [
             { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
           ],
@@ -649,13 +655,19 @@ describe("Namespace Provider", () => {
         }).pipe(Effect.provide(NodeContext.layer));
         mkdirSync(paths.os);
         // When
-        const info = yield* provider.get({
-          name: "abc123def4567",
-          region: "us",
-        });
+        const error = yield* Effect.flip(
+          provider.get({ name: "abc123def4567", region: "us" }),
+        );
         // Then
-        expect(info.os).toBe("linux");
-        expect(yield* Ref.get(calls)).toEqual([]);
+        expect({
+          message: error.message,
+          calls: yield* Ref.get(calls),
+          ran,
+        }).toEqual({
+          message: `Provider namespace failed: could not read the OS file ${paths.os}: EISDIR: illegal operation on a directory, read`,
+          calls: [],
+          ran: [],
+        });
       }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
