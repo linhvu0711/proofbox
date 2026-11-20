@@ -9,15 +9,19 @@ import {
   TestClock,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { Progress } from "../src/progress.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import {
+  CapturedOutput,
+  testOutput,
+  testTerminalOutput,
+} from "./support/output.ts";
 
 describe("Progress", () => {
   afterEach(cleanupEnvs);
 
   it.effect("Ctrl-C during a live line clears it", () => {
-    const terminal = CliOutput.TestTerminal(80);
+    const terminal = testTerminalOutput(80);
     return Effect.gen(function* () {
       const progress = yield* Progress;
       const fiber = yield* Effect.fork(
@@ -25,10 +29,10 @@ describe("Progress", () => {
       );
       yield* TestClock.adjust("1 second");
       yield* Fiber.interrupt(fiber);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
-      ).toBe("\r\u001b[2K");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).at(-1)).toBe(
+        "\r\u001b[2K",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -45,7 +49,7 @@ describe("Progress", () => {
   it.effect(
     "on a terminal a running step is one live line with a spinner and a timer",
     () => {
-      const terminal = CliOutput.TestTerminal(80);
+      const terminal = testTerminalOutput(80);
       return Effect.gen(function* () {
         const progress = yield* Progress;
         const fiber = yield* Effect.fork(
@@ -53,10 +57,8 @@ describe("Progress", () => {
         );
         yield* TestClock.adjust("40 seconds");
         yield* Fiber.join(fiber);
-        const output = yield* CliOutput;
-        const chunks = Chunk.toReadonlyArray(
-          yield* Ref.get(output.captured.err),
-        );
+        const output = yield* CapturedOutput;
+        const chunks = Chunk.toReadonlyArray(yield* Ref.get(output.err));
         expect(chunks[0]).toBe("\r\u001b[2K⠋ booting  0s");
         expect(chunks.at(-1)).toBe("\r\u001b[2K✔ booting  40s\n");
         expect(chunks.some((chunk) => chunk.includes("still"))).toBe(false);
@@ -75,7 +77,7 @@ describe("Progress", () => {
   );
 
   it.effect("a warning during a live step prints above the live line", () => {
-    const terminal = CliOutput.TestTerminal(80);
+    const terminal = testTerminalOutput(80);
     return Effect.gen(function* () {
       const progress = yield* Progress;
       const fiber = yield* Effect.fork(
@@ -89,10 +91,10 @@ describe("Progress", () => {
       );
       yield* TestClock.adjust("2 seconds");
       yield* Fiber.join(fiber);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)),
-      ).toContain("\r\u001b[2K! disk is slow\n\r\u001b[2K⠹ booting  1s");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err))).toContain(
+        "\r\u001b[2K! disk is slow\n\r\u001b[2K⠹ booting  1s",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -107,14 +109,14 @@ describe("Progress", () => {
   });
 
   it.effect("a failed live step prints ✘", () => {
-    const terminal = CliOutput.TestTerminal(80);
+    const terminal = testTerminalOutput(80);
     return Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.step("booting", Effect.fail("no")).pipe(Effect.flip);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
-      ).toBe("\r\u001b[2K✘ booting\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).at(-1)).toBe(
+        "\r\u001b[2K✘ booting\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -129,7 +131,7 @@ describe("Progress", () => {
   });
 
   it.effect("a live line wider than the terminal is cut with …", () => {
-    const terminal = CliOutput.TestTerminal(20);
+    const terminal = testTerminalOutput(20);
     return Effect.gen(function* () {
       const progress = yield* Progress;
       const fiber = yield* Effect.fork(
@@ -137,10 +139,10 @@ describe("Progress", () => {
       );
       yield* TestClock.adjust("1 second");
       yield* Fiber.join(fiber);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err))[0],
-      ).toBe("\r\u001b[2K⠋ creating fak…  0s");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err))[0]).toBe(
+        "\r\u001b[2K⠋ creating fak…  0s",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -157,22 +159,22 @@ describe("Progress", () => {
   it.effect("a live line uses the current terminal width after a resize", () =>
     Effect.gen(function* () {
       const columns = yield* Ref.make(80);
-      const terminal = CliOutput.TestTerminal(Ref.get(columns));
+      const terminal = testTerminalOutput(Ref.get(columns));
       yield* Effect.gen(function* () {
         const progress = yield* Progress;
         const fiber = yield* Effect.fork(
           progress.step("creating fake Sandbox", Effect.sleep("1 second")),
         );
         yield* TestClock.adjust("0 millis");
-        const output = yield* CliOutput;
-        expect(
-          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
-        ).toBe("\r\u001b[2K⠋ creating fake Sandbox  0s");
+        const output = yield* CapturedOutput;
+        expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).at(-1)).toBe(
+          "\r\u001b[2K⠋ creating fake Sandbox  0s",
+        );
         yield* Ref.set(columns, 20);
         yield* TestClock.adjust("80 millis");
-        expect(
-          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).at(-1),
-        ).toBe("\r\u001b[2K⠙ creating fak…  0s");
+        expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).at(-1)).toBe(
+          "\r\u001b[2K⠙ creating fak…  0s",
+        );
         yield* Fiber.interrupt(fiber);
       }).pipe(
         Effect.provide(
@@ -193,15 +195,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.note("Snapshot saved, Fingerprint abc");
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("\u001b[2m  Snapshot saved, Fingerprint abc\u001b[0m\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "\u001b[2m  Snapshot saved, Fingerprint abc\u001b[0m\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -214,15 +216,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.hint("make one: proofbox create --os linux");
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("\u001b[2m  make one: proofbox create --os linux\u001b[0m\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "\u001b[2m  make one: proofbox create --os linux\u001b[0m\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -235,15 +237,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.done("clicked 120,340");
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("\u001b[32m✔\u001b[0m clicked 120,340\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "\u001b[32m✔\u001b[0m clicked 120,340\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -257,15 +259,15 @@ describe("Progress", () => {
       const progress = yield* Progress;
       yield* progress.done("clicked 120,340");
       yield* progress.hint("make one: proofbox create --os linux");
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(ConfigProvider.fromMap(new Map())),
@@ -276,15 +278,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.warn("disk is slow");
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("\u001b[33m!\u001b[0m disk is slow\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "\u001b[33m!\u001b[0m disk is slow\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -317,15 +319,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.step("booting", Effect.fail("no")).pipe(Effect.flip);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("✘ booting\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "✘ booting\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -349,17 +351,15 @@ describe("Progress", () => {
         );
         yield* TestClock.adjust("40 seconds");
         yield* Fiber.join(fiber);
-        const output = yield* CliOutput;
-        expect(
-          Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-        ).toBe(
+        const output = yield* CapturedOutput;
+        expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
           "  still booting (15 s)\n  still booting (30 s)\n✔ booting  40s\n",
         );
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            CliOutput.Test,
-            Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+            testOutput,
+            Progress.Default.pipe(Layer.provide(testOutput)),
           ),
         ),
         Effect.withConfigProvider(
@@ -395,15 +395,15 @@ describe("Progress", () => {
     Effect.gen(function* () {
       const progress = yield* Progress;
       yield* progress.step("booting", Effect.void);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe("\u001b[32m✔\u001b[0m booting  \u001b[2m0s\u001b[0m\n");
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
+        "\u001b[32m✔\u001b[0m booting  \u001b[2m0s\u001b[0m\n",
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
       Effect.withConfigProvider(
@@ -418,7 +418,7 @@ describe("Progress", () => {
   );
 
   it.effect("TERM=dumb on a terminal prints today's lines", () => {
-    const terminal = CliOutput.TestTerminal(80);
+    const terminal = testTerminalOutput(80);
     return Effect.gen(function* () {
       const progress = yield* Progress;
       const fiber = yield* Effect.fork(
@@ -426,10 +426,8 @@ describe("Progress", () => {
       );
       yield* TestClock.adjust("40 seconds");
       yield* Fiber.join(fiber);
-      const output = yield* CliOutput;
-      expect(
-        Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join(""),
-      ).toBe(
+      const output = yield* CapturedOutput;
+      expect(Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("")).toBe(
         "proofbox: booting\nproofbox: still booting (15 s)\nproofbox: still booting (30 s)\n",
       );
     }).pipe(
@@ -455,10 +453,8 @@ describe("Progress", () => {
       // When
       yield* TestClock.adjust("40 seconds");
       yield* Fiber.join(fiber);
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       // Then
       expect(err).toBe(
         "proofbox: booting\nproofbox: still booting (15 s)\nproofbox: still booting (30 s)\n",
@@ -466,8 +462,8 @@ describe("Progress", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
     ),

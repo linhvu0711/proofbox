@@ -15,7 +15,6 @@ import {
   TestClock,
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { setMark } from "../src/commands/mark.ts";
 import { stopRecording } from "../src/commands/record.ts";
 import {
@@ -37,6 +36,11 @@ import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import {
+  CapturedOutput,
+  testOutput,
+  testTerminalOutput,
+} from "./support/output.ts";
 import { providerEntry } from "./support/providers.ts";
 
 const PNG_HEAD = new Uint8Array([
@@ -260,7 +264,7 @@ const layers = (
     new Map<string, ProviderEntry>([["fake", providerEntry(mac)]]),
   );
   const output =
-    options.terminal === true ? CliOutput.TestTerminal(100) : CliOutput.Test;
+    options.terminal === true ? testTerminalOutput(100) : testOutput;
   return Layer.mergeAll(
     NodeContext.layer,
     output,
@@ -658,8 +662,8 @@ describe("Recording and the Proof video", () => {
         // When
         yield* stopRecording({ id, out });
         // Then: the paths print, and the screenshot's line has no label
-        const output = yield* CliOutput;
-        const stdout = yield* Ref.get(output.captured.out);
+        const output = yield* CapturedOutput;
+        const stdout = yield* Ref.get(output.out);
         expect({
           stdout: Chunk.toReadonlyArray(stdout).join(""),
           shot: hints.at(-1),
@@ -832,8 +836,8 @@ describe("record stop counts the Action log as change", () => {
   };
 
   const stdoutOf = Effect.gen(function* () {
-    const output = yield* CliOutput;
-    const stdout = yield* Ref.get(output.captured.out);
+    const output = yield* CapturedOutput;
+    const stdout = yield* Ref.get(output.out);
     return Chunk.toReadonlyArray(stdout).join("");
   });
 

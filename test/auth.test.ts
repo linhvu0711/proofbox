@@ -26,7 +26,6 @@ import {
   TestClock,
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -55,6 +54,7 @@ import {
 } from "./support/fake-namespace-api.ts";
 import { makeFakeOpen } from "./support/fake-open.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 import { providerEntry } from "./support/providers.ts";
 
 // A Namespace JWT the fake Compute API sees (tenant tnt_test, exp
@@ -1817,10 +1817,10 @@ describe("auth", () => {
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.join(fiber);
           // Then
-          const output = yield* CliOutput;
-          const stderr = Chunk.toReadonlyArray(
-            yield* Ref.get(output.captured.err),
-          ).join("");
+          const output = yield* CapturedOutput;
+          const stderr = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join(
+            "",
+          );
           expect(stderr).toBe("Logged out of fake.\n");
           expect(readSaved(home)).toEqual({
             other: {
@@ -1834,7 +1834,7 @@ describe("auth", () => {
           Effect.provide(
             Layer.mergeAll(
               NodeContext.layer,
-              CliOutput.Test,
+              testOutput,
               providers,
               KeeperClient.Direct.pipe(Layer.provide(providers)),
               NodeContext.layer,
@@ -2311,7 +2311,7 @@ describe("auth", () => {
           "The browser login did not finish in 10m. Run: proofbox auth login slow",
         );
       }).pipe(
-        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.provide(Layer.mergeAll(testOutput, providers)),
         Effect.withConfigProvider(
           ConfigProvider.fromMap(
             new Map([
@@ -2481,7 +2481,7 @@ describe("auth", () => {
           { name: "ci", expiresAt: new Date("1970-01-31T00:00:00.000Z") },
         ]);
       }).pipe(
-        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.provide(Layer.mergeAll(testOutput, providers)),
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["HOME", home]])),
         ),
@@ -2538,7 +2538,7 @@ describe("auth", () => {
           { name: "ci", expiresAt: new Date("1971-01-01T00:00:00.000Z") },
         ]);
       }).pipe(
-        Effect.provide(Layer.mergeAll(CliOutput.Test, providers)),
+        Effect.provide(Layer.mergeAll(testOutput, providers)),
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["HOME", home]])),
         ),

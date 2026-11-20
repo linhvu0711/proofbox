@@ -13,7 +13,6 @@ import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import {
   BASE_IMAGE_DIR,
@@ -37,6 +36,7 @@ import {
   trackTempDir,
 } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { testOutput } from "./support/output.ts";
 import { providerEntry } from "./support/providers.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
@@ -342,7 +342,7 @@ describe("Docker Provider", () => {
             Effect.provide(
               Layer.mergeAll(
                 NodeContext.layer,
-                CliOutput.Test,
+                testOutput,
                 providers,
                 KeeperClient.Direct.pipe(Layer.provide(providers)),
                 Layer.succeed(
@@ -355,7 +355,7 @@ describe("Docker Provider", () => {
                     hint: () => Effect.void,
                   }),
                 ),
-                Style.Default.pipe(Layer.provide(CliOutput.Test)),
+                Style.Default.pipe(Layer.provide(testOutput)),
               ),
             ),
           ),

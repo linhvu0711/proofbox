@@ -5,7 +5,6 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, ConfigProvider, Effect, Layer, Ref } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -18,6 +17,7 @@ import {
 import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeGitFolder } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
@@ -55,7 +55,7 @@ const layers = (deletes: Ref.Ref<number>) => {
       ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
     ),
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     Layer.succeed(
@@ -68,7 +68,7 @@ const layers = (deletes: Ref.Ref<number>) => {
         hint: () => Effect.void,
       }),
     ),
-    Style.Default.pipe(Layer.provide(CliOutput.Test)),
+    Style.Default.pipe(Layer.provide(testOutput)),
   );
 };
 
@@ -98,12 +98,10 @@ describe("Setup script", () => {
             work,
             setup: script,
           }).pipe(Effect.flip);
-          const output = yield* CliOutput;
+          const output = yield* CapturedOutput;
           return {
             error: { tag: error._tag, code: "code" in error ? error.code : -1 },
-            stderr: Chunk.toReadonlyArray(
-              yield* Ref.get(output.captured.err),
-            ).join(""),
+            stderr: Chunk.toReadonlyArray(yield* Ref.get(output.err)).join(""),
           };
         }).pipe(Effect.provide(layers(deletes)));
         // Then

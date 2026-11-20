@@ -48,6 +48,7 @@ import {
   startKeeper,
 } from "./support/keeper.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput } from "./support/output.ts";
 import { providerEntry } from "./support/providers.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -207,13 +208,13 @@ const coldSandbox = (
   }));
 
 const capturedOut = Effect.gen(function* () {
-  const output = yield* CliOutput;
-  return Chunk.toReadonlyArray(yield* Ref.get(output.captured.out)).join("");
+  const output = yield* CapturedOutput;
+  return Chunk.toReadonlyArray(yield* Ref.get(output.out)).join("");
 });
 
 const capturedErr = Effect.gen(function* () {
-  const output = yield* CliOutput;
-  return Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join("");
+  const output = yield* CapturedOutput;
+  return Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
 });
 
 // A Keeper socket for fake Sandbox `name` that drops each connection
