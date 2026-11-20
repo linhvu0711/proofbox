@@ -41,7 +41,7 @@ at <= 0
           Effect.map((text) =>
             Option.match(parseDeadline(text), {
               onNone: () => Number.NaN,
-              onSome: deadlineSeconds,
+              onSome: (deadline) => deadlineSeconds(deadline),
             }),
           ),
           Effect.orElseSucceed(() => Number.NaN),
