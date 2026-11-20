@@ -4,7 +4,7 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { Command, FileSystem } from "@effect/platform";
 import { Effect, Stream } from "effect";
-import { NotGitFolderError, ProviderError, platformReason } from "../errors.ts";
+import { localFailure, NotGitFolderError, platformReason } from "../errors.ts";
 
 export interface WorkFile {
   readonly path: string;
@@ -12,12 +12,6 @@ export interface WorkFile {
   readonly sha256: string;
   readonly executable: boolean;
 }
-
-const local = (cause: unknown) =>
-  new ProviderError({
-    provider: "local",
-    reason: cause instanceof Error ? cause.message : String(cause),
-  });
 
 const hasCode = (cause: unknown, code: string) =>
   typeof cause === "object" &&
@@ -38,7 +32,7 @@ const hashFile = Effect.fn("workFiles.hashFile")(function* (path: string) {
         size += chunk.length;
       }),
     ),
-    Effect.mapError((error) => local(platformReason(error))),
+    Effect.mapError((error) => localFailure(platformReason(error))),
   );
   return { sha256: hash.digest("hex"), size };
 });
@@ -47,7 +41,7 @@ const hashLink = Effect.fn("workFiles.hashLink")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
   const target = yield* fs
     .readLink(path)
-    .pipe(Effect.mapError((error) => local(platformReason(error))));
+    .pipe(Effect.mapError((error) => localFailure(platformReason(error))));
   return createHash("sha256").update(`link:${target}`).digest("hex");
 });
 
@@ -64,7 +58,7 @@ const workFile = Effect.fn("workFiles.workFile")(function* (
       // ENOTDIR too: a listed path's parent may have become a plain file
       hasCode(cause, "ENOENT") || hasCode(cause, "ENOTDIR")
         ? Effect.succeed(undefined)
-        : Effect.fail(local(cause)),
+        : Effect.fail(localFailure(cause)),
     ),
   );
   if (stat === undefined || stat.isDirectory()) {
@@ -98,7 +92,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       "--others",
       "--exclude-standard",
     ).pipe(Command.workingDirectory(folder)),
-  ).pipe(Effect.mapError((error) => local(error)));
+  ).pipe(Effect.mapError((error) => localFailure(error)));
   const [bytes, code] = yield* Effect.all(
     [
       Stream.runCollect(process.stdout),
@@ -106,7 +100,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       Stream.runDrain(process.stderr),
     ],
     { concurrency: 3 },
-  ).pipe(Effect.mapError((error) => local(error)));
+  ).pipe(Effect.mapError((error) => localFailure(error)));
   if (code !== 0) {
     return yield* new NotGitFolderError({ folder });
   }
@@ -130,7 +124,7 @@ export const listWorkFiles = Effect.fn("workFiles.listWorkFiles")(function* (
       return Buffer.from(path, "utf8").equals(segment)
         ? Effect.succeed(path)
         : Effect.fail(
-            local(
+            localFailure(
               `a Work file name is not valid UTF-8 (0x${segment.toString("hex")}); rename it or git-ignore it`,
             ),
           );

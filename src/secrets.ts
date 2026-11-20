@@ -2,7 +2,7 @@ import { FileSystem, type Error as PlatformError } from "@effect/platform";
 import { Effect, Redacted, Schema } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import {
-  ProviderError,
+  localFailure,
   platformReason,
   SecretsFileLineError,
   SecretsFileUnreadableError,
@@ -85,10 +85,7 @@ const secretsFileError =
           reason: "is not readable",
         });
       default:
-        return new ProviderError({
-          provider: "local",
-          reason: platformReason(error),
-        });
+        return localFailure(platformReason(error));
     }
   };
 

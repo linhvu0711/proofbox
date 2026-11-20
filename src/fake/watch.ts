@@ -2,8 +2,7 @@ import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Duration, Effect, Option } from "effect";
 import { parseDeadline } from "../deadline.ts";
-import { ProviderError } from "../errors.ts";
-import { describe } from "./fake-provider.ts";
+import { causeText, ProviderError } from "../errors.ts";
 
 const fail = (reason: string) =>
   new ProviderError({ provider: "fake", reason });
@@ -15,7 +14,7 @@ const readDeadline = Effect.fn("watch.readDeadline")(function* (
   const fs = yield* FileSystem.FileSystem;
   const text = yield* fs
     .readFileString(join(root, name, "deadline"))
-    .pipe(Effect.mapError((error) => fail(describe(error))));
+    .pipe(Effect.mapError((error) => fail(causeText(error))));
   const deadline = parseDeadline(text);
   if (Option.isNone(deadline)) {
     return yield* fail("could not read the Deadline");
@@ -34,7 +33,7 @@ const deleteSandbox = Effect.fn("watch.deleteSandbox")(function* (
     const deleted = yield* fs
       .remove(join(root, name), { recursive: true, force: true })
       .pipe(
-        Effect.mapError((error) => fail(describe(error))),
+        Effect.mapError((error) => fail(causeText(error))),
         Effect.option,
       );
     if (deleted._tag === "Some") {

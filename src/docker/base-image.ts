@@ -5,7 +5,7 @@ import { join, relative } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Effect } from "effect";
 import { packagePath } from "../entry.ts";
-import { ProviderError, platformReason } from "../errors.ts";
+import { causeText, ProviderError, platformReason } from "../errors.ts";
 import { Progress } from "../progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { DockerClient } from "./docker-client.ts";
@@ -23,7 +23,7 @@ export const baseImageVersion = (
       catch: (cause) =>
         new ProviderError({
           provider: "docker",
-          reason: cause instanceof Error ? cause.message : String(cause),
+          reason: causeText(cause),
         }),
     });
     const files = entries

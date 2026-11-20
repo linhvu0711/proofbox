@@ -6,6 +6,7 @@ import { deadlineSeconds, firstDeadline, parseDeadline } from "../deadline.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
+  causeText,
   MacPrepareError,
   platformReason,
   SandboxGoneError,
@@ -546,8 +547,7 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
   }
   const labels = yield* Effect.try({
     try: () => JSON.parse(labelLine) as unknown,
-    catch: (cause) =>
-      fail(cause instanceof Error ? cause.message : String(cause)),
+    catch: (cause) => fail(causeText(cause)),
   });
   return yield* sandboxInfoFromLabels(
     brandFor(ref),

@@ -13,6 +13,7 @@ import {
 } from "effect";
 import { runCommand } from "../command-checks.ts";
 import {
+  causeText,
   LinkDroppedError,
   ProviderError,
   SandboxGoneError,
@@ -73,11 +74,7 @@ const frameOf = (event: ExecEvent) => {
 // The client wraps the text in its own ProviderError, so a ProviderError
 // sends only its reason.
 const failText = (error: unknown) =>
-  error instanceof ProviderError
-    ? error.reason
-    : error instanceof Error
-      ? error.message
-      : String(error);
+  error instanceof ProviderError ? error.reason : causeText(error);
 
 // What kind of error ended a command, for the Keeper log: its tag, never
 // its text.
@@ -349,18 +346,13 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
             }).pipe(
               Effect.catchAll((error) =>
                 (mode === "stdin"
-                  ? failInput(
-                      error instanceof Error ? error.message : String(error),
-                    )
+                  ? failInput(causeText(error))
                   : Effect.andThen(
                       Effect.sync(() => {
                         closeSocket = true;
                       }),
                       writeFrame(socket, {
-                        fail:
-                          error instanceof Error
-                            ? error.message
-                            : String(error),
+                        fail: causeText(error),
                       }),
                     )
                 ).pipe(Effect.orElseSucceed(() => undefined)),

@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { Effect } from "effect";
 import { entryPath } from "./entry.ts";
-import { ProviderError } from "./errors.ts";
+import { causeText, ProviderError } from "./errors.ts";
 
 export const spawnDetached = Effect.fn("spawnDetached.spawnDetached")(
   (provider: string, rel: string, args: ReadonlyArray<string>) =>
@@ -16,7 +16,7 @@ export const spawnDetached = Effect.fn("spawnDetached.spawnDetached")(
       catch: (cause) =>
         new ProviderError({
           provider,
-          reason: cause instanceof Error ? cause.message : String(cause),
+          reason: causeText(cause),
         }),
     }),
 );

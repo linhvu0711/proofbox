@@ -2,6 +2,7 @@ import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Option, Stream } from "effect";
 import { commandEvents } from "../command-events.ts";
 import {
+  causeText,
   type LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
@@ -97,8 +98,6 @@ export const makeDockerClient = (
         })
       : linkLost("the link was already gone");
   const fail = (reason: string) => new ProviderError({ provider, reason });
-  const describe = (cause: unknown) =>
-    cause instanceof Error ? cause.message : String(cause);
 
   // A missing `docker` binary is a spawn ENOENT (SystemError "NotFound"); a
   // stopped daemon answers every call with DOCKER_DOWN.
@@ -149,7 +148,7 @@ export const makeDockerClient = (
             process.exitCode,
           ],
           { concurrency: "unbounded" },
-        ).pipe(Effect.mapError((error) => fail(describe(error))));
+        ).pipe(Effect.mapError((error) => fail(causeText(error))));
         return {
           exitCode,
           stdout: toText(outBytes),
@@ -233,7 +232,7 @@ export const makeDockerClient = (
               process.exitCode,
             ],
             { concurrency: "unbounded" },
-          ).pipe(Effect.mapError((error) => fail(describe(error))));
+          ).pipe(Effect.mapError((error) => fail(causeText(error))));
           const stderr = toText(errBytes);
           if (exitCode === 255) {
             return yield* linkLost(tail(stderr, 3));
@@ -317,7 +316,7 @@ export const makeDockerClient = (
     }
     const labels = yield* Effect.try({
       try: () => JSON.parse(text.slice(0, separator)) as unknown,
-      catch: (cause) => fail(describe(cause)),
+      catch: (cause) => fail(causeText(cause)),
     });
     return Option.some({
       labels,

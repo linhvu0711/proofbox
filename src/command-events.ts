@@ -1,9 +1,7 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { Chunk, Effect, Stream } from "effect";
+import { causeText } from "./errors.ts";
 import type { ExecEvent, ExecOptions } from "./provider.ts";
-
-const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
 
 // Runs one process and streams it as ExecEvents: stdout and stderr as they
 // come, then the exit code. Given stdin is fed until it ends or the process
@@ -44,7 +42,7 @@ export const commandEvents = <E>(
               Effect.raceFirst(
                 process.exitCode.pipe(Effect.orElseSucceed(() => {})),
               ),
-              Effect.mapError((error) => errors.fail(describe(error))),
+              Effect.mapError((error) => errors.fail(causeText(error))),
             );
       const outputs = Stream.merge(
         process.stdout.pipe(
@@ -53,14 +51,14 @@ export const commandEvents = <E>(
         process.stderr.pipe(
           Stream.map((bytes): ExecEvent => ({ _tag: "Stderr", bytes })),
         ),
-      ).pipe(Stream.mapError((error) => errors.fail(describe(error))));
+      ).pipe(Stream.mapError((error) => errors.fail(causeText(error))));
       const events =
         feed === undefined
           ? outputs
           : Stream.merge(outputs, Stream.fromEffect(feed).pipe(Stream.drain));
       const exit = Stream.fromEffect(
         process.exitCode.pipe(
-          Effect.mapError((error) => errors.fail(describe(error))),
+          Effect.mapError((error) => errors.fail(causeText(error))),
           Effect.flatMap((code) =>
             errors.exit === undefined
               ? Effect.succeed(code)

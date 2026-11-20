@@ -1,6 +1,6 @@
 import { createConnection, type Socket } from "node:net";
 import { Effect, Schema, Stream } from "effect";
-import { KeeperLostError, ProviderError } from "../errors.ts";
+import { causeText, KeeperLostError, ProviderError } from "../errors.ts";
 import { SandboxInfo } from "../provider.ts";
 
 const Count = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
@@ -138,8 +138,7 @@ export const readReplies = (socket: Socket, provider: string) =>
               emit.fail(
                 new ProviderError({
                   provider,
-                  reason:
-                    cause instanceof Error ? cause.message : String(cause),
+                  reason: causeText(cause),
                 }),
               );
             }

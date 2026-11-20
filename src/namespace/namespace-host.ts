@@ -99,9 +99,6 @@ export interface MakeRequest {
 // A host fails only with what create may fail with.
 type CreateError = Effect.Effect.Error<ReturnType<Provider["create"]>>;
 
-export const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
-
 export const fail = (reason: string) =>
   new ProviderError({ provider: "namespace", reason });
 

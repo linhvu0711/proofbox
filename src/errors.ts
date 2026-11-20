@@ -10,6 +10,10 @@ import { formatMb } from "./upload/max-size.ts";
 export const platformReason = (error: PlatformError) =>
   error.description ?? error.message;
 
+// The text of any other failure: an Error's message, else the value as text.
+export const causeText = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause);
+
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;
   readonly reason: string;
@@ -18,6 +22,10 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
     return `Provider ${this.provider} failed: ${this.reason}`;
   }
 }
+
+// A failure on the Caller's own machine, as a ProviderError.
+export const localFailure = (cause: unknown) =>
+  new ProviderError({ provider: "local", reason: causeText(cause) });
 
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
