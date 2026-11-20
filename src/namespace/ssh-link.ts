@@ -2,7 +2,6 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
-  Chunk,
   Clock,
   Config,
   Data,
@@ -16,7 +15,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { commandEvents } from "../command-events.ts";
+import { captureCommand, commandEvents } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
   LinkDroppedError,
@@ -85,11 +84,6 @@ export type OpenLink = (
   owner: LinkOwner,
   route: LinkRoute,
 ) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
-
-const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
-  Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
-    "utf8",
-  );
 
 // Verbose ssh writes debug lines past the real error, so the last
 // non-debug line is the one that says what failed.
@@ -318,59 +312,33 @@ export const makeOpenLink = (
       // `up` makes sure the master is there before a command spawns: a
       // command on a dead master falls back to a new double ssh
       // connection, 5 to 14 s each (#259).
-      const runWith =
-        (ssh: ReadonlyArray<string>, up: LinkUp) => (commandLine: string) =>
+      const linkOver = (ssh: ReadonlyArray<string>, up: LinkUp): Link => ({
+        ssh,
+        run: (commandLine) =>
           Effect.zipRight(
             up,
-            Effect.scoped(
-              Effect.gen(function* () {
-                // An empty stdin, as in commandEvents: ssh forwards an open
-                // pipe, and a remote command that reads it would wait forever.
-                const process = yield* Command.start(
-                  Command.stdin(
-                    Command.make(sshBin, ...ssh, commandLine),
-                    Stream.empty,
-                  ),
-                ).pipe(
-                  Effect.provideService(
-                    CommandExecutor.CommandExecutor,
-                    executor,
-                  ),
-                  Effect.mapError((error) => sshError(error)),
-                );
-                const [outBytes, errBytes, exitCode] = yield* Effect.all(
-                  [
-                    Stream.runCollect(process.stdout),
-                    Stream.runCollect(process.stderr),
-                    process.exitCode,
-                  ],
-                  { concurrency: "unbounded" },
-                ).pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new ProviderError({
-                        provider: "namespace",
-                        reason: describe(error),
-                      }),
-                  ),
-                );
-                const stderr = toText(errBytes);
-                if (exitCode === 255) {
-                  return stderr.includes("Host key verification failed")
-                    ? yield* hostKeyRefused(ref)
-                    : yield* linkLost(ref, lastLine(stderr));
-                }
-                return {
-                  exitCode,
-                  stdout: toText(outBytes),
-                  stderr,
-                } satisfies HostResult;
-              }),
+            captureCommand(
+              // An empty stdin, as in commandEvents: ssh forwards an open
+              // pipe, and a remote command that reads it would wait forever.
+              Command.stdin(
+                Command.make(sshBin, ...ssh, commandLine),
+                Stream.empty,
+              ),
+            ).pipe(
+              Effect.provideService(CommandExecutor.CommandExecutor, executor),
+              Effect.mapError((error) => sshError(error)),
+              Effect.flatMap((result) =>
+                result.exitCode !== 255
+                  ? Effect.succeed(result satisfies HostResult)
+                  : Effect.fail(
+                      result.stderr.includes("Host key verification failed")
+                        ? hostKeyRefused(ref)
+                        : linkLost(ref, lastLine(result.stderr)),
+                    ),
+              ),
             ),
-          );
-      const streamWith =
-        (ssh: ReadonlyArray<string>, up: LinkUp) =>
-        (commandLine: string, options?: ExecOptions) =>
+          ),
+        stream: (commandLine, options) =>
           Stream.unwrap(
             Effect.as(
               up,
@@ -398,7 +366,8 @@ export const makeOpenLink = (
                 },
               ),
             ),
-          );
+          ),
+      });
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
       // handshake.
@@ -416,22 +385,14 @@ export const makeOpenLink = (
           (yield* checkCtl(paths.control, targetOf(stored)))
         ) {
           const ssh = sshFor(paths.control, keeperKey, stored);
-          return {
-            ssh,
-            run: runWith(ssh, Effect.void),
-            stream: streamWith(ssh, Effect.void),
-          } satisfies Link;
+          return linkOver(ssh, Effect.void);
         }
       }
       const { config, gateway } = yield* gatewayConfig(api, ref);
       const target = targetOf(gateway);
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
         const ssh = sshFor(paths.control, keeperKey, gateway);
-        return {
-          ssh,
-          run: runWith(ssh, Effect.void),
-          stream: streamWith(ssh, Effect.void),
-        } satisfies Link;
+        return linkOver(ssh, Effect.void);
       }
       const ctl =
         owner === "keeper"
@@ -621,18 +582,10 @@ export const makeOpenLink = (
         // A master another process left on the Keeper's socket, as a Keeper
         // killed with SIGKILL leaves it.
         const up = owner === "keeper" ? reopen : Effect.void;
-        return {
-          ssh,
-          run: runWith(ssh, up),
-          stream: streamWith(ssh, up),
-        } satisfies Link;
+        return linkOver(ssh, up);
       }
       yield* open(linkWait);
-      return {
-        ssh,
-        run: runWith(ssh, reopen),
-        stream: streamWith(ssh, reopen),
-      } satisfies Link;
+      return linkOver(ssh, reopen);
     });
 };
 
