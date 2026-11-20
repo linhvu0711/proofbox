@@ -1,7 +1,12 @@
 import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Option, Schema } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
-import { nextDeadline, parseDeadline } from "../deadline.ts";
+import {
+  deadlineSeconds,
+  firstDeadline,
+  nextDeadline,
+  parseDeadline,
+} from "../deadline.ts";
 import {
   ProviderError,
   SandboxGoneError,
@@ -252,12 +257,11 @@ export const makeDockerProvider = (options: {
     const maxLifeAt =
       req.maxLifeAt ??
       new Date(createdAt.getTime() + Duration.toMillis(req.maxLife));
-    const firstDeadline = new Date(
-      Math.min(
-        createdAt.getTime() + Duration.toMillis(req.idle) + 60_000,
-        maxLifeAt.getTime(),
-      ),
-    );
+    const first = firstDeadline({
+      now: createdAt,
+      idle: req.idle,
+      maxLifeAt,
+    });
     let name: string | undefined;
     const tries = req.name === undefined ? 5 : 1;
     for (let i = 0; i < tries && name === undefined; i++) {
@@ -298,7 +302,7 @@ export const makeDockerProvider = (options: {
               `proofbox.size=${formatSize(size)}`,
             ]),
         "--env",
-        `PROOFBOX_DEADLINE=${Math.floor(firstDeadline.getTime() / 1000)}`,
+        `PROOFBOX_DEADLINE=${deadlineSeconds(first)}`,
         "--env",
         `PROOFBOX_MAX_LIFE_AT=${Math.floor(maxLifeAt.getTime() / 1000)}`,
         ...(options.runArgs ?? []),

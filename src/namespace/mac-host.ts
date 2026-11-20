@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Chunk, Clock, Duration, Effect, Option, Stream } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
-import { parseDeadline } from "../deadline.ts";
+import { deadlineSeconds, firstDeadline, parseDeadline } from "../deadline.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
@@ -87,11 +87,12 @@ const writeMacState = Effect.fn("macHost.writeMacState")(function* (
   createdAt: Date,
 ) {
   const now = yield* Clock.currentTimeMillis;
-  const deadline = Math.floor(
-    Math.min(
-      now + Duration.toMillis(req.idle) + 60_000,
-      req.maxLifeAt.getTime(),
-    ) / 1000,
+  const deadline = deadlineSeconds(
+    firstDeadline({
+      now: new Date(now),
+      idle: req.idle,
+      maxLifeAt: req.maxLifeAt,
+    }),
   );
   const labels = JSON.stringify({
     "proofbox.name": req.ref.name,

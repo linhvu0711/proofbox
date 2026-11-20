@@ -17,6 +17,7 @@ import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import {
   deadlineText,
+  firstDeadline,
   idleDefault,
   nextDeadline,
   parseDeadline,
@@ -146,6 +147,17 @@ describe("Deadline", () => {
     const text = deadlineText(date);
     // Then
     expect(text).toBe("1700000000\n");
+  });
+
+  it("firstDeadline adds the idle time and the grace", () => {
+    // Given: now, idle 15 minutes, max life at 13:00
+    const deadline = firstDeadline({
+      now: new Date("2026-09-28T10:00:00.000Z"),
+      idle: Duration.minutes(15),
+      maxLifeAt: new Date("2026-09-28T13:00:00.000Z"),
+    });
+    // Then
+    expect(deadline.toISOString()).toBe("2026-09-28T10:16:00.000Z");
   });
 
   it("idle defaults to 5 min on macOS and 15 min on Linux", () => {

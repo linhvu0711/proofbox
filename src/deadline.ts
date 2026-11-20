@@ -120,6 +120,22 @@ export const nextDeadline = (options: {
   return pushed < options.maxLifeAt ? pushed : options.maxLifeAt;
 };
 
+// Room for create's own last steps (the desktop wait and the bundle checks
+// in Docker, the state write on a Mac): the first Deadline is set before
+// them and the first push comes after, and the Linux watchdog
+// (images/linux/init.sh) deletes the container at the first Deadline.
+export const FIRST_DEADLINE_GRACE = Duration.seconds(60);
+
+export const firstDeadline = (options: {
+  readonly now: Date;
+  readonly idle: Duration.Duration;
+  readonly maxLifeAt: Date;
+}): Date =>
+  nextDeadline({
+    ...options,
+    idle: Duration.sum(options.idle, FIRST_DEADLINE_GRACE),
+  });
+
 // The Deadline one push sets now: idle from now, capped at max life.
 export const pushedDeadline = Effect.fn("deadline.pushedDeadline")(
   (info: SandboxInfo): Effect.Effect<Date> =>
