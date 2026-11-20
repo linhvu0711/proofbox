@@ -20,6 +20,14 @@ import {
   trackTempDir,
 } from "./support/cli.ts";
 
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const until = async (done: () => boolean) => {
+  while (!done()) {
+    await pause(50);
+  }
+};
+
 const workFixture = () =>
   makeGitFolder({
     committed: {
@@ -263,6 +271,42 @@ describe("create", () => {
     expect(result.stderr).toContain(
       `  ends at ${formatClock(held, new Date())} if idle, at `,
     );
+  });
+
+  it("a fake create held past its idle time leaves a live Sandbox idle from the end of create", async () => {
+    // Given: a create held until the idle time has passed
+    const env = makeEnv();
+    const hold = join(env.root, "release-create");
+    const creating = runCli(
+      env,
+      ["create", "--os", "linux", "--provider", "fake", "--idle", "5s"],
+      { set: { PROOFBOX_FAKE_CREATE_HOLD: hold } },
+    );
+    await until(() =>
+      readdirSync(env.root).some((f) => f !== "release-create"),
+    );
+    const [name = ""] = readdirSync(env.root).filter(
+      (f) => f !== "release-create",
+    );
+    await pause(6000);
+    const released = Math.floor(Date.now() / 1000);
+    writeFileSync(hold, "");
+    // When: the Deadline the create leaves, read before the watcher can
+    // delete the Sandbox at it
+    const file = join(env.root, name, "deadline");
+    const read = () => Number(readFileSync(file, "utf8").trim());
+    let polled = read();
+    for (let tries = 0; tries < 100 && polled > released + 12; tries++) {
+      await pause(20);
+      polled = read();
+    }
+    const result = await creating;
+    // Then
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      inWindow: released + 5 <= polled && polled <= released + 12,
+    }).toEqual({ exitCode: 0, stdout: `fake:${name}\n`, inWindow: true });
   });
 
   it("create --setup without --work makes nothing", async () => {
