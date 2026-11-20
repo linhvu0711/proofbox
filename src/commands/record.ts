@@ -14,10 +14,10 @@ import {
   type HelperTable,
   runHelper,
 } from "../helper.ts";
-import { ACTION_LOG_PATHS, ActionLogLine } from "../pixel.ts";
+import { ACTION_LOG_PATHS } from "../pixel.ts";
 import { Progress } from "../progress.ts";
+import { readActionLog } from "../proof/action-log.ts";
 import {
-  actionSpans,
   nothingChanged,
   parseProbe,
   planEdit,
@@ -232,68 +232,12 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (actionLog.code !== 0) {
         return yield* helperFailed(actionLog);
       }
-      const marks: number[] = [];
-      const clicks: { t: number; x: number; y: number }[] = [];
-      const actions: number[] = [];
-      const waits: { t: number; reason: string }[] = [];
-      const acting: { kind: string; t: number }[] = [];
-      // Typing that began before the Recording and ended in it.
-      let typedInside = false;
-      for (const line of actionLog.stdout.toString("utf8").split("\n")) {
-        if (line.trim() === "") {
-          continue;
-        }
-        const entry = yield* Schema.decodeUnknown(
-          Schema.parseJson(ActionLogLine),
-        )(line);
-        // Typing that began before the Recording counts from its start.
-        if (
-          (entry.kind === "type" || entry.kind === "typed") &&
-          entry.t <= info.stop
-        ) {
-          acting.push({
-            kind: entry.kind,
-            t: Math.max(0, Math.min(entry.t - info.start, probe.duration)),
-          });
-        }
-        if (entry.t < info.start || entry.t > info.stop) {
-          continue;
-        }
-        const t = Math.min(entry.t - info.start, probe.duration);
-        if (entry.kind === "typed") {
-          typedInside = true;
-        }
-        // Typing went in above, with the typing from before the Recording.
-        if (entry.kind !== "type" && entry.kind !== "typed") {
-          acting.push({ kind: entry.kind, t });
-        }
-        if (entry.kind === "mark") {
-          marks.push(t);
-        } else if (entry.kind === "click") {
-          clicks.push({ t, x: entry.x, y: entry.y });
-        } else if (entry.kind === "wait") {
-          waits.push({ t, reason: entry.reason });
-        }
-        if (
-          entry.kind === "click" ||
-          entry.kind === "type" ||
-          entry.kind === "key" ||
-          entry.kind === "scroll" ||
-          entry.kind === "drag"
-        ) {
-          actions.push(t);
-        }
-      }
-      // An action can change too few pixels for freezedetect, such as one
-      // letter or a small toolbar icon, so the time an action ran is never
-      // a Still part, and an action in the Recording is change enough
-      // (ADR 0006).
-      const spans = actionSpans(acting, probe.duration);
-      // Only a line inside the Recording counts: a `type` line whose
-      // helper failed before its `typed` line stays open in the Action log
-      // for the Sandbox's life.
-      const acted = actions.length > 0 || typedInside;
-      if (!acted && nothingChanged(check)) {
+      const events = yield* readActionLog(actionLog.stdout.toString("utf8"), {
+        start: info.start,
+        stop: info.stop,
+        duration: probe.duration,
+      });
+      if (!events.acted && nothingChanged(check)) {
         return yield* new NothingChangedError({
           id: options.id,
           raw: `${info.dir}/raw.mkv`,
@@ -301,11 +245,11 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const plan = planEdit({
         duration: probe.duration,
-        freezes: withoutSpans(probe.freezes, spans),
-        marks,
-        clicks,
-        actions,
-        waits,
+        freezes: withoutSpans(probe.freezes, events.spans),
+        marks: events.marks,
+        clicks: events.clicks,
+        actions: events.actions,
+        waits: events.waits,
       });
       const progress = yield* Progress;
       for (const wait of plan.unusedWaits) {
