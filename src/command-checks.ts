@@ -1,5 +1,5 @@
 import { Clock, Duration, Effect, Fiber, Stream } from "effect";
-import { pushedDeadline } from "./deadline.ts";
+import { pushedDeadline, pushInterval } from "./deadline.ts";
 import type {
   LinkDroppedError,
   ProviderError,
@@ -241,9 +241,7 @@ const withRunningPush =
   <A, E, R>(
     events: Stream.Stream<A, E, R>,
   ): Stream.Stream<A, E | SandboxCallError, R> => {
-    const every = Duration.millis(
-      Duration.toMillis(Duration.seconds(connection.info.idleSeconds)) / 3,
-    );
+    const every = pushInterval(Duration.seconds(connection.info.idleSeconds));
     const push = Effect.flatMap(pushedDeadline(connection.info), (deadline) =>
       connection.extend(deadline),
     );

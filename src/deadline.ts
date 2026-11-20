@@ -136,6 +136,9 @@ export const firstDeadline = (options: {
     idle: Duration.sum(options.idle, FIRST_DEADLINE_GRACE),
   });
 
+export const pushInterval = (idle: Duration.Duration): Duration.Duration =>
+  Duration.millis(Duration.toMillis(idle) / 3);
+
 // The Deadline one push sets now: idle from now, capped at max life.
 export const pushedDeadline = Effect.fn("deadline.pushedDeadline")(
   (info: SandboxInfo): Effect.Effect<Date> =>
@@ -197,10 +200,9 @@ export const withDeadlinePush =
       // gives the raced effect's value.
       const result = yield* effect.pipe(
         Effect.raceFirst(
-          Effect.repeat(
-            push,
-            Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-          ).pipe(Effect.zipRight(Effect.never)),
+          Effect.repeat(push, Schedule.spaced(pushInterval(idle))).pipe(
+            Effect.zipRight(Effect.never),
+          ),
         ),
       );
       yield* push;

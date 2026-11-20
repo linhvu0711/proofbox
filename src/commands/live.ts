@@ -1,6 +1,6 @@
 import { Duration, Effect, Schedule } from "effect";
 import { CliOutput } from "../cli-output.ts";
-import { deadlinePush } from "../deadline.ts";
+import { deadlinePush, pushInterval } from "../deadline.ts";
 import { Progress } from "../progress.ts";
 import { lacksFeature, liveViewOn, Providers } from "../provider.ts";
 import { resolveSandboxId } from "../sandbox-id.ts";
@@ -38,10 +38,7 @@ export const openLive = Effect.fn("live.openLive")(function* (
   // The Live view stays open until Ctrl-C interrupts the loop or the
   // port-forward dies — a dead forward means the address is useless.
   yield* Effect.raceFirst(
-    Effect.repeat(
-      push,
-      Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-    ),
+    Effect.repeat(push, Schedule.spaced(pushInterval(idle))),
     view.gone,
   );
 }, Effect.scoped);

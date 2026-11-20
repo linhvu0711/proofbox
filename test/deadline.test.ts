@@ -22,6 +22,7 @@ import {
   nextDeadline,
   parseDeadline,
   parseSpan,
+  pushInterval,
 } from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -158,6 +159,15 @@ describe("Deadline", () => {
     });
     // Then
     expect(deadline.toISOString()).toBe("2026-09-28T10:16:00.000Z");
+  });
+
+  it("pushInterval is a third of the idle time", () => {
+    // Given
+    const idle = Duration.minutes(15);
+    // When
+    const every = pushInterval(idle);
+    // Then
+    expect(Duration.toMillis(every)).toBe(300000);
   });
 
   it("idle defaults to 5 min on macOS and 15 min on Linux", () => {
