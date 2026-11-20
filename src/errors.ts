@@ -557,17 +557,6 @@ export class ActCutOffError extends Data.TaggedError("ActCutOffError")<{
   }
 }
 
-export class NoSuchProviderError extends Data.TaggedError(
-  "NoSuchProviderError",
-)<{
-  readonly provider: string;
-  readonly known: ReadonlyArray<string>;
-}> {
-  get message() {
-    return `No provider named "${this.provider}". Providers: ${this.known.join(", ")}.`;
-  }
-}
-
 export class NoLoginNeededError extends Data.TaggedError("NoLoginNeededError")<{
   readonly provider: string;
 }> {

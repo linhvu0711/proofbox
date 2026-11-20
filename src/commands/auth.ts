@@ -10,7 +10,6 @@ import {
   NoLoginNeededError,
   NoLoginWayError,
   NoRegionsError,
-  NoSuchProviderError,
   NoTokenError,
   NoTokenMakingError,
   NotLoggedInError,
@@ -27,19 +26,11 @@ import {
 import { openBrowser } from "../login/open-browser.ts";
 import { envRegion, envToken, envTokenName } from "../login/provider-login.ts";
 import { Progress } from "../progress.ts";
-import { Providers } from "../provider.ts";
+import { loadProvider, Providers } from "../provider.ts";
 
 // The Provider plus its Ways login part, or the refusal to print.
 const loginPartFor = Effect.fn("auth.loginPartFor")(function* (name: string) {
-  const providers = yield* Providers;
-  const entry = providers.get(name);
-  if (entry === undefined) {
-    return yield* new NoSuchProviderError({
-      provider: name,
-      known: [...providers.keys()],
-    });
-  }
-  const provider = yield* entry.load;
+  const provider = yield* loadProvider(name);
   const part = provider.login;
   if (part._tag === "None") {
     return yield* new NoLoginNeededError({ provider: provider.name });

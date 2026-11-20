@@ -93,7 +93,7 @@ describe("Provider registry", () => {
     );
     // Then
     expect(result.stderr).toBe(
-      "Expected one of the following cases: docker, namespace\n\n",
+      'Unknown Provider "dockr": use one of: docker, namespace\n',
     );
     expect(result.stdout).toBe("");
     expect(result.exitCode).toBe(125);

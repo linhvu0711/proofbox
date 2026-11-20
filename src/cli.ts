@@ -68,10 +68,10 @@ const readMaxSize = Effect.fn("cli.readMaxSize")(
 );
 
 const makeCommands = (providers: ReadonlyArray<string>) => {
-  const providerArg = Args.choice(
-    providers.map((name): [string, string] => [name, name]),
-    { name: "provider" },
-  );
+  // proofbox checks the name itself, so a wrong one gets the same message
+  // from the flag, the argument, and the config file.
+  const known = `one of: ${providers.join(", ")}`;
+  const providerArg = Args.text({ name: "provider" });
 
   const create = Command.make(
     "create",
@@ -79,9 +79,9 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       os: Options.choice("os", ["linux", "macos"]).pipe(
         Options.withDescription("the OS of the Sandbox"),
       ),
-      provider: Options.choice("provider", providers).pipe(
+      provider: Options.text("provider").pipe(
         Options.withDescription(
-          `the Provider that makes the Sandbox; default from ~/.config/proofbox/config, else ${DEFAULT_PROVIDER}`,
+          `the Provider that makes the Sandbox, ${known}; default from ~/.config/proofbox/config, else ${DEFAULT_PROVIDER}`,
         ),
         Options.optional,
       ),
@@ -153,7 +153,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "login",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider to log in to"),
+        Args.withDescription(`the Provider to log in to, ${known}`),
       ),
       token: Options.boolean("token").pipe(
         Options.withDescription(
@@ -175,7 +175,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "logout",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider to log out of"),
+        Args.withDescription(`the Provider to log out of, ${known}`),
       ),
     },
     ({ provider }) => logoutOfProvider(provider),
@@ -189,7 +189,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "token",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider that makes the token"),
+        Args.withDescription(`the Provider that makes the token, ${known}`),
       ),
       name: Options.text("name").pipe(
         Options.withDescription("the token's name, for example ci; required"),

@@ -299,7 +299,7 @@ describe("Help text", () => {
     }
   });
 
-  it("create --help lists docker | namespace without the fake Provider", async () => {
+  it("create --help names docker and namespace without the fake Provider", async () => {
     // Given
     const env = makeEnv();
     // When
@@ -307,17 +307,19 @@ describe("Help text", () => {
       unset: ["PROOFBOX_FAKE_ROOT"],
     });
     // Then
-    expect(result.stdout).toContain("--provider docker | namespace");
-    expect(result.stdout).not.toContain("| fake");
+    expect(result.stdout).toContain(
+      "the Provider that makes the Sandbox, one of: docker, namespace;",
+    );
+    expect(result.stdout).not.toContain("fake");
   });
 
-  it("with PROOFBOX_FAKE_ROOT set, --provider also lists fake", async () => {
+  it("with PROOFBOX_FAKE_ROOT set, --provider also names fake", async () => {
     // Given
     const env = makeEnv();
     // When
     const result = await runCli(env, ["create", "--help"]);
     // Then
-    expect(result.stdout).toContain("--provider docker | namespace | fake");
+    expect(result.stdout).toContain("one of: docker, namespace, fake;");
   });
 
   it("auth login, logout, and token list the Providers", async () => {
@@ -331,9 +333,7 @@ describe("Help text", () => {
     );
     // Then
     for (const result of results) {
-      expect(result.stdout).toContain(
-        "One of the following: docker, namespace",
-      );
+      expect(result.stdout).toContain("one of: docker, namespace");
     }
   });
 

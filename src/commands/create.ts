@@ -15,14 +15,18 @@ import {
   SetupNeedsWorkError,
   SetupScriptMissingError,
   SizeNotOfferedError,
-  UnknownProviderError,
 } from "../errors.ts";
 import { fingerprint } from "../fingerprint.ts";
 import { formatClock } from "../format-time.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
 import { withCreateMark } from "../local-sandboxes.ts";
 import { Progress } from "../progress.ts";
-import { lacksFeature, liveViewOn, type Os, Providers } from "../provider.ts";
+import {
+  lacksFeature,
+  liveViewOn,
+  loadProvider,
+  type Os,
+} from "../provider.ts";
 import { providerForOs } from "../provider-config.ts";
 import { sandboxFiles } from "../sandbox-file.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
@@ -47,16 +51,9 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly size?: string | undefined;
   }) {
     const fs = yield* FileSystem.FileSystem;
-    const providers = yield* Providers;
-    const providerName = options.provider ?? (yield* providerForOs(options.os));
-    const entry = providers.get(providerName);
-    if (entry === undefined) {
-      return yield* new UnknownProviderError({
-        provider: providerName,
-        known: [...providers.keys()],
-      });
-    }
-    const provider = yield* entry.load;
+    const provider = yield* loadProvider(
+      options.provider ?? (yield* providerForOs(options.os)),
+    );
     const offer = provider.offers[options.os];
     if (offer === undefined) {
       return yield* new MissingCapabilityError({

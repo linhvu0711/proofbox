@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { Config, Effect, Schema } from "effect";
-import { BadConfigError, UnknownProviderError } from "./errors.ts";
-import { type Os, Providers } from "./provider.ts";
+import { BadConfigError } from "./errors.ts";
+import type { Os } from "./provider.ts";
 
 const ConfigFile = Schema.Struct({
   linux: Schema.optional(Schema.String),
@@ -50,14 +50,6 @@ export const providerForOs = Effect.fn("providerConfig.providerForOs")(
     const parsed = yield* Schema.decodeUnknown(ConfigFile, {
       onExcessProperty: "error",
     })(json).pipe(Effect.mapError(() => bad(providerReason(os))));
-    const name = parsed[os] ?? DEFAULT_PROVIDER;
-    const providers = yield* Providers;
-    if (!providers.has(name)) {
-      return yield* new UnknownProviderError({
-        provider: name,
-        known: [...providers.keys()],
-      });
-    }
-    return name;
+    return parsed[os] ?? DEFAULT_PROVIDER;
   },
 );
