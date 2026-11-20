@@ -1,6 +1,7 @@
 import { FileSystem } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { Duration, Effect, Schedule } from "effect";
+import { Duration, Effect, Option, Schedule } from "effect";
+import { deadlineSeconds, parseDeadline } from "../deadline.ts";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
 import { fileStem } from "../sandbox-id.ts";
@@ -37,7 +38,12 @@ at <= 0
       const capFile = paths.maxLife;
       const epoch = (file: string) =>
         fs.readFileString(file).pipe(
-          Effect.map((text) => Number(text.trim())),
+          Effect.map((text) =>
+            Option.match(parseDeadline(text), {
+              onNone: () => Number.NaN,
+              onSome: deadlineSeconds,
+            }),
+          ),
           Effect.orElseSucceed(() => Number.NaN),
         );
       const exists = fs.exists(capFile).pipe(Effect.orElseSucceed(() => false));
