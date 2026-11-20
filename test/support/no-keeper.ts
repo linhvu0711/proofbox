@@ -1,0 +1,15 @@
+import { symlinkSync } from "node:fs";
+import { Server } from "node:net";
+
+// Loaded through NODE_OPTIONS into every process a test CLI starts; only
+// the Keeper is changed. Its socket path becomes a link to itself, so a
+// client's connect fails at once with ELOOP, which proofbox reads as no
+// Keeper and starts none (src/keeper/lifecycle.ts). The exit skips the
+// Keeper's own cleanup, which would remove that link.
+if (process.argv[1]?.endsWith("keeper-main.ts")) {
+  Server.prototype.listen = (...args: unknown[]): never => {
+    const path = args[0];
+    if (typeof path === "string") symlinkSync(path, path);
+    process.exit(1);
+  };
+}

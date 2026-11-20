@@ -83,13 +83,11 @@ export const cleanupEnvs = () => {
   }
 };
 
-// A socket path this long fails at once on macOS and Linux, so the Keeper cannot start.
-export const keeperCannotStart = (
-  env: CliEnv,
-): Readonly<Record<string, string>> => {
-  const runtime = join(env.runtime, "k".repeat(110));
-  mkdirSync(runtime, { recursive: true, mode: 0o700 });
-  return { PROOFBOX_RUNTIME_DIR: runtime };
+// The Keeper loads a preload that leaves a looping link at its socket, so
+// it fails the same way on every system. A file URL keeps a repo path with
+// a space whole inside NODE_OPTIONS.
+export const keeperCannotStart: Readonly<Record<string, string>> = {
+  NODE_OPTIONS: `--import=${new URL("./no-keeper.ts", import.meta.url).href}`,
 };
 
 export const trackTempDir = (dir: string): void => {

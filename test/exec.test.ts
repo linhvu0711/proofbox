@@ -34,7 +34,7 @@ describe("exec", () => {
   it("an exec with no Keeper warns once and still runs the command", async () => {
     // Given: a Sandbox whose Keeper cannot start
     const env = makeEnv();
-    const set = keeperCannotStart(env);
+    const set = keeperCannotStart;
     const created = await runCli(
       env,
       ["create", "--os", "linux", "--provider", "fake"],
