@@ -173,6 +173,7 @@ const iamUrl = (server: FakeNamespace) => server.url.replace("/{region}", "");
 const clickWhenWaiting = async (
   server: FakeNamespace,
   loginId = "L1",
+  heldFor = 0,
 ): Promise<void> => {
   const deadline = Date.now() + 30_000;
   while (!server.calls.some((call) => call.method === "CompleteTenantLogin")) {
@@ -181,6 +182,7 @@ const clickWhenWaiting = async (
     }
     await pause(50);
   }
+  await pause(heldFor);
   const res = await fetch(`${iamUrl(server)}/login/${loginId}`, {
     method: "POST",
   });
@@ -1975,6 +1977,55 @@ describe("auth", () => {
     expect(() =>
       statSync(join(home, ".config", "proofbox", "logins.json")),
     ).toThrow();
+  });
+
+  it("a browser login Namespace never answers gives up at the request limit", async () => {
+    // Given: StartLogin never answers; the request limit is 1s
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespace((call) =>
+      call.method === "StartLogin" ? "hang" : { json: {} },
+    );
+    // When
+    const result = await runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_NS_REQUEST_TIMEOUT: "1s",
+        PROOFBOX_OPEN: makeFakeOpen("true"),
+      },
+      timeout: 20_000,
+    });
+    // Then
+    expect({ stderr: result.stderr, exitCode: result.exitCode }).toEqual({
+      stderr: "Could not reach Namespace. Check your network and try again.\n",
+      exitCode: 125,
+    });
+  });
+
+  it("a held browser login outlasts the request limit", async () => {
+    // Given: the login page is clicked 2s after CompleteTenantLogin
+    // arrives; the request limit is 1s
+    const env = makeEnv();
+    const home = makeHome();
+    const ns = await fakeNamespaceSignin();
+    // When
+    const run = runCli(env, ["auth", "login", "namespace"], {
+      set: {
+        HOME: home,
+        PROOFBOX_NAMESPACE_IAM_URL: iamUrl(ns),
+        PROOFBOX_NS_REQUEST_TIMEOUT: "1s",
+        PROOFBOX_OPEN: makeFakeOpen("true"),
+      },
+    });
+    await clickWhenWaiting(ns, "L1", 2_000);
+    const result = await run;
+    // Then
+    expect({ stderr: result.stderr, exitCode: result.exitCode }).toEqual({
+      stderr:
+        "Waiting for you to log in in the browser... (Ctrl+C to stop)\nLogged in to namespace as team-1.\n",
+      exitCode: 0,
+    });
   });
 
   it("a browser login with no browser prints the link and keeps waiting", async () => {

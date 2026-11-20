@@ -1,5 +1,5 @@
 import { timestampDate, timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { Code, ConnectError, type Transport } from "@connectrpc/connect";
+import { Code, ConnectError } from "@connectrpc/connect";
 import {
   createComputeClient,
   createGlobalTransport,
@@ -10,8 +10,7 @@ import {
 import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
 import { InstanceMetadata_Status } from "@namespacelabs/sdk/proto/namespace/cloud/compute/v1beta/compute_pb";
 import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
-import { Config, Duration, Effect, Option, Redacted, Schema } from "effect";
-import { parseSpan } from "../deadline.ts";
+import { Config, Effect, Option, Redacted, Schema } from "effect";
 import {
   type BadLoginsFileError,
   LoginExpiredError,
@@ -30,6 +29,11 @@ import type {
   TokenRequest,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
+import {
+  limitedTransport,
+  requestMillis,
+  unreachable,
+} from "./namespace-request.ts";
 import { DEFAULT_REGION } from "./regions.ts";
 
 export type ApiLoginError =
@@ -150,15 +154,6 @@ export interface NamespaceApi {
     | ProviderError
   >;
 }
-
-const UNREACHABLE =
-  "Could not reach Namespace. Check your network and try again.";
-
-export const unreachable = () =>
-  new ProviderUnavailableError({
-    provider: "namespace",
-    reason: UNREACHABLE,
-  });
 
 // A refused create names the capacity it wanted; pull the clause that
 // ends at the first `)` so the size is included.
@@ -283,49 +278,6 @@ const tokenUrl = Config.string("PROOFBOX_NAMESPACE_TOKEN_URL").pipe(
   Config.withDefault("https://iam.namespaceapis.com"),
 );
 
-// A request Namespace never answers would hang its command with no end
-// (#261), so every request gets this limit unless its call sets one.
-const requestTimeout = Config.string("PROOFBOX_NS_REQUEST_TIMEOUT").pipe(
-  Config.withDefault("30s"),
-);
-
-const requestMillis = Effect.gen(function* () {
-  const span = yield* parseSpan(
-    "PROOFBOX_NS_REQUEST_TIMEOUT",
-    yield* requestTimeout,
-    { units: ["ms", "s", "m"], zero: false, example: "30s" },
-  );
-  return Duration.toMillis(span);
-}).pipe(
-  Effect.mapError(
-    (error) =>
-      new ProviderError({ provider: "namespace", reason: error.message }),
-  ),
-);
-
-// Connect hands each call's own `timeoutMs` to its transport, undefined
-// when the call sets none; a limit it hits fails as DeadlineExceeded.
-const withRequestLimit = (transport: Transport, ms: number): Transport => ({
-  unary: (method, signal, timeoutMs, header, input, contextValues) =>
-    transport.unary(
-      method,
-      signal,
-      timeoutMs ?? ms,
-      header,
-      input,
-      contextValues,
-    ),
-  stream: (method, signal, timeoutMs, header, input, contextValues) =>
-    transport.stream(
-      method,
-      signal,
-      timeoutMs ?? ms,
-      header,
-      input,
-      contextValues,
-    ),
-});
-
 // The only rights a robot token gets: what `create`, `exec`, `list`,
 // `delete`, and the Snapshot push need. The push itself runs on the
 // Sandbox host with its own registry login.
@@ -364,9 +316,7 @@ export const makeNamespaceApi = (deps: {
         baseUrl: url.replaceAll("{region}", region),
       });
       return createComputeClient({
-        transport: limited
-          ? withRequestLimit(transport, yield* requestMillis)
-          : transport,
+        transport: limited ? yield* limitedTransport(transport) : transport,
       });
     });
 
@@ -387,12 +337,11 @@ export const makeNamespaceApi = (deps: {
       );
       return createRegistryClient({
         tokenSource: fromBearerToken(Redacted.value(token)),
-        transport: withRequestLimit(
+        transport: yield* limitedTransport(
           createGlobalTransport({
             tokenSource: fromBearerToken(Redacted.value(token)),
             baseUrl,
           }),
-          yield* requestMillis,
         ),
       });
     });
@@ -666,12 +615,11 @@ export const makeNamespaceApi = (deps: {
     );
     const client = createIAMClient({
       tokenSource: fromBearerToken(Redacted.value(tenant)),
-      transport: withRequestLimit(
+      transport: yield* limitedTransport(
         createGlobalTransport({
           tokenSource: fromBearerToken(Redacted.value(tenant)),
           baseUrl,
         }),
-        yield* requestMillis,
       ),
     });
     const made = yield* Effect.tryPromise({
