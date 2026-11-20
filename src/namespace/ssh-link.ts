@@ -2,7 +2,6 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { Command, CommandExecutor, FileSystem } from "@effect/platform";
 import {
-  Chunk,
   Clock,
   Config,
   Data,
@@ -16,21 +15,26 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { commandEvents } from "../command-events.ts";
+import { captureCommand, commandEvents } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
   LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
   platformReason,
-  SandboxGoneError,
+  type SandboxGoneError,
 } from "../errors.ts";
 import { writeKeeperLog } from "../keeper/keeper-log.ts";
 import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
-import { formatSandboxId } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
-import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import type {
+  ApiError,
+  ApiLoginError,
+  NamespaceApi,
+  SshConfig,
+} from "./namespace-api.ts";
+import { gone, sandboxId } from "./namespace-host.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -81,11 +85,6 @@ export type OpenLink = (
   route: LinkRoute,
 ) => Effect.Effect<Link, ApiError | ApiLoginError, Scope.Scope>;
 
-const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
-  Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
-    "utf8",
-  );
-
 // Verbose ssh writes debug lines past the real error, so the last
 // non-debug line is the one that says what failed.
 const lastLine = (text: string) => {
@@ -104,7 +103,8 @@ const linkWaitText = Config.string("PROOFBOX_NS_LINK_WAIT").pipe(
 // A stalled link ends after three unanswered probes 10 s apart, 30 to 40
 // s in all: well inside the 120 s helper limit (ADR 0019), with room for
 // one lost answer. Both the master and the gateway hop carry it, since
-// either one can sit on the stalled path.
+// either one can sit on the stalled path. The Live view's forward carries
+// it too, so a Live view on a dead link ends instead of hanging.
 const KEEP_ALIVE = [
   "-o",
   "ServerAliveInterval=10",
@@ -118,17 +118,13 @@ const describe = (cause: unknown) =>
 const linkLost = (ref: SandboxRef, detail: string) =>
   new ProviderUnavailableError({
     provider: "namespace",
-    reason: `Could not connect to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} over SSH (${detail}). Try again in a minute.`,
+    reason: `Could not connect to Sandbox ${sandboxId(ref)} over SSH (${detail}). Try again in a minute.`,
   });
 
 // A host key that does not match what GetSSHConfig gave is a wrong or
 // recycled host, not a dead link — refuse at once rather than retry.
 const hostKeyRefused = (ref: SandboxRef) => {
-  const id = formatSandboxId({
-    provider: "ns",
-    region: ref.region,
-    name: ref.name,
-  });
+  const id = sandboxId(ref);
   return new ProviderUnavailableError({
     provider: "namespace",
     reason: `Refused to connect to Sandbox ${id}: its SSH host key does not match the key Namespace gave. Run: proofbox delete ${id}`,
@@ -144,6 +140,78 @@ class LinkDownError extends Data.TaggedError("LinkDownError")<{
   readonly detail: string;
 }> {}
 const down = (detail: string) => new LinkDownError({ detail });
+
+// The gateway hop is the same for the command link and the Live view
+// forward, so its setup lives once: the GetSSHConfig answer, its key and
+// pinned host keys on disk, and the check that names a dead host gone.
+const gatewayConfig = Effect.fn("sshLink.gatewayConfig")(function* (
+  api: NamespaceApi,
+  ref: SandboxRef,
+) {
+  const config = yield* api.sshConfig(ref.region ?? "", ref.name).pipe(
+    Effect.catchTag("ProviderError", (error) =>
+      Effect.fail(
+        new ProviderError({
+          provider: "namespace",
+          reason: `could not get SSH access to Sandbox ${sandboxId(ref)} (${error.reason}); try again in a minute`,
+        }),
+      ),
+    ),
+  );
+  return { config, gateway: `${config.username}@${config.endpoint}` };
+});
+
+// The key is removed when the scope closes; the known_hosts file is the
+// caller's, since the Keeper's reopen reads the link's one again later.
+const pinGateway = Effect.fn("sshLink.pinGateway")(function* (
+  fs: FileSystem.FileSystem,
+  config: SshConfig,
+  files: { readonly key: string; readonly knownHosts: string },
+) {
+  yield* fs.writeFile(files.key, config.privateKey, { mode: 0o600 }).pipe(
+    Effect.andThen(fs.chmod(files.key, 0o600)),
+    Effect.mapError(
+      (error) =>
+        new ProviderError({
+          provider: "namespace",
+          reason: platformReason(error),
+        }),
+    ),
+  );
+  yield* fs
+    .writeFileString(
+      files.knownHosts,
+      `${config.hostKeys.map((hostKey) => `${config.endpoint} ${hostKey}`).join("\n")}\n`,
+      { mode: 0o600 },
+    )
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new ProviderError({
+            provider: "namespace",
+            reason: platformReason(error),
+          }),
+      ),
+    );
+  yield* Effect.addFinalizer(() =>
+    fs.remove(files.key, { force: true }).pipe(Effect.ignore),
+  );
+});
+
+// A dead host drops the gateway link just like a cold one does; the list
+// names the Sandbox gone instead of the bare ssh failure.
+const goneOr = Effect.fn("sshLink.goneOr")(function* <E>(
+  api: NamespaceApi,
+  ref: SandboxRef,
+  error: E,
+) {
+  const instances = yield* api
+    .list(ref.region ?? "", [])
+    .pipe(Effect.catchAll(() => Effect.fail(error)));
+  return yield* instances.some((instance) => instance.id === ref.name)
+    ? Effect.fail(error)
+    : Effect.fail(gone(ref));
+});
 
 export const makeOpenLink = (
   api: NamespaceApi,
@@ -244,59 +312,33 @@ export const makeOpenLink = (
       // `up` makes sure the master is there before a command spawns: a
       // command on a dead master falls back to a new double ssh
       // connection, 5 to 14 s each (#259).
-      const runWith =
-        (ssh: ReadonlyArray<string>, up: LinkUp) => (commandLine: string) =>
+      const linkOver = (ssh: ReadonlyArray<string>, up: LinkUp): Link => ({
+        ssh,
+        run: (commandLine) =>
           Effect.zipRight(
             up,
-            Effect.scoped(
-              Effect.gen(function* () {
-                // An empty stdin, as in commandEvents: ssh forwards an open
-                // pipe, and a remote command that reads it would wait forever.
-                const process = yield* Command.start(
-                  Command.stdin(
-                    Command.make(sshBin, ...ssh, commandLine),
-                    Stream.empty,
-                  ),
-                ).pipe(
-                  Effect.provideService(
-                    CommandExecutor.CommandExecutor,
-                    executor,
-                  ),
-                  Effect.mapError((error) => sshError(error)),
-                );
-                const [outBytes, errBytes, exitCode] = yield* Effect.all(
-                  [
-                    Stream.runCollect(process.stdout),
-                    Stream.runCollect(process.stderr),
-                    process.exitCode,
-                  ],
-                  { concurrency: "unbounded" },
-                ).pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new ProviderError({
-                        provider: "namespace",
-                        reason: describe(error),
-                      }),
-                  ),
-                );
-                const stderr = toText(errBytes);
-                if (exitCode === 255) {
-                  return stderr.includes("Host key verification failed")
-                    ? yield* hostKeyRefused(ref)
-                    : yield* linkLost(ref, lastLine(stderr));
-                }
-                return {
-                  exitCode,
-                  stdout: toText(outBytes),
-                  stderr,
-                } satisfies HostResult;
-              }),
+            captureCommand(
+              // An empty stdin, as in commandEvents: ssh forwards an open
+              // pipe, and a remote command that reads it would wait forever.
+              Command.stdin(
+                Command.make(sshBin, ...ssh, commandLine),
+                Stream.empty,
+              ),
+            ).pipe(
+              Effect.provideService(CommandExecutor.CommandExecutor, executor),
+              Effect.mapError((error) => sshError(error)),
+              Effect.flatMap((result) =>
+                result.exitCode !== 255
+                  ? Effect.succeed(result satisfies HostResult)
+                  : Effect.fail(
+                      result.stderr.includes("Host key verification failed")
+                        ? hostKeyRefused(ref)
+                        : linkLost(ref, lastLine(result.stderr)),
+                    ),
+              ),
             ),
-          );
-      const streamWith =
-        (ssh: ReadonlyArray<string>, up: LinkUp) =>
-        (commandLine: string, options?: ExecOptions) =>
+          ),
+        stream: (commandLine, options) =>
           Stream.unwrap(
             Effect.as(
               up,
@@ -324,12 +366,11 @@ export const makeOpenLink = (
                 },
               ),
             ),
-          );
+          ),
+      });
       // A CLI call rides the Keeper's link when it is up — the Keeper holds
       // the one long-lived connection, so a warm exec never pays for a new
       // handshake.
-      const region = ref.region ?? "";
-      const instanceId = ref.name;
       const keeperKey = `${paths.control.replace(/\.ctl$/, "")}.sshkey`;
       const targetFile = `${paths.control.replace(/\.ctl$/, "")}.sshtarget`;
       // A warm open rides the Keeper's ControlMaster; the stored target
@@ -344,32 +385,14 @@ export const makeOpenLink = (
           (yield* checkCtl(paths.control, targetOf(stored)))
         ) {
           const ssh = sshFor(paths.control, keeperKey, stored);
-          return {
-            ssh,
-            run: runWith(ssh, Effect.void),
-            stream: streamWith(ssh, Effect.void),
-          } satisfies Link;
+          return linkOver(ssh, Effect.void);
         }
       }
-      const cfg = yield* api.sshConfig(region, instanceId).pipe(
-        Effect.catchTag("ProviderError", (error) =>
-          Effect.fail(
-            new ProviderError({
-              provider: "namespace",
-              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
-            }),
-          ),
-        ),
-      );
-      const gateway = `${cfg.username}@${cfg.endpoint}`;
+      const { config, gateway } = yield* gatewayConfig(api, ref);
       const target = targetOf(gateway);
       if (owner === "cli" && (yield* checkCtl(paths.control, target))) {
         const ssh = sshFor(paths.control, keeperKey, gateway);
-        return {
-          ssh,
-          run: runWith(ssh, Effect.void),
-          stream: streamWith(ssh, Effect.void),
-        } satisfies Link;
+        return linkOver(ssh, Effect.void);
       }
       const ctl =
         owner === "keeper"
@@ -382,16 +405,7 @@ export const makeOpenLink = (
       // host keys go to the per-Sandbox known_hosts file every open
       // refreshes.
       const key = `${ctl.replace(/\.ctl$/, "")}.sshkey`;
-      yield* fs.writeFile(key, cfg.privateKey, { mode: 0o600 }).pipe(
-        Effect.andThen(fs.chmod(key, 0o600)),
-        Effect.mapError(
-          (error) =>
-            new ProviderError({
-              provider: "namespace",
-              reason: platformReason(error),
-            }),
-        ),
-      );
+      yield* pinGateway(fs, config, { key, knownHosts: paths.knownHosts });
       yield* fs
         .writeFileString(targetFile, `${gateway}\n`, { mode: 0o600 })
         .pipe(
@@ -403,24 +417,6 @@ export const makeOpenLink = (
               }),
           ),
         );
-      yield* fs
-        .writeFileString(
-          paths.knownHosts,
-          `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
-          { mode: 0o600 },
-        )
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new ProviderError({
-                provider: "namespace",
-                reason: platformReason(error),
-              }),
-          ),
-        );
-      yield* Effect.addFinalizer(() =>
-        fs.remove(key, { force: true }).pipe(Effect.ignore),
-      );
       const ssh = sshFor(ctl, key, gateway);
       // A master that died mid-attempt can leave its socket file; each
       // attempt runs in its own scope so a failure drops the half-built
@@ -513,29 +509,7 @@ export const makeOpenLink = (
       // list check between attempts names the Sandbox gone instead of
       // burning the whole retry budget on a host that is already deleted.
       const attempt = bringup.pipe(
-        Effect.catchTag(
-          "LinkDownError",
-          (error): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
-            api.list(region, []).pipe(
-              Effect.catchAll(() => Effect.fail(error)),
-              Effect.flatMap(
-                (
-                  instances,
-                ): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
-                  instances.some((instance) => instance.id === instanceId)
-                    ? Effect.fail(error)
-                    : Effect.fail(
-                        new SandboxGoneError({
-                          id: formatSandboxId({
-                            provider: "ns",
-                            region: ref.region,
-                            name: ref.name,
-                          }),
-                        }),
-                      ),
-              ),
-            ),
-        ),
+        Effect.catchTag("LinkDownError", (error) => goneOr(api, ref, error)),
       );
       const linkWait = yield* parseSpan(
         "PROOFBOX_NS_LINK_WAIT",
@@ -608,18 +582,10 @@ export const makeOpenLink = (
         // A master another process left on the Keeper's socket, as a Keeper
         // killed with SIGKILL leaves it.
         const up = owner === "keeper" ? reopen : Effect.void;
-        return {
-          ssh,
-          run: runWith(ssh, up),
-          stream: streamWith(ssh, up),
-        } satisfies Link;
+        return linkOver(ssh, up);
       }
       yield* open(linkWait);
-      return {
-        ssh,
-        run: runWith(ssh, reopen),
-        stream: streamWith(ssh, reopen),
-      } satisfies Link;
+      return linkOver(ssh, reopen);
     });
 };
 
@@ -652,41 +618,16 @@ export const makeSshForward = (
     new ProviderError({ provider: "namespace", reason });
   return (ref, port) =>
     Effect.gen(function* () {
-      const region = ref.region ?? "";
-      const instanceId = ref.name;
-      const cfg = yield* api.sshConfig(region, instanceId).pipe(
-        Effect.catchTag("ProviderError", (error) =>
-          Effect.fail(
-            new ProviderError({
-              provider: "namespace",
-              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
-            }),
-          ),
-        ),
-      );
-      const target = `${cfg.username}@${cfg.endpoint}`;
+      const { config, gateway: target } = yield* gatewayConfig(api, ref);
       const dir = (yield* keeperPaths({ provider: "ns", name: ref.name }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
       )).dir;
       const pid = process.pid;
       const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
       const hosts = `${key}.known-hosts`;
-      yield* fs.writeFile(key, cfg.privateKey, { mode: 0o600 }).pipe(
-        Effect.andThen(fs.chmod(key, 0o600)),
-        Effect.mapError((error) => fail(platformReason(error))),
-      );
-      yield* fs
-        .writeFileString(
-          hosts,
-          `${cfg.hostKeys.map((hostKey) => `${cfg.endpoint} ${hostKey}`).join("\n")}\n`,
-          { mode: 0o600 },
-        )
-        .pipe(Effect.mapError((error) => fail(platformReason(error))));
+      yield* pinGateway(fs, config, { key, knownHosts: hosts });
       yield* Effect.addFinalizer(() =>
-        Effect.all([
-          fs.remove(key, { force: true }),
-          fs.remove(hosts, { force: true }),
-        ]).pipe(Effect.ignore),
+        fs.remove(hosts, { force: true }).pipe(Effect.ignore),
       );
       // OpenSSH 8.9 rejects `-L 0:` so the local port is picked here; a
       // bind that lost the race exits at once under ExitOnForwardFailure.
@@ -723,6 +664,7 @@ export const makeSshForward = (
             "StrictHostKeyChecking=yes",
             "-o",
             `UserKnownHostsFile=${hosts}`,
+            ...KEEP_ALIVE,
             "-o",
             "ExitOnForwardFailure=yes",
             "-L",
@@ -782,38 +724,12 @@ export const makeSshForward = (
             ),
           ),
           Effect.zipRight(Ref.get(stderr)),
-          Effect.flatMap(
-            (text): Effect.Effect<never, ProviderError | SandboxGoneError> =>
-              // A dead host drops the forward without a "was destroyed"
-              // line; the list check names the Sandbox gone instead of the
-              // bare ssh exit.
-              api.list(region, []).pipe(
-                Effect.catchAll(() =>
-                  Effect.fail(
-                    fail(`the Live view's forward died: ${lastLine(text)}`),
-                  ),
-                ),
-                Effect.flatMap(
-                  (
-                    instances,
-                  ): Effect.Effect<never, ProviderError | SandboxGoneError> =>
-                    instances.some((instance) => instance.id === instanceId)
-                      ? Effect.fail(
-                          fail(
-                            `the Live view's forward died: ${lastLine(text)}`,
-                          ),
-                        )
-                      : Effect.fail(
-                          new SandboxGoneError({
-                            id: formatSandboxId({
-                              provider: "ns",
-                              region: ref.region,
-                              name: ref.name,
-                            }),
-                          }),
-                        ),
-                ),
-              ),
+          Effect.flatMap((text) =>
+            goneOr(
+              api,
+              ref,
+              fail(`the Live view's forward died: ${lastLine(text)}`),
+            ),
           ),
         );
       const bound = yield* Effect.raceFirst(Deferred.await(listening), gone);
