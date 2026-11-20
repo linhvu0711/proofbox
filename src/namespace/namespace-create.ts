@@ -20,7 +20,7 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatWait } from "../format-time.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import type { Provider, ProviderLogin, SandboxRef } from "../provider.ts";
 import { fileStem, makeSandboxName } from "../sandbox-id.ts";
@@ -29,6 +29,14 @@ import type { NamespaceApi } from "./namespace-api.ts";
 import { fail, type NamespaceHost, removeHostFiles } from "./namespace-host.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
 import type { OpenLink } from "./ssh-link.ts";
+
+type CreateRequest = Parameters<Provider["create"]>[0];
+
+interface Limits {
+  readonly span: Duration.Duration;
+  readonly prepSpan: Duration.Duration;
+  readonly limitSpan: Duration.Duration;
+}
 
 export const makeNamespaceCreate = (deps: {
   readonly api: NamespaceApi;
@@ -70,53 +78,60 @@ export const makeNamespaceCreate = (deps: {
     Config.withDefault("45s"),
   );
 
-  const create = Effect.fn("namespaceCreate.create")(function* (req: {
-    readonly os: Parameters<Provider["create"]>[0]["os"];
-    readonly idle: Duration.Duration;
-    readonly maxLife: Duration.Duration;
-    readonly size?: Size | undefined;
-    readonly name?: string | undefined;
-    readonly snapshot?: string | undefined;
-  }) {
-    const login = yield* deps.login;
-    const region = Option.getOrElse(login.region, () => DEFAULT_REGION);
-    if (!KNOWN_REGIONS.includes(region)) {
-      return yield* new UnknownRegionError({
-        provider: "namespace",
-        region,
-        known: KNOWN_REGIONS,
-      });
-    }
-    const host = hostFor(req.os);
-    const size = req.size ?? host.defaultSize;
+  const limits = Effect.gen(function* () {
+    const span = yield* parseSpan(
+      "PROOFBOX_NS_CREATE_TIMEOUT",
+      yield* createTimeout,
+    );
+    const prepSpan = yield* parseSpan(
+      "PROOFBOX_NS_PREPARE_TIMEOUT",
+      yield* prepareTimeout,
+    );
+    const limitSpan = yield* parseSpan(
+      "PROOFBOX_NS_LIMIT_WAIT",
+      yield* limitWait,
+      {
+        units: ["ms", "s", "m"],
+        zero: true,
+        example: "45s",
+      },
+    );
+    return { span, prepSpan, limitSpan };
+  }).pipe(Effect.mapError((error) => fail(error.message)));
+
+  const removeStagedKey = (keyBase: string) =>
+    Effect.all(
+      [
+        deps.fs.remove(keyBase, { force: true }).pipe(Effect.ignore),
+        deps.fs.remove(`${keyBase}.pub`, { force: true }).pipe(Effect.ignore),
+      ],
+      { concurrency: "unbounded", discard: true },
+    );
+
+  const dropHost = (ref: SandboxRef) =>
+    Effect.gen(function* () {
+      yield* removeHostFiles(yield* refPaths(ref), deps.fs);
+    }).pipe(
+      Effect.ignore,
+      Effect.zipRight(
+        api.destroy(ref.region ?? "", ref.name).pipe(Effect.ignore),
+      ),
+    );
+
+  // The key, then the host under the create limit. A failure sweeps any
+  // host this create half-made and removes the staged key.
+  const reserveHost = Effect.fn("namespaceCreate.reserveHost")(function* (
+    req: CreateRequest,
+    region: string,
+    host: NamespaceHost,
+    size: Size,
+    limits: Limits,
+  ) {
+    const progress = yield* Progress;
     const staged = yield* paths(`new-${process.pid}`);
     const keyBase = join(staged.dir, `ns-new-${process.pid}.key`);
-    // Whatever part of the make is left — key files, the host — leaves
-    // nothing behind on a failed create.
     const createToken = makeSandboxName();
-    let hostRef: SandboxRef | undefined;
-    // Set once the prep timeout has deleted the host, so cleanup does not
-    // delete it again.
-    let hostDeleted = false;
-    const cleanup = Effect.gen(function* () {
-      yield* Effect.all(
-        [
-          deps.fs.remove(keyBase, { force: true }).pipe(Effect.ignore),
-          deps.fs.remove(`${keyBase}.pub`, { force: true }).pipe(Effect.ignore),
-        ],
-        { concurrency: "unbounded" },
-      );
-      if (hostRef !== undefined) {
-        yield* removeHostFiles(yield* refPaths(hostRef), deps.fs);
-        if (!hostDeleted) {
-          yield* api
-            .destroy(hostRef.region ?? "", hostRef.name)
-            .pipe(Effect.orElseSucceed(() => {}));
-        }
-      }
-    });
     return yield* Effect.gen(function* () {
-      const progress = yield* Progress;
       const keygen = yield* captureCommand(
         Command.make(
           "ssh-keygen",
@@ -159,28 +174,6 @@ export const makeNamespaceCreate = (deps: {
             fail(`could not read the host key: ${platformReason(error)}`),
           ),
         )).trim();
-      const spanText = yield* createTimeout.pipe(
-        Effect.mapError((error) => fail(error.message)),
-      );
-      const span = yield* parseSpan(
-        "PROOFBOX_NS_CREATE_TIMEOUT",
-        spanText,
-      ).pipe(Effect.mapError((error) => fail(error.message)));
-      const prepSpan = yield* parseSpan(
-        "PROOFBOX_NS_PREPARE_TIMEOUT",
-        yield* prepareTimeout.pipe(
-          Effect.mapError((error) => fail(error.message)),
-        ),
-      ).pipe(Effect.mapError((error) => fail(error.message)));
-      const limitSpan = yield* parseSpan(
-        "PROOFBOX_NS_LIMIT_WAIT",
-        yield* limitWait.pipe(Effect.mapError((error) => fail(error.message))),
-        {
-          units: ["ms", "s", "m"],
-          zero: true,
-          example: "45s",
-        },
-      ).pipe(Effect.mapError((error) => fail(error.message)));
       const { instanceId, deadline } = yield* Effect.timeoutOption(
         Effect.gen(function* () {
           const now = new Date(yield* Clock.currentTimeMillis);
@@ -207,21 +200,21 @@ export const makeNamespaceCreate = (deps: {
               Effect.retry({
                 while: (error) => error instanceof ProviderLimitError,
                 schedule: Schedule.spaced(Duration.seconds(5)).pipe(
-                  Schedule.upTo(limitSpan),
+                  Schedule.upTo(limits.limitSpan),
                 ),
               }),
             );
           yield* api.wait(region, made);
           return { instanceId: made, deadline };
         }),
-        span,
+        limits.span,
       ).pipe(
         Effect.flatMap((made) =>
           Option.isNone(made)
             ? Effect.fail(
                 new ProviderUnavailableError({
                   provider: "namespace",
-                  reason: `Namespace did not make the host in ${formatWait(span)}; deleted any half-made host. Try again`,
+                  reason: `Namespace did not make the host in ${formatWait(limits.span)}; deleted any half-made host. Try again`,
                 }),
               )
             : Effect.succeed(made.value),
@@ -264,7 +257,23 @@ export const makeNamespaceCreate = (deps: {
         ),
       );
       const ref: SandboxRef = { name: instanceId, region };
-      hostRef = ref;
+      return { ref, keyBase, maxLifeAt, deadline };
+    }).pipe(Effect.onError(() => removeStagedKey(keyBase)));
+  });
+
+  // The host's local files and its expiry watcher. A failure removes them
+  // and deletes the host.
+  const storeHost = Effect.fn("namespaceCreate.storeHost")(function* (
+    req: CreateRequest,
+    reserved: {
+      readonly ref: SandboxRef;
+      readonly keyBase: string;
+      readonly maxLifeAt: Date;
+      readonly deadline: Date;
+    },
+  ) {
+    const { ref, keyBase, maxLifeAt, deadline } = reserved;
+    return yield* Effect.gen(function* () {
       if (maxLifeAt.getTime() <= (yield* Clock.currentTimeMillis)) {
         return yield* fail(
           "making the host took the whole Max life; try a larger --max-life",
@@ -294,113 +303,156 @@ export const makeNamespaceCreate = (deps: {
       // it can sit later than the Max life; a detached process destroys
       // the host at the absolute Max life.
       yield* deps.spawnDetached("namespace", "namespace/expire-main", [
-        region,
-        instanceId,
+        ref.region ?? "",
+        ref.name,
         String(Math.floor(maxLifeAt.getTime() / 1000)),
       ]);
-      // The step host prep is in, for the timeout message: Progress keeps
-      // the running label only when the output is live.
-      const stuckAt = yield* Ref.make("opening the link to the host");
-      const tracked = new Progress({
-        ...progress,
-        step: (label, effect) =>
-          Ref.set(stuckAt, label).pipe(
-            Effect.zipRight(progress.step(label, effect)),
-          ),
-      });
-      // The extend loop lives in this scope, so it stops when the limit
-      // runs out, before the host is deleted.
-      const prepared = yield* Effect.scoped(
-        Effect.gen(function* () {
-          // Provisioning can outlast the create duration (a cold image
-          // build): keep the host's own Deadline ahead until the Sandbox
-          // takes over, but never past the Max life. The recorded Deadline
-          // moves with it — otherwise the host-expiry destroys a host that
-          // is still being prepared once its initial allowance runs out.
-          yield* Effect.forkScoped(
-            Effect.repeat(
-              Effect.gen(function* () {
-                const now = new Date(yield* Clock.currentTimeMillis);
-                if (now < maxLifeAt) {
-                  const pushed = firstDeadline({
-                    now,
-                    idle: req.idle,
-                    maxLifeAt,
-                  });
-                  yield* deps.fs
-                    .writeFileString(hostPaths.deadline, deadlineText(pushed), {
-                      mode: 0o600,
-                    })
-                    .pipe(Effect.ignore);
-                  yield* api
-                    .extend(
-                      region,
-                      instanceId,
-                      Math.ceil((pushed.getTime() - now.getTime()) / 1000),
-                    )
-                    .pipe(Effect.ignore);
-                }
-              }),
-              Schedule.spaced(Duration.seconds(15)),
-            ),
-          );
-          // The host is deleted when the limit runs out, so cleanup on it,
-          // such as a `docker rm -f` on a stuck Docker, must not hold the
-          // limit up: it ends in the background.
-          return yield* Effect.timeoutOption(
-            Effect.disconnect(
-              Effect.scoped(
-                Effect.gen(function* () {
-                  const link = yield* deps.openLink(ref, hostPaths, "cli", {
-                    to: "gateway",
-                  });
-                  return yield* host
-                    .make(link, {
-                      req,
-                      ref,
-                      paths: hostPaths,
-                      size,
-                      maxLifeAt,
-                    })
-                    .pipe(Effect.provideService(Progress, tracked));
-                }),
-              ),
-            ),
-            prepSpan,
-          );
-        }),
-      );
-      if (Option.isSome(prepared)) {
-        return prepared.value;
-      }
-      const label = yield* Ref.get(stuckAt);
-      const deleted = yield* api.destroy(region, instanceId).pipe(
-        Effect.catchTag("SandboxGoneError", () => Effect.void),
-        Effect.as(true),
-        Effect.catchAll(() =>
-          progress
-            .warn(
-              "could not delete the host this create started; it may be left. Run: proofbox list",
-            )
-            .pipe(Effect.as(false)),
-        ),
-      );
-      // Only once the delete has ended: a Ctrl-C during it leaves cleanup
-      // to send it again.
-      hostDeleted = true;
-      return yield* new ProviderUnavailableError({
-        provider: "namespace",
-        reason: `Namespace did not prepare the host in ${formatWait(prepSpan)} (stuck at: ${label})${deleted ? "; deleted the host" : ""}. Try again`,
-      });
+      return { ref, paths: hostPaths, maxLifeAt };
     }).pipe(
-      // A host that vanishes or drops its link mid-create is a Provider
-      // error, not a gone Sandbox — the id was never handed out.
-      Effect.catchTag("SandboxGoneError", "LinkDroppedError", (error) =>
-        Effect.fail(fail(error.message)),
+      Effect.onError(() =>
+        removeStagedKey(keyBase).pipe(Effect.zipRight(dropHost(ref))),
       ),
-      Effect.onError(() => Effect.ignoreLogged(cleanup)),
     );
-  }, Effect.scoped);
+  });
+
+  // The keep-alive and the host's own prep under the prepare limit. A
+  // failure deletes the host; a stall deletes it and names the stuck step.
+  const prepareHost = Effect.fn("namespaceCreate.prepareHost")(function* (
+    req: CreateRequest,
+    host: NamespaceHost,
+    size: Size,
+    stored: {
+      readonly ref: SandboxRef;
+      readonly paths: KeeperPaths;
+      readonly maxLifeAt: Date;
+    },
+    prepSpan: Duration.Duration,
+  ) {
+    const { ref, paths: hostPaths, maxLifeAt } = stored;
+    const region = ref.region ?? "";
+    const progress = yield* Progress;
+    // The step host prep is in, for the timeout message: Progress keeps
+    // the running label only when the output is live.
+    const stuckAt = yield* Ref.make("opening the link to the host");
+    const tracked = new Progress({
+      ...progress,
+      step: (label, effect) =>
+        Ref.set(stuckAt, label).pipe(
+          Effect.zipRight(progress.step(label, effect)),
+        ),
+    });
+    // The extend loop lives in this scope, so it stops when the limit
+    // runs out, before the host is deleted.
+    const prepared = yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Provisioning can outlast the create duration (a cold image
+        // build): keep the host's own Deadline ahead until the Sandbox
+        // takes over, but never past the Max life. The recorded Deadline
+        // moves with it — otherwise the host-expiry destroys a host that
+        // is still being prepared once its initial allowance runs out.
+        yield* Effect.forkScoped(
+          Effect.repeat(
+            Effect.gen(function* () {
+              const now = new Date(yield* Clock.currentTimeMillis);
+              if (now < maxLifeAt) {
+                const pushed = firstDeadline({
+                  now,
+                  idle: req.idle,
+                  maxLifeAt,
+                });
+                yield* deps.fs
+                  .writeFileString(hostPaths.deadline, deadlineText(pushed), {
+                    mode: 0o600,
+                  })
+                  .pipe(Effect.ignore);
+                yield* api
+                  .extend(
+                    region,
+                    ref.name,
+                    Math.ceil((pushed.getTime() - now.getTime()) / 1000),
+                  )
+                  .pipe(Effect.ignore);
+              }
+            }),
+            Schedule.spaced(Duration.seconds(15)),
+          ),
+        );
+        // The host is deleted when the limit runs out, so cleanup on it,
+        // such as a `docker rm -f` on a stuck Docker, must not hold the
+        // limit up: it ends in the background.
+        return yield* Effect.timeoutOption(
+          Effect.disconnect(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const link = yield* deps.openLink(ref, hostPaths, "cli", {
+                  to: "gateway",
+                });
+                return yield* host
+                  .make(link, {
+                    req,
+                    ref,
+                    paths: hostPaths,
+                    size,
+                    maxLifeAt,
+                  })
+                  .pipe(Effect.provideService(Progress, tracked));
+              }),
+            ),
+          ),
+          prepSpan,
+        );
+      }),
+    ).pipe(Effect.onError(() => dropHost(ref)));
+    if (Option.isSome(prepared)) {
+      return prepared.value;
+    }
+    const label = yield* Ref.get(stuckAt);
+    const deleted = yield* api.destroy(region, ref.name).pipe(
+      Effect.catchTag("SandboxGoneError", () => Effect.void),
+      Effect.as(true),
+      Effect.catchAll(() =>
+        progress
+          .warn(
+            "could not delete the host this create started; it may be left. Run: proofbox list",
+          )
+          .pipe(Effect.as(false)),
+      ),
+      // A Ctrl-C during the delete sends it again.
+      Effect.onInterrupt(() => dropHost(ref)),
+    );
+    yield* removeHostFiles(hostPaths, deps.fs);
+    return yield* new ProviderUnavailableError({
+      provider: "namespace",
+      reason: `Namespace did not prepare the host in ${formatWait(prepSpan)} (stuck at: ${label})${deleted ? "; deleted the host" : ""}. Try again`,
+    });
+  });
+
+  const create = Effect.fn("namespaceCreate.create")(
+    function* (req: CreateRequest) {
+      const login = yield* deps.login;
+      const region = Option.getOrElse(login.region, () => DEFAULT_REGION);
+      if (!KNOWN_REGIONS.includes(region)) {
+        return yield* new UnknownRegionError({
+          provider: "namespace",
+          region,
+          known: KNOWN_REGIONS,
+        });
+      }
+      const host = hostFor(req.os);
+      const size = req.size ?? host.defaultSize;
+      // A bad limit fails before anything is made.
+      const parsed = yield* limits;
+      const reserved = yield* reserveHost(req, region, host, size, parsed);
+      const stored = yield* storeHost(req, reserved);
+      return yield* prepareHost(req, host, size, stored, parsed.prepSpan);
+    },
+    // A host that vanishes or drops its link mid-create is a Provider
+    // error, not a gone Sandbox — the id was never handed out.
+    Effect.catchTag("SandboxGoneError", "LinkDroppedError", (error) =>
+      Effect.fail(fail(error.message)),
+    ),
+    Effect.scoped,
+  );
 
   return create;
 };
