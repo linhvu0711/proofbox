@@ -192,6 +192,93 @@ describe("Namespace errors", () => {
     ).toBe(true);
   });
 
+  it("a bad prep timeout fails before Namespace makes a host", async () => {
+    // Given: a Namespace that makes the host but never says it is ready
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "WaitInstanceSync") {
+        return "hang";
+      }
+      if (call.method === "ListInstances") {
+        return { json: { instances: [{ instanceId: "abc123def4567" }] } };
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const runs = [];
+    for (const value of ["abc", "-1s"]) {
+      const result = await runCli(env, CREATE, {
+        set: {
+          ...nsEnv(ns),
+          PROOFBOX_NS_CREATE_TIMEOUT: "1s",
+          PROOFBOX_NS_PREPARE_TIMEOUT: value,
+        },
+      });
+      runs.push({ stderr: result.stderr, exitCode: result.exitCode });
+    }
+    // Then
+    expect({
+      runs,
+      creates: ns.calls
+        .map((call) => call.method)
+        .filter((method) => method === "CreateInstance"),
+    }).toEqual({
+      runs: [
+        {
+          stderr:
+            'Provider namespace failed: Bad --PROOFBOX_NS_PREPARE_TIMEOUT "abc": use a whole number with s, m, or h, for example 15m\n',
+          exitCode: 125,
+        },
+        {
+          stderr:
+            'Provider namespace failed: Bad --PROOFBOX_NS_PREPARE_TIMEOUT "-1s": use a whole number with s, m, or h, for example 15m\n',
+          exitCode: 125,
+        },
+      ],
+      creates: [],
+    });
+  });
+
+  it("a create whose host prep stalls stops at the prep limit and deletes the host", async () => {
+    // Given: Namespace makes the host, but GetSSHConfig never answers, so
+    // the link to the host never opens; the prep limit is 1s
+    const ns = await fakeNamespace((call) => {
+      if (call.method === "CreateInstance") {
+        return { json: { metadata: { instanceId: "abc123def4567" } } };
+      }
+      if (call.method === "GetSSHConfig") {
+        return "hang";
+      }
+      return { json: {} };
+    });
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, CREATE, {
+      set: {
+        ...nsEnv(ns),
+        PROOFBOX_NS_PREPARE_TIMEOUT: "1s",
+        // Longer than the prep limit, so the prep limit ends the stall.
+        PROOFBOX_NS_REQUEST_TIMEOUT: "60s",
+      },
+    });
+    // Then
+    expect({
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      destroyed: ns.calls
+        .filter((call) => call.method === "DestroyInstance")
+        .map((call) => [call.region, call.body]),
+    }).toEqual({
+      stderr:
+        "Namespace did not prepare the host in 1 s (stuck at: opening the link to the host); deleted the host. Try again\n",
+      exitCode: 125,
+      destroyed: [["us", { instanceId: "abc123def4567" }]],
+    });
+  });
+
   it("Ctrl-C while Namespace makes the host deletes it", async () => {
     // Given: create answers; wait sends Ctrl-C and never answers; list
     // finds the host by its create token

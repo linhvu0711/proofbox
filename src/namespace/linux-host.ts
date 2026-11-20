@@ -320,7 +320,10 @@ export const makeLinuxHost = (deps: {
     if (pulled !== "pulled") {
       return undefined;
     }
-    yield* keepSnapshot(link, tag, progress);
+    yield* progress.step(
+      "setting the Snapshot expiry",
+      keepSnapshot(link, tag, progress),
+    );
     return tag;
   });
 
@@ -371,7 +374,10 @@ export const makeLinuxHost = (deps: {
           ),
         ),
       );
-    const registry = yield* readTenant(link);
+    const registry = yield* progress.step(
+      "reading the Namespace tenant",
+      readTenant(link),
+    );
     const version = yield* baseImageVersion(
       BASE_IMAGE_DIR,
       LINUX_TOOL_BUNDLE,
@@ -408,7 +414,10 @@ export const makeLinuxHost = (deps: {
     });
     // A Snapshot's Fingerprint holds the Base version, so this is its
     // Base too.
-    yield* keepBase(link, baseTag, progress);
+    yield* progress.step(
+      "setting the Base image expiry",
+      keepBase(link, baseTag, progress),
+    );
     // The Base image must hide the host's workload token from user code:
     // neither the token file nor the link-local token service may answer.
     const docker = deps.dockerFor(link);

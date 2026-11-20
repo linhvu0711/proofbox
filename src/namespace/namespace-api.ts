@@ -1,5 +1,5 @@
 import { timestampDate, timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { Code, ConnectError } from "@connectrpc/connect";
+import { Code, ConnectError, type Transport } from "@connectrpc/connect";
 import {
   createComputeClient,
   createGlobalTransport,
@@ -10,7 +10,8 @@ import {
 import { extractClaims, fromBearerToken } from "@namespacelabs/sdk/auth";
 import { InstanceMetadata_Status } from "@namespacelabs/sdk/proto/namespace/cloud/compute/v1beta/compute_pb";
 import { LabelFilterEntry_LabelFilterOp } from "@namespacelabs/sdk/proto/namespace/stdlib/labels_pb";
-import { Config, Effect, Option, Redacted, Schema } from "effect";
+import { Config, Duration, Effect, Option, Redacted, Schema } from "effect";
+import { parseSpan } from "../deadline.ts";
 import {
   type BadLoginsFileError,
   LoginExpiredError,
@@ -282,6 +283,49 @@ const tokenUrl = Config.string("PROOFBOX_NAMESPACE_TOKEN_URL").pipe(
   Config.withDefault("https://iam.namespaceapis.com"),
 );
 
+// A request Namespace never answers would hang its command with no end
+// (#261), so every request gets this limit unless its call sets one.
+const requestTimeout = Config.string("PROOFBOX_NS_REQUEST_TIMEOUT").pipe(
+  Config.withDefault("30s"),
+);
+
+const requestMillis = Effect.gen(function* () {
+  const span = yield* parseSpan(
+    "PROOFBOX_NS_REQUEST_TIMEOUT",
+    yield* requestTimeout,
+    { units: ["ms", "s", "m"], zero: false, example: "30s" },
+  );
+  return Duration.toMillis(span);
+}).pipe(
+  Effect.mapError(
+    (error) =>
+      new ProviderError({ provider: "namespace", reason: error.message }),
+  ),
+);
+
+// Connect hands each call's own `timeoutMs` to its transport, undefined
+// when the call sets none; a limit it hits fails as DeadlineExceeded.
+const withRequestLimit = (transport: Transport, ms: number): Transport => ({
+  unary: (method, signal, timeoutMs, header, input, contextValues) =>
+    transport.unary(
+      method,
+      signal,
+      timeoutMs ?? ms,
+      header,
+      input,
+      contextValues,
+    ),
+  stream: (method, signal, timeoutMs, header, input, contextValues) =>
+    transport.stream(
+      method,
+      signal,
+      timeoutMs ?? ms,
+      header,
+      input,
+      contextValues,
+    ),
+});
+
 // The only rights a robot token gets: what `create`, `exec`, `list`,
 // `delete`, and the Snapshot push need. The push itself runs on the
 // Sandbox host with its own registry login.
@@ -306,43 +350,57 @@ export const makeNamespaceApi = (deps: {
   const template = deps.computeUrl ?? computeUrlTemplate;
   const registryTemplate = deps.registryUrl ?? registryUrlTemplate;
 
-  const clientFor = (region: string, token: Redacted.Redacted<string>) =>
-    template.pipe(
-      Effect.map((url) =>
-        createComputeClient({
-          transport: createRegionTransport(region, {
-            tokenSource: fromBearerToken(Redacted.value(token)),
-            baseUrl: url.replaceAll("{region}", region),
-          }),
-        }),
-      ),
-      Effect.mapError(
-        (error) =>
-          new ProviderError({ provider: "namespace", reason: error.message }),
-      ),
-    );
+  // `limited: false` makes a client with no request limit, for the one
+  // call that waits on purpose.
+  const clientFor = (
+    region: string,
+    token: Redacted.Redacted<string>,
+    limited = true,
+  ) =>
+    Effect.gen(function* () {
+      const url = yield* template.pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      );
+      const transport = createRegionTransport(region, {
+        tokenSource: fromBearerToken(Redacted.value(token)),
+        baseUrl: url.replaceAll("{region}", region),
+      });
+      return createComputeClient({
+        transport: limited
+          ? withRequestLimit(transport, yield* requestMillis)
+          : transport,
+      });
+    });
 
   // The token comes from the login in hand, so every call sees the
   // freshest env or saved login.
-  const loggedClient = (region: string) =>
-    Effect.flatMap(deps.login, (hand) => clientFor(region, hand.token));
+  const loggedClient = (region: string, limited = true) =>
+    Effect.flatMap(deps.login, (hand) =>
+      clientFor(region, hand.token, limited),
+    );
 
   const registryFor = (token: Redacted.Redacted<string>) =>
-    registryTemplate.pipe(
-      Effect.map((baseUrl) =>
-        createRegistryClient({
-          tokenSource: fromBearerToken(Redacted.value(token)),
-          transport: createGlobalTransport({
+    Effect.gen(function* () {
+      const baseUrl = yield* registryTemplate.pipe(
+        Effect.mapError(
+          (error) =>
+            new ProviderError({ provider: "namespace", reason: error.message }),
+        ),
+      );
+      return createRegistryClient({
+        tokenSource: fromBearerToken(Redacted.value(token)),
+        transport: withRequestLimit(
+          createGlobalTransport({
             tokenSource: fromBearerToken(Redacted.value(token)),
             baseUrl,
           }),
-        }),
-      ),
-      Effect.mapError(
-        (error) =>
-          new ProviderError({ provider: "namespace", reason: error.message }),
-      ),
-    );
+          yield* requestMillis,
+        ),
+      });
+    });
 
   const loggedRegistry = () =>
     Effect.flatMap(deps.login, (hand) => registryFor(hand.token));
@@ -471,7 +529,8 @@ export const makeNamespaceApi = (deps: {
     region: string,
     instanceId: string,
   ) {
-    const client = yield* loggedClient(region);
+    // The create timeout bounds this wait, so it takes no request limit.
+    const client = yield* loggedClient(region, false);
     yield* Effect.tryPromise({
       try: () => client.compute.waitInstanceSync({ instanceId }),
       catch: fromConnect("WaitInstanceSync", { region, instanceId }),
@@ -519,6 +578,7 @@ export const makeNamespaceApi = (deps: {
           new ProviderError({ provider: "namespace", reason: error.message }),
       ),
     )).replaceAll("{region}", region);
+    const ms = yield* requestMillis;
     const response = yield* Effect.tryPromise({
       try: async () => {
         const res = await fetch(
@@ -530,6 +590,7 @@ export const makeNamespaceApi = (deps: {
               "content-type": "application/json",
             },
             body: JSON.stringify({ instanceId }),
+            signal: AbortSignal.timeout(ms),
           },
         );
         const body: unknown = await res.json().catch(() => undefined);
@@ -610,10 +671,13 @@ export const makeNamespaceApi = (deps: {
     );
     const client = createIAMClient({
       tokenSource: fromBearerToken(Redacted.value(tenant)),
-      transport: createGlobalTransport({
-        tokenSource: fromBearerToken(Redacted.value(tenant)),
-        baseUrl,
-      }),
+      transport: withRequestLimit(
+        createGlobalTransport({
+          tokenSource: fromBearerToken(Redacted.value(tenant)),
+          baseUrl,
+        }),
+        yield* requestMillis,
+      ),
     });
     const made = yield* Effect.tryPromise({
       try: () =>

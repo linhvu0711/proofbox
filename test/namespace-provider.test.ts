@@ -11,9 +11,13 @@ import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import {
+  Cause,
+  Chunk,
   ConfigProvider,
   Duration,
   Effect,
+  Exit,
+  Fiber,
   Layer,
   Option,
   Redacted,
@@ -39,7 +43,7 @@ import {
   TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
-import { makeLinuxHost } from "../src/namespace/linux-host.ts";
+import { type LinuxHost, makeLinuxHost } from "../src/namespace/linux-host.ts";
 import type {
   ApiError,
   ApiLoginError,
@@ -79,10 +83,15 @@ const fakeApi = (
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     // An error `ensureImageExpiry` fails with for an image.
     readonly expiryError?: (image: string) => ApiError | undefined;
+    // An error every `destroy` fails with, after it is recorded.
+    readonly destroyError?: ApiError;
+    // Whether the nth `destroy` (1-based) never ends, after it is recorded.
+    readonly destroyStalls?: (n: number) => boolean;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
   let creates = 0;
+  let destroyed = 0;
   return {
     create: (region) =>
       Effect.gen(function* () {
@@ -95,7 +104,19 @@ const fakeApi = (
         return "abc123def4567";
       }),
     wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
-    destroy: (region, instanceId) => note(`destroy ${region} ${instanceId}`),
+    destroy: (region, instanceId) =>
+      Effect.suspend(() => {
+        destroyed += 1;
+        return note(`destroy ${region} ${instanceId}`).pipe(
+          Effect.zipRight(
+            options?.destroyStalls?.(destroyed) === true
+              ? Effect.never
+              : options?.destroyError === undefined
+                ? Effect.void
+                : Effect.fail(options.destroyError),
+          ),
+        );
+      }),
     extend: (region, instanceId) => note(`extend ${region} ${instanceId}`),
     list: (region, labels) => {
       const error = options?.listError?.(region);
@@ -392,9 +413,12 @@ const makeProvider = (
     ) => ApiError | ApiLoginError | undefined;
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     readonly expiryError?: (image: string) => ApiError | undefined;
+    readonly destroyError?: ApiError;
+    readonly destroyStalls?: (n: number) => boolean;
     readonly region?: string;
     readonly forward?: SshForward;
     readonly openLink?: OpenLink;
+    readonly macos?: LinuxHost;
   },
 ) => {
   const api = fakeApi(calls, options);
@@ -424,10 +448,75 @@ const makeProvider = (
         dockerFor: () => docker,
         openLink,
       }),
-      macos: unusedHost("macos"),
+      macos: options?.macos ?? unusedHost("macos"),
     },
   });
 };
+
+// A fresh runtime folder, with the prep limit set when one is given.
+const prepConfig = (prepTimeout?: string) => {
+  const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+  return Effect.withConfigProvider(
+    ConfigProvider.fromMap(
+      new Map([
+        ["PROOFBOX_RUNTIME_DIR", runtime],
+        ...(prepTimeout === undefined
+          ? []
+          : [["PROOFBOX_NS_PREPARE_TIMEOUT", prepTimeout] as const]),
+      ]),
+    ),
+  );
+};
+
+// A link whose `docker pull` never ends, as a stalled registry pull would.
+const stalledPullRun: Link["run"] = (commandLine) =>
+  commandLine.startsWith("docker pull")
+    ? Effect.never
+    : snapshotRun({})(commandLine);
+
+// A short real pause, so the create's file and ssh-keygen work can finish
+// between two TestClock moves.
+const realPause = Effect.promise(
+  () => new Promise<void>((resolve) => setTimeout(resolve, 25)),
+);
+
+// Moves the TestClock `step` at a time, with a real pause before each move,
+// until the fiber ends or `rounds` moves are made.
+const driveClock = <A, E>(
+  fiber: Fiber.RuntimeFiber<A, E>,
+  step: Duration.DurationInput,
+  rounds: number,
+) =>
+  Effect.gen(function* () {
+    for (let round = 0; round < rounds; round++) {
+      yield* realPause;
+      yield* TestClock.adjust(step);
+      const exit = yield* Fiber.poll(fiber);
+      if (Option.isSome(exit)) {
+        return exit;
+      }
+    }
+    yield* realPause;
+    return yield* Fiber.poll(fiber);
+  });
+
+// The message of the error a fiber failed with, if it failed.
+const failureMessage = <A, E extends { readonly message: string }>(
+  exit: Option.Option<Exit.Exit<A, E>>,
+) =>
+  Option.getOrUndefined(
+    Option.flatMap(exit, (done) =>
+      Exit.isFailure(done)
+        ? Option.map(Cause.failureOption(done.cause), (error) => error.message)
+        : Option.none(),
+    ),
+  );
+
+const destroys = (calls: ReadonlyArray<string>) =>
+  calls.filter((call) => call === "destroy us abc123def4567");
+
+const extendCalls = (calls: ReadonlyArray<string>) =>
+  calls.filter((call) => call === "extend us abc123def4567").length;
 
 describe("Namespace Provider", () => {
   it("exec with no local OS file fails before opening a link when lookup fails", async () => {
@@ -459,6 +548,34 @@ describe("Namespace Provider", () => {
       });
       expect(ns.calls.map((call) => call.method)).toEqual(["ListInstances"]);
       expect(readdirSync(env.runtime)).toEqual([]);
+    } finally {
+      cleanupEnvs();
+      await ns.close();
+    }
+  });
+
+  it("list fails as unreachable when ListInstances never answers", async () => {
+    // Given: ListInstances never answers; the request limit is 1s
+    const ns = await startFakeNamespace((call) =>
+      call.method === "ListInstances" ? "hang" : { json: {} },
+    );
+    const env = makeEnv();
+    try {
+      // When
+      const result = await runCli(env, ["list"], {
+        set: {
+          PROOFBOX_NAMESPACE_TOKEN: TENANT_1,
+          PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+          PROOFBOX_NS_REQUEST_TIMEOUT: "1s",
+        },
+      });
+      // Then
+      expect(result).toEqual({
+        stdout: "",
+        stderr:
+          "Could not list Sandboxes in namespace: Could not reach Namespace. Check your network and try again.\nNo live Sandboxes\n",
+        exitCode: 0,
+      });
     } finally {
       cleanupEnvs();
       await ns.close();
@@ -1082,6 +1199,267 @@ describe("Namespace Provider", () => {
       });
     }).pipe(runtimeConfig(), Effect.provide(liveLayers(warnings)));
   });
+
+  it.effect(
+    "a Linux create from a Snapshot prints a line for each prep step",
+    () =>
+      Effect.gen(function* () {
+        // Given: every command on the link succeeds
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), snapshotRun({}));
+        // When
+        yield* provider
+          .create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          })
+          .pipe(Effect.provide(Progress.Default));
+        // Then
+        const output = yield* CliOutput;
+        const err = Chunk.toReadonlyArray(
+          yield* Ref.get(output.captured.err),
+        ).join("");
+        expect(err).toBe(
+          "proofbox: installing sshd\nproofbox: starting sshd\nproofbox: reading the Namespace tenant\nproofbox: pulling the Snapshot\nproofbox: setting the Snapshot expiry\nproofbox: creating docker Sandbox\nproofbox: setting the Base image expiry\nproofbox: checking the Namespace token is out of reach\n",
+        );
+      }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a Linux create whose docker pull never ends stops at the prep limit and deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: a link whose `docker pull` never ends; the prep limit is 1s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          }),
+        );
+        const exit = yield* driveClock(fiber, "1 second", 40);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Namespace did not prepare the host in 1 s (stuck at: pulling the Snapshot); deleted the host. Try again",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a macOS create whose prep never ends stops at the prep limit and deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Mac host whose sshd step never ends; the prep limit is 1s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          macos: {
+            ...unusedHost("macos"),
+            make: () =>
+              Effect.flatMap(Progress, (progress) =>
+                progress.step("turning on sshd", Effect.never),
+              ),
+          },
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "macos",
+            idle: Duration.minutes(10),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "1 second", 40);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Namespace did not prepare the host in 1 s (stuck at: turning on sshd); deleted the host. Try again",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a prep timeout deletes the host without waiting for cleanup on it",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Mac host whose prep never ends, and whose cleanup on an
+        // interrupt never ends either, as a `docker rm -f` on a stuck
+        // Docker would; the prep limit is 1s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          macos: {
+            ...unusedHost("macos"),
+            make: () =>
+              Effect.flatMap(Progress, (progress) =>
+                progress.step(
+                  "creating docker Sandbox",
+                  Effect.never.pipe(Effect.onInterrupt(() => Effect.never)),
+                ),
+              ),
+          },
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "macos",
+            idle: Duration.minutes(10),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "1 second", 40);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Namespace did not prepare the host in 1 s (stuck at: creating docker Sandbox); deleted the host. Try again",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "Ctrl-C during the prep timeout's delete still deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: a stalled `docker pull`, and a first delete that never ends
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+          destroyStalls: (n) => n === 1,
+        });
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          }),
+        );
+        for (let round = 0; round < 40; round++) {
+          yield* realPause;
+          yield* TestClock.adjust("1 second");
+          if (destroys(yield* Ref.get(calls)).length > 0) {
+            break;
+          }
+        }
+        // When: Ctrl-C while that first delete runs
+        yield* Fiber.interrupt(fiber);
+        // Then: cleanup sends the delete again
+        expect(destroys(yield* Ref.get(calls))).toEqual([
+          "destroy us abc123def4567",
+          "destroy us abc123def4567",
+        ]);
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect("a create stopped by the prep limit extends the host no more", () =>
+    Effect.gen(function* () {
+      // Given: a link whose `docker pull` never ends; the prep limit is 1s
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      const fiber = yield* Effect.fork(
+        provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+          snapshot: "22d0cf15eb8e",
+        }),
+      );
+      const exit = yield* driveClock(fiber, "1 second", 40);
+      const atEnd = extendCalls(yield* Ref.get(calls));
+      // When
+      yield* TestClock.adjust("2 minutes");
+      yield* realPause;
+      // Then
+      expect({
+        ended: Option.isSome(exit),
+        extends: extendCalls(yield* Ref.get(calls)),
+      }).toEqual({ ended: true, extends: atEnd });
+    }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect("with no prep setting a stalled create stops at 15 minutes", () =>
+    Effect.gen(function* () {
+      // Given: a link whose `docker pull` never ends; no prep setting
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      // When
+      const fiber = yield* Effect.fork(
+        provider.create({
+          os: "linux",
+          idle: Duration.minutes(15),
+          maxLife: Duration.hours(3),
+          snapshot: "22d0cf15eb8e",
+        }),
+      );
+      const at14 = yield* driveClock(fiber, "15 seconds", 56);
+      const at15 = yield* driveClock(fiber, "15 seconds", 5);
+      // Then
+      expect({
+        at14: Option.isSome(at14),
+        at15: failureMessage(at15),
+      }).toEqual({
+        at14: false,
+        at15: "Namespace did not prepare the host in 15 min (stuck at: pulling the Snapshot); deleted the host. Try again",
+      });
+    }).pipe(prepConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a prep timeout whose delete fails says the host may be left",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: a stalled `docker pull`, and every delete fails as unreachable
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+          destroyError: new ProviderUnavailableError({
+            provider: "namespace",
+            reason:
+              "Could not reach Namespace. Check your network and try again.",
+          }),
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          }),
+        );
+        const exit = yield* driveClock(fiber, "1 second", 40);
+        // Then
+        expect({
+          warnings,
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          warnings: [
+            "could not delete the host this create started; it may be left. Run: proofbox list",
+          ],
+          message:
+            "Namespace did not prepare the host in 1 s (stuck at: pulling the Snapshot). Try again",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers(warnings)));
+    },
+  );
 
   it.effect(
     "save commits the container, pushes it under its Fingerprint, and keeps it 336h",
