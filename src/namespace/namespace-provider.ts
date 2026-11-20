@@ -776,7 +776,6 @@ export const makeNamespaceProvider = (deps: {
         return prepared.value;
       }
       const label = yield* Ref.get(stuckAt);
-      hostDeleted = true;
       const deleted = yield* api.destroy(region, instanceId).pipe(
         Effect.catchTag("SandboxGoneError", () => Effect.void),
         Effect.as(true),
@@ -788,6 +787,9 @@ export const makeNamespaceProvider = (deps: {
             .pipe(Effect.as(false)),
         ),
       );
+      // Only once the delete has ended: a Ctrl-C during it leaves cleanup
+      // to send it again.
+      hostDeleted = true;
       return yield* new ProviderUnavailableError({
         provider: "namespace",
         reason: `Namespace did not prepare the host in ${formatWait(prepSpan)} (stuck at: ${label})${deleted ? "; deleted the host" : ""}. Try again`,

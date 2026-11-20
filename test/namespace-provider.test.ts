@@ -85,10 +85,13 @@ const fakeApi = (
     readonly expiryError?: (image: string) => ApiError | undefined;
     // An error every `destroy` fails with, after it is recorded.
     readonly destroyError?: ApiError;
+    // Whether the nth `destroy` (1-based) never ends, after it is recorded.
+    readonly destroyStalls?: (n: number) => boolean;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
   let creates = 0;
+  let destroyed = 0;
   return {
     create: (region) =>
       Effect.gen(function* () {
@@ -102,13 +105,18 @@ const fakeApi = (
       }),
     wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
     destroy: (region, instanceId) =>
-      note(`destroy ${region} ${instanceId}`).pipe(
-        Effect.zipRight(
-          options?.destroyError === undefined
-            ? Effect.void
-            : Effect.fail(options.destroyError),
-        ),
-      ),
+      Effect.suspend(() => {
+        destroyed += 1;
+        return note(`destroy ${region} ${instanceId}`).pipe(
+          Effect.zipRight(
+            options?.destroyStalls?.(destroyed) === true
+              ? Effect.never
+              : options?.destroyError === undefined
+                ? Effect.void
+                : Effect.fail(options.destroyError),
+          ),
+        );
+      }),
     extend: (region, instanceId) => note(`extend ${region} ${instanceId}`),
     list: (region, labels) => {
       const error = options?.listError?.(region);
@@ -406,6 +414,7 @@ const makeProvider = (
     readonly createError?: (n: number) => ApiError | ApiLoginError | undefined;
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly destroyError?: ApiError;
+    readonly destroyStalls?: (n: number) => boolean;
     readonly region?: string;
     readonly forward?: SshForward;
     readonly openLink?: OpenLink;
@@ -1321,6 +1330,40 @@ describe("Namespace Provider", () => {
             "Namespace did not prepare the host in 1 s (stuck at: creating docker Sandbox); deleted the host. Try again",
           destroys: ["destroy us abc123def4567"],
         });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "Ctrl-C during the prep timeout's delete still deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: a stalled `docker pull`, and a first delete that never ends
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+          destroyStalls: (n) => n === 1,
+        });
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+            snapshot: "22d0cf15eb8e",
+          }),
+        );
+        for (let round = 0; round < 40; round++) {
+          yield* realPause;
+          yield* TestClock.adjust("1 second");
+          if (destroys(yield* Ref.get(calls)).length > 0) {
+            break;
+          }
+        }
+        // When: Ctrl-C while that first delete runs
+        yield* Fiber.interrupt(fiber);
+        // Then: cleanup sends the delete again
+        expect(destroys(yield* Ref.get(calls))).toEqual([
+          "destroy us abc123def4567",
+          "destroy us abc123def4567",
+        ]);
       }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
   );
 
