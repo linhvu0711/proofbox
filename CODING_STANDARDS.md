@@ -18,7 +18,7 @@ One rule per line. A rule from a source names the source in parentheses, from th
 - A subsystem with more than one file gets its own folder, like `src/keeper/` and `src/fake/`.
 - The entry file of a process that proofbox spawns is `<name>-main.ts`. `pnpm build` bundles each one as its own entry, `dist/<path>-main.js`.
 - A Provider's code loads only when a command asks for it: `src/provider-registry.ts` imports it inside the entry's `load`, never at the top.
-- An expected-failure class that leaves its file is in `src/errors.ts`. A private one that only its own file uses stays in that file.
+- An expected-failure class whose message can reach the Caller is in `src/errors.ts`, even when one file raises it. Then one file holds every message a Caller can see. A class that its own file catches, and that never reaches the Caller, stays in that file.
   An example is `LinkDownError` in `src/namespace/ssh-link.ts`, which only tells the retry loop to try again.
 - Relative imports end in `.ts`. (node-typescript)
   Node runs `src/` directly with type stripping, so a `.js` path fails at run time. The CLI tests catch it.
