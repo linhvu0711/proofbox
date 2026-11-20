@@ -282,6 +282,45 @@ const statusJson = (provider: string, status: LoginStatus) => ({
   tokenEnd: "tokenEnd" in status ? status.tokenEnd : undefined,
 });
 
+type OkFrom =
+  | { readonly from: "saved" }
+  | { readonly from: "env"; readonly env: string };
+
+// A browser login always names its account and expiry; a token login may
+// not, and then shows the token's last four characters.
+type OkLogin =
+  | { readonly account: string; readonly expiresAt: Date }
+  | {
+      readonly account?: string | undefined;
+      readonly expiresAt?: Date | undefined;
+      readonly token: Redacted.Redacted<string>;
+    };
+
+const namesAccount = (
+  login: OkLogin,
+): login is Extract<OkLogin, { readonly account: string }> =>
+  login.account !== undefined && login.expiresAt !== undefined;
+
+const okStatus = (
+  from: OkFrom,
+  region: string | undefined,
+  login: OkLogin,
+): LoginStatus =>
+  namesAccount(login)
+    ? {
+        login: "ok",
+        ...from,
+        region,
+        account: login.account,
+        expires: login.expiresAt,
+      }
+    : {
+        login: "ok",
+        ...from,
+        region,
+        tokenEnd: Redacted.value(login.token).slice(-4),
+      };
+
 export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
   function* (options: { readonly json: boolean }) {
     const providers = yield* Providers;
@@ -311,24 +350,12 @@ export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
           const envRegionName = yield* envRegion(provider.name);
           const region = regionOf(envRegionName);
           status = yield* part.checkToken(env.value, envRegionName).pipe(
-            Effect.map(
-              (account): LoginStatus =>
-                account.account !== undefined && account.expiresAt !== undefined
-                  ? {
-                      login: "ok",
-                      from: "env",
-                      env: name,
-                      region,
-                      account: account.account,
-                      expires: account.expiresAt,
-                    }
-                  : {
-                      login: "ok",
-                      from: "env",
-                      env: name,
-                      region,
-                      tokenEnd: Redacted.value(env.value).slice(-4),
-                    },
+            Effect.map((account) =>
+              okStatus({ from: "env", env: name }, region, {
+                account: account.account,
+                expiresAt: account.expiresAt,
+                token: env.value,
+              }),
             ),
             Effect.catchTag("TokenRejectedError", () =>
               Effect.succeed<LoginStatus>({
@@ -357,34 +384,11 @@ export const showAuthStatus = Effect.fn("auth.showAuthStatus")(
               expires: saved.expiresAt,
             };
           } else {
-            const region = regionOf(Option.fromNullable(saved.region));
-            if (saved.way === "browser") {
-              status = {
-                login: "ok",
-                from: "saved",
-                region,
-                account: saved.account,
-                expires: saved.expiresAt,
-              };
-            } else if (
-              saved.account !== undefined &&
-              saved.expiresAt !== undefined
-            ) {
-              status = {
-                login: "ok",
-                from: "saved",
-                region,
-                account: saved.account,
-                expires: saved.expiresAt,
-              };
-            } else {
-              status = {
-                login: "ok",
-                from: "saved",
-                region,
-                tokenEnd: Redacted.value(saved.token).slice(-4),
-              };
-            }
+            status = okStatus(
+              { from: "saved" },
+              regionOf(Option.fromNullable(saved.region)),
+              saved,
+            );
           }
         }
       }
