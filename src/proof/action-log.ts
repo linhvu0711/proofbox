@@ -3,6 +3,13 @@ import { ActionLogLine } from "../pixel.ts";
 
 type ActionKind = (typeof ActionLogLine.Type)["kind"];
 
+// The record helper writes these in the Recording folder
+// (images/linux/record.sh, images/macos/record.sh).
+export const rawRecording = (dir: string): string => `${dir}/raw.mkv`;
+
+export const captionFile = (dir: string, step: number): string =>
+  `${dir}/caption-${step}.txt`;
+
 const POINT_ACTIONS: ReadonlySet<ActionKind> = new Set([
   "click",
   "key",

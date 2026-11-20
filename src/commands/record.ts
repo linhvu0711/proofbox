@@ -16,7 +16,11 @@ import {
 } from "../helper.ts";
 import { ACTION_LOG_PATHS } from "../pixel.ts";
 import { Progress } from "../progress.ts";
-import { readActionLog } from "../proof/action-log.ts";
+import {
+  captionFile,
+  rawRecording,
+  readActionLog,
+} from "../proof/action-log.ts";
 import {
   nothingChanged,
   parseProbe,
@@ -90,7 +94,7 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
 }, Effect.scoped);
 
 // A Step mark's label, as `mark` set it (cut to 60 characters): the helper keeps it
-// in `caption-<step>.txt` in the Recording folder, with no newline.
+// in the Step's caption file (`captionFile`), with no newline.
 export const readStepLabel = Effect.fn("record.readStepLabel")(function* (
   id: string,
   dir: string,
@@ -99,7 +103,7 @@ export const readStepLabel = Effect.fn("record.readStepLabel")(function* (
   const caption = yield* runHelper(
     id,
     RECORD_HELPER,
-    ["fetch", `${dir}/caption-${step}.txt`],
+    ["fetch", captionFile(dir, step)],
     {
       outcome: "no Proof video was made",
       limit: { _tag: "Download", name: "Step label" },
@@ -178,11 +182,11 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       const output = yield* CliOutput;
       const progress = yield* Progress;
       yield* progress.note(
-        `discarded the Recording; nothing was downloaded. The raw Recording stays at ${info.dir}/raw.mkv`,
+        `discarded the Recording; nothing was downloaded. The raw Recording stays at ${rawRecording(info.dir)}`,
       );
       if (options.json === true) {
         yield* output.out(
-          `${JSON.stringify({ discarded: true, raw: `${info.dir}/raw.mkv` })}\n`,
+          `${JSON.stringify({ discarded: true, raw: rawRecording(info.dir) })}\n`,
         );
       }
       return;
@@ -240,7 +244,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       if (!events.acted && nothingChanged(check)) {
         return yield* new NothingChangedError({
           id: options.id,
-          raw: `${info.dir}/raw.mkv`,
+          raw: rawRecording(info.dir),
         });
       }
       const plan = planEdit({
@@ -295,7 +299,7 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       });
       return yield* encodeUnderLimit(encode, {
         limit,
-        raw: `${info.dir}/raw.mkv`,
+        raw: rawRecording(info.dir),
       });
     });
     const limit = options.maxSize ?? PROOF_SIZE_DEFAULT;
