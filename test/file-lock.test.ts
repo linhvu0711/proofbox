@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -6,7 +12,7 @@ import { it } from "@effect/vitest";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect } from "vitest";
 import { withFileLock } from "../src/file-lock.ts";
-import { trackTempDir } from "./support/cli.ts";
+import { lockOfDeadProcess, trackTempDir } from "./support/cli.ts";
 
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-lock-"));
@@ -81,6 +87,51 @@ describe("file-lock", () => {
       // Then
       expect(error).toBe("busy");
       expect(existsSync(lock)).toBe(true);
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live(
+    "a lock whose owner is gone waits while another taker reclaims it",
+    () =>
+      Effect.gen(function* () {
+        // Given: a lock a killed proofbox left, and a reclaim guard another
+        // taker holds right now
+        const lock = join(tempDir(), "x.lock");
+        lockOfDeadProcess(lock);
+        mkdirSync(`${lock}.reclaim`);
+        // When
+        const error = yield* withFileLock({
+          dir: lock,
+          wait: "300 millis",
+          busy: () => "busy",
+          failed: () => "failed",
+        })(Effect.void).pipe(Effect.flip);
+        // Then
+        expect(error).toBe("busy");
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("a reclaim guard a killed taker left is cleared", () =>
+    Effect.gen(function* () {
+      // Given: a lock a killed proofbox left, and a reclaim guard a minute
+      // old
+      const lock = join(tempDir(), "x.lock");
+      lockOfDeadProcess(lock);
+      const guard = `${lock}.reclaim`;
+      mkdirSync(guard);
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(guard, old, old);
+      // When
+      const ran = yield* withFileLock({
+        dir: lock,
+        wait: "1 second",
+        busy: () => "busy",
+        failed: () => "failed",
+      })(Effect.succeed("ran"));
+      // Then
+      expect({ ran, held: existsSync(lock), guard: existsSync(guard) }).toEqual(
+        { ran: "ran", held: false, guard: false },
+      );
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 

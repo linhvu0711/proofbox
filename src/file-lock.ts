@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { type CommandExecutor, FileSystem } from "@effect/platform";
 import type { PlatformError } from "@effect/platform/Error";
-import { Data, Duration, Effect, Schedule } from "effect";
+import { Clock, Data, Duration, Effect, Option, Schedule } from "effect";
 import { ownStart, stillRuns } from "./keeper/paths.ts";
 
 // A held lock, inside this file only: it tells the retry to try again.
@@ -72,29 +72,46 @@ const take = Effect.fn("fileLock.take")(function* (
   }).pipe(Effect.ensuring(Effect.ignore(removeDir(temp))));
 });
 
-// Move a stale lock aside, and delete it only when it is the lock that
-// was judged stale. A lock another taker took in the meantime goes back.
+// A reclaim guard lives for a few file calls, so one this old was left by
+// a taker that was killed while it held the guard.
+const STALE_GUARD = Duration.seconds(10);
+
+// Delete a stale lock under a reclaim guard that only one taker can make,
+// and only while the lock still names the owner judged gone: a taker that
+// read the same dead owner earlier finds the lock replaced and leaves it.
 const takeOver = Effect.fn("fileLock.takeOver")(function* (
   dir: string,
   stale: Owner,
-  token: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const aside = `${dir}.${token}.stale`;
-  const moved = yield* fs.rename(dir, aside).pipe(
+  const guard = `${dir}.reclaim`;
+  const held = yield* fs.makeDirectory(guard).pipe(
     Effect.as(true),
     Effect.catchTag("SystemError", (error) =>
-      error.reason === "NotFound" ? Effect.succeed(false) : Effect.fail(error),
+      error.reason === "AlreadyExists"
+        ? Effect.succeed(false)
+        : Effect.fail(error),
     ),
   );
-  if (!moved) {
+  if (!held) {
+    const made = yield* fs.stat(guard).pipe(
+      Effect.map((info) => Option.getOrUndefined(info.mtime)),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const now = yield* Clock.currentTimeMillis;
+    if (
+      made !== undefined &&
+      now - made.getTime() > Duration.toMillis(STALE_GUARD)
+    ) {
+      yield* removeDir(guard);
+    }
     return;
   }
-  if ((yield* readOwner(aside))?.token === stale.token) {
-    yield* removeDir(aside);
-    return;
-  }
-  yield* fs.rename(aside, dir).pipe(Effect.catchAll(() => removeDir(aside)));
+  yield* Effect.gen(function* () {
+    if ((yield* readOwner(dir))?.token === stale.token) {
+      yield* removeDir(dir);
+    }
+  }).pipe(Effect.ensuring(Effect.ignore(removeDir(guard))));
 });
 
 // One try at the lock: take it, or take over one whose owner is gone, as
@@ -119,7 +136,7 @@ const tryTake = Effect.fn("fileLock.tryTake")(function* (
   if (live) {
     return false;
   }
-  yield* takeOver(dir, owner, token);
+  yield* takeOver(dir, owner);
   return yield* take(dir, token, started);
 });
 
