@@ -171,8 +171,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         ),
       );
     // A failed upload or Setup script must not leave the made Sandbox
-    // behind; runSetupScript already deletes it for a non-zero script exit,
-    // and this covers every other way the steps fail.
+    // behind: this deletes it for every way the steps fail.
     yield* Effect.gen(function* () {
       if (options.work !== undefined && files !== undefined) {
         yield* sendWorkFolder(id, options.work, files, workLimit);
