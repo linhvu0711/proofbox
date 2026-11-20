@@ -39,7 +39,13 @@ import {
   Providers,
   type TokenRequest,
 } from "../src/provider.ts";
-import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
+import {
+  cleanupEnvs,
+  lockOfDeadProcess,
+  makeEnv,
+  runCli,
+  trackTempDir,
+} from "./support/cli.ts";
 import {
   type FakeNamespace,
   type FakeNamespaceAnswer,
@@ -1510,6 +1516,29 @@ describe("auth", () => {
     );
     expect(result.exitCode).toBe(125);
     expect(Object.keys(readSaved(home) as object)).toEqual(["fake"]);
+  });
+
+  it("auth logout takes over a logins lock whose process is gone", async () => {
+    // Given: a saved login and a logins lock a killed proofbox left
+    const { env, home, set, unset } = await fakeLoginWith(0);
+    lockOfDeadProcess(lockDir(home));
+    // When
+    const result = await runCli(env, ["auth", "logout", "fake"], {
+      set,
+      unset,
+    });
+    // Then
+    expect({
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      saved: readSaved(home),
+      lock: existsSync(lockDir(home)),
+    }).toEqual({
+      stderr: "Logged out of fake.\n",
+      exitCode: 0,
+      saved: {},
+      lock: false,
+    });
   });
 
   it("auth logout skips a create mark whose process is gone", async () => {

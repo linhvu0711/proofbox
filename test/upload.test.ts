@@ -23,6 +23,7 @@ import {
   type CliEnv,
   cleanupEnvs,
   keeperCannotStart,
+  lockOfDeadProcess,
   makeEnv,
   makeGitFolder,
   runCli,
@@ -123,6 +124,31 @@ describe("upload", () => {
     expect(result.stderr).toBe(
       "proofbox: uploading Work folder\nproofbox: Keeper did not start; running without it\nproofbox: sent 1 file, removed 0 files\n",
     );
+  });
+
+  it("an upload takes over an upload lock whose process is gone", async () => {
+    // Given: a Sandbox, a one-file git folder, and an upload lock a killed
+    // proofbox left
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
+    lockOfDeadProcess(join(env.runtime, `upload-${name}.lock`));
+    // When
+    const result = await runCli(env, ["upload", id, folder]);
+    // Then
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({
+      exitCode: 0,
+      stderr:
+        "proofbox: uploading Work folder\nproofbox: sent 1 file, removed 0 files\n",
+    });
   });
 
   it("a first upload sends tracked and new files and skips git-ignored ones", async () => {
