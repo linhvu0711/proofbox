@@ -333,6 +333,57 @@ describe("ssh link", () => {
     );
   });
 
+  it.live("a Live view forward to a deleted Sandbox fails gone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-ssh-"));
+    trackTempDir(dir);
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    trackTempDir(runtime);
+    const fake = fakeSshMaster(dir);
+    return Effect.gen(function* () {
+      // Given: the forward's ssh exits 255 at once, and the Namespace list
+      // no longer holds the Sandbox
+      writeFileSync(join(dir, "cut"), "");
+      const api: NamespaceApi = {
+        create: () => Effect.die("unused"),
+        wait: () => Effect.die("unused"),
+        destroy: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        list: () => Effect.succeed([]),
+        checkToken: () => Effect.die("unused"),
+        ensureImageExpiry: () => Effect.die("unused"),
+        makeToken: () => Effect.die("unused"),
+        sshConfig: () =>
+          Effect.succeed({
+            username: "abc123def4567",
+            endpoint: "ssh.iad4.namespace.so",
+            privateKey: new Uint8Array(PEM),
+            hostKeys: [HOST_KEY],
+          }),
+      };
+      const executor = yield* CommandExecutor.CommandExecutor;
+      // When
+      const error = yield* Effect.flip(
+        makeSshForward(
+          api,
+          executor,
+          nodeFs,
+          fake.path,
+        )({ name: "abc123def4567", region: "us" }, 5900),
+      );
+      // Then
+      expect({ _tag: error._tag, message: error.message }).toEqual({
+        _tag: "SandboxGoneError",
+        message: "Sandbox ns:us:abc123def4567 is gone",
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
+
   it.live("run gives the remote command an empty stdin", () => {
     const fake = fakeSshReading();
     const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
