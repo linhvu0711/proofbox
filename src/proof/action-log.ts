@@ -1,6 +1,41 @@
 import { Effect, Schema } from "effect";
 import { ActionLogLine } from "../pixel.ts";
-import { actionSpans } from "./edit-plan.ts";
+
+type ActionKind = (typeof ActionLogLine.Type)["kind"];
+
+const POINT_ACTIONS: ReadonlySet<ActionKind> = new Set([
+  "click",
+  "key",
+  "scroll",
+  "drag",
+]);
+
+// The time each action ran: typing from its `type` line (before the first
+// letter) to its `typed` line (after the last), and a click, key, scroll, or
+// drag at its line's time, which `planEdit` widens by 1 s each side like
+// any change. Typing still running at record stop runs to the end of the
+// Recording.
+const actionSpans = (
+  lines: ReadonlyArray<{ readonly kind: ActionKind; readonly t: number }>,
+  duration: number,
+): ReadonlyArray<readonly [number, number]> => {
+  const spans: (readonly [number, number])[] = [];
+  let open: number | undefined;
+  for (const { kind, t } of lines) {
+    if (kind === "type") {
+      open = t;
+    } else if (kind === "typed") {
+      spans.push([open ?? 0, t]);
+      open = undefined;
+    } else if (POINT_ACTIONS.has(kind)) {
+      spans.push([t, t]);
+    }
+  }
+  if (open !== undefined) {
+    spans.push([open, duration]);
+  }
+  return spans;
+};
 
 export const readActionLog = Effect.fn("actionLog.readActionLog")(function* (
   text: string,
@@ -14,7 +49,7 @@ export const readActionLog = Effect.fn("actionLog.readActionLog")(function* (
   const clicks: { t: number; x: number; y: number }[] = [];
   const actions: number[] = [];
   const waits: { t: number; reason: string }[] = [];
-  const acting: { kind: string; t: number }[] = [];
+  const acting: { kind: ActionKind; t: number }[] = [];
   // Typing that began before the Recording and ended in it.
   let typedInside = false;
   for (const line of text.split("\n")) {
@@ -52,13 +87,7 @@ export const readActionLog = Effect.fn("actionLog.readActionLog")(function* (
     } else if (entry.kind === "wait") {
       waits.push({ t, reason: entry.reason });
     }
-    if (
-      entry.kind === "click" ||
-      entry.kind === "type" ||
-      entry.kind === "key" ||
-      entry.kind === "scroll" ||
-      entry.kind === "drag"
-    ) {
+    if (POINT_ACTIONS.has(entry.kind) || entry.kind === "type") {
       actions.push(t);
     }
   }

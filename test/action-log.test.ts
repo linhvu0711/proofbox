@@ -60,4 +60,69 @@ describe("Action log", () => {
       });
     }),
   );
+
+  it.effect("a type and its typed line make one typing span", () =>
+    Effect.gen(function* () {
+      // Given
+      const text =
+        '{"t":1002,"kind":"type","x":0,"y":0}\n{"t":1008,"kind":"typed","x":0,"y":0}\n';
+      // When
+      const events = yield* readActionLog(text, {
+        start: 1000,
+        stop: 1010,
+        duration: 10,
+      });
+      // Then
+      expect(events.spans).toEqual([[2, 8]]);
+    }),
+  );
+
+  it.effect(
+    "typing still running at record stop runs to the end of the Recording",
+    () =>
+      Effect.gen(function* () {
+        // Given: the case above with its typed line taken out
+        const text = '{"t":1002,"kind":"type","x":0,"y":0}\n';
+        // When
+        const events = yield* readActionLog(text, {
+          start: 1000,
+          stop: 1010,
+          duration: 10,
+        });
+        // Then
+        expect(events.spans).toEqual([[2, 10]]);
+      }),
+  );
+
+  it.effect(
+    "each click, key, scroll, and drag is kept out of the Still parts, like typing",
+    () =>
+      Effect.gen(function* () {
+        // Given
+        const text =
+          '{"t":1003,"kind":"click","x":720,"y":450}\n' +
+          '{"t":1005,"kind":"key","x":0,"y":0}\n' +
+          '{"t":1009,"kind":"scroll","x":0,"y":0}\n' +
+          '{"t":1014,"kind":"drag","x":0,"y":0,"toX":10,"toY":10}\n' +
+          '{"t":1016,"kind":"type","x":0,"y":0}\n' +
+          '{"t":1018,"kind":"typed","x":0,"y":0}\n' +
+          '{"t":1020,"kind":"mark","x":0,"y":0,"step":1}\n' +
+          '{"t":1021,"kind":"wait","x":0,"y":0,"reason":"waiting for the scheduler"}\n' +
+          '{"t":1022,"kind":"screenshot","x":0,"y":0}\n';
+        // When
+        const events = yield* readActionLog(text, {
+          start: 1000,
+          stop: 1030,
+          duration: 30,
+        });
+        // Then
+        expect(events.spans).toEqual([
+          [3, 3],
+          [5, 5],
+          [9, 9],
+          [14, 14],
+          [16, 18],
+        ]);
+      }),
+  );
 });

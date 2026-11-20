@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  actionSpans,
   labelText,
   nothingChanged,
   parseProbe,
@@ -769,26 +768,6 @@ describe("edit-plan", () => {
     ]);
   });
 
-  it("a type and its typed line make one typing span", () => {
-    // Given
-    const lines = [
-      { kind: "type", t: 2 },
-      { kind: "typed", t: 8 },
-    ];
-    // When
-    const spans = actionSpans(lines, 10);
-    // Then
-    expect(spans).toEqual([[2, 8]]);
-  });
-
-  it("typing still running at record stop runs to the end of the Recording", () => {
-    // Given
-    const lines = [{ kind: "type", t: 2 }];
-    // When
-    const spans = actionSpans(lines, 10);
-    // Then
-    expect(spans).toEqual([[2, 10]]);
-  });
   // freezedetect saw 2 s to 25 s as still: the click at 10 s changed only a
   // small icon, and the app's popup at 25 s ended the Still part.
   const iconFreezes: ReadonlyArray<readonly [number, number | undefined]> = [
@@ -798,12 +777,11 @@ describe("edit-plan", () => {
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
   it("a click that changes only a small icon plays at real speed", () => {
-    // Given
-    const lines = [{ kind: "click", t: 10 }];
+    // Given: a click at 10 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
       clicks: [{ t: 10, x: 1214, y: 24 }],
       actions: [10],
@@ -821,12 +799,11 @@ describe("edit-plan", () => {
   });
 
   it("a click that changes only a small icon rings for 0.8 s", () => {
-    // Given
-    const lines = [{ kind: "click", t: 10 }];
+    // Given: a click at 10 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
       clicks: [{ t: 10, x: 1214, y: 24 }],
       actions: [10],
@@ -837,38 +814,12 @@ describe("edit-plan", () => {
     ).toEqual([{ x: 1214, y: 24, from: 6, to: 6.8 }]);
   });
 
-  it("each click, key, scroll, and drag is kept out of the Still parts, like typing", () => {
-    // Given
-    const lines = [
-      { kind: "click", t: 3 },
-      { kind: "key", t: 5 },
-      { kind: "scroll", t: 9 },
-      { kind: "drag", t: 14 },
-      { kind: "type", t: 16 },
-      { kind: "typed", t: 18 },
-      { kind: "mark", t: 20 },
-      { kind: "wait", t: 21 },
-      { kind: "screenshot", t: 22 },
-    ];
-    // When
-    const spans = actionSpans(lines, 30);
-    // Then
-    expect(spans).toEqual([
-      [3, 3],
-      [5, 5],
-      [9, 9],
-      [14, 14],
-      [16, 18],
-    ]);
-  });
-
   it("an Escape that changes few pixels plays at real speed", () => {
-    // Given
-    const lines = [{ kind: "key", t: 10 }];
+    // Given: a key at 10 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
       clicks: [],
       actions: [10],
@@ -878,12 +829,11 @@ describe("edit-plan", () => {
   });
 
   it("a Wait mark names the Still part after a click", () => {
-    // Given
-    const lines = [{ kind: "click", t: 10 }];
+    // Given: a click at 10 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
       clicks: [{ t: 10, x: 1214, y: 24 }],
       actions: [10],
@@ -900,15 +850,17 @@ describe("edit-plan", () => {
   });
 
   it("a Still part that a second click ends has no label", () => {
-    // Given
-    const lines = [
-      { kind: "click", t: 10 },
-      { kind: "click", t: 25 },
-    ];
+    // Given: clicks at 10 s and 25 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 40)),
+      freezes: withoutSpans(
+        [[2, undefined]],
+        [
+          [10, 10],
+          [25, 25],
+        ],
+      ),
       marks: [1],
       clicks: [
         { t: 10, x: 1214, y: 24 },
@@ -926,15 +878,17 @@ describe("edit-plan", () => {
   });
 
   it("captions and rings stay with their steps when clicks split Still parts", () => {
-    // Given
-    const lines = [
-      { kind: "click", t: 10 },
-      { kind: "click", t: 30 },
-    ];
+    // Given: clicks at 10 s and 30 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 40)),
+      freezes: withoutSpans(
+        [[2, undefined]],
+        [
+          [10, 10],
+          [30, 30],
+        ],
+      ),
       marks: [1, 20],
       clicks: [
         { t: 10, x: 1214, y: 24 },
@@ -965,11 +919,10 @@ describe("edit-plan", () => {
   it("a click at the very end of the Recording rings in the video", () => {
     // Given: record stop came right after the click, so its time is the
     // Recording's end
-    const lines = [{ kind: "click", t: 10 }];
     // When
     const plan = planEdit({
       duration: 10,
-      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 10)),
+      freezes: withoutSpans([[2, undefined]], [[10, 10]]),
       marks: [1],
       clicks: [{ t: 10, x: 5, y: 5 }],
       actions: [10],
@@ -981,12 +934,11 @@ describe("edit-plan", () => {
   });
 
   it("a click at the very end of the Recording leaves the earlier steps as they were", () => {
-    // Given
-    const lines = [{ kind: "click", t: 10 }];
+    // Given: a click at 10 s
     // When
     const plan = planEdit({
       duration: 10,
-      freezes: withoutSpans([[2, undefined]], actionSpans(lines, 10)),
+      freezes: withoutSpans([[2, undefined]], [[10, 10]]),
       marks: [1, 5],
       clicks: [{ t: 10, x: 5, y: 5 }],
       actions: [10],
@@ -1003,15 +955,11 @@ describe("edit-plan", () => {
   });
 
   it("a Recording with no action in the Action log is edited as today", () => {
-    // Given
-    const lines = [
-      { kind: "mark", t: 1 },
-      { kind: "wait", t: 12 },
-    ];
+    // Given: no action, only a Step mark at 1 s and a Wait mark at 12 s
     // When
     const plan = planEdit({
       duration: 40,
-      freezes: withoutSpans(iconFreezes, actionSpans(lines, 40)),
+      freezes: withoutSpans(iconFreezes, []),
       marks: [1],
       clicks: [],
       waits: [{ t: 12, reason: "the error popup" }],
