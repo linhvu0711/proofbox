@@ -84,6 +84,46 @@ describe("file-lock", () => {
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 
+  it.live(
+    "one lock effect run twice at once holds the lock one at a time",
+    () =>
+      Effect.gen(function* () {
+        // Given: one locked effect, built once, and work that counts who is
+        // inside at once
+        const lock = join(tempDir(), "x.lock");
+        let inside = 0;
+        let most = 0;
+        let ran = 0;
+        const locked = withFileLock({
+          dir: lock,
+          wait: "5 seconds",
+          busy: () => "busy",
+          failed: () => "failed",
+        })(
+          Effect.sync(() => {
+            inside += 1;
+            most = Math.max(most, inside);
+          }).pipe(
+            Effect.zipRight(Effect.sleep("50 millis")),
+            Effect.zipRight(
+              Effect.sync(() => {
+                inside -= 1;
+                ran += 1;
+              }),
+            ),
+          ),
+        );
+        // When: the same effect runs twice at once
+        yield* Effect.all([locked, locked], { concurrency: "unbounded" });
+        // Then
+        expect({ most, ran, held: existsSync(lock) }).toEqual({
+          most: 1,
+          ran: 2,
+          held: false,
+        });
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
   it.live("two takers of one free lock hold it one at a time", () =>
     Effect.gen(function* () {
       // Given: a free lock, and work that counts who is inside at once

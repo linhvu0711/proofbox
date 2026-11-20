@@ -139,37 +139,39 @@ export const withFileLock =
     A,
     E | LockError,
     R | FileSystem.FileSystem | CommandExecutor.CommandExecutor
-  > => {
-    const token = randomBytes(8).toString("hex");
-    const acquire = Effect.flatMap(ownStart, (started) =>
-      tryTake(options.dir, token, started),
-    ).pipe(
-      Effect.mapError((error) => options.failed(error)),
-      Effect.filterOrFail(
-        (held) => held,
-        () => new LockHeldError(),
-      ),
-      Effect.retry({
-        while: (error) => error instanceof LockHeldError,
-        schedule: Schedule.spaced(Duration.millis(100)).pipe(
-          Schedule.upTo(options.wait),
+  > =>
+    // A token per run: one built effect can run twice at once.
+    Effect.suspend(() => {
+      const token = randomBytes(8).toString("hex");
+      const acquire = Effect.flatMap(ownStart, (started) =>
+        tryTake(options.dir, token, started),
+      ).pipe(
+        Effect.mapError((error) => options.failed(error)),
+        Effect.filterOrFail(
+          (held) => held,
+          () => new LockHeldError(),
         ),
-      }),
-      Effect.catchIf(
-        (error): error is LockHeldError => error instanceof LockHeldError,
-        () => Effect.fail(options.busy()),
-      ),
-    );
-    return Effect.acquireUseRelease(
-      acquire,
-      () => effect,
-      () =>
-        readOwner(options.dir).pipe(
-          Effect.orElseSucceed(() => undefined),
-          Effect.flatMap((owner) =>
-            owner?.token === token ? removeDir(options.dir) : Effect.void,
+        Effect.retry({
+          while: (error) => error instanceof LockHeldError,
+          schedule: Schedule.spaced(Duration.millis(100)).pipe(
+            Schedule.upTo(options.wait),
           ),
-          Effect.ignore,
+        }),
+        Effect.catchIf(
+          (error): error is LockHeldError => error instanceof LockHeldError,
+          () => Effect.fail(options.busy()),
         ),
-    );
-  };
+      );
+      return Effect.acquireUseRelease(
+        acquire,
+        () => effect,
+        () =>
+          readOwner(options.dir).pipe(
+            Effect.orElseSucceed(() => undefined),
+            Effect.flatMap((owner) =>
+              owner?.token === token ? removeDir(options.dir) : Effect.void,
+            ),
+            Effect.ignore,
+          ),
+      );
+    });
