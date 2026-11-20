@@ -12,17 +12,12 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, ConfigProvider, Effect, Layer, Ref } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import { readWorkFolder, sendWorkFolder } from "../src/commands/upload.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import {
-  type ProviderEntry,
-  Providers,
-  providerEntry,
-} from "../src/provider.ts";
+import { type ProviderEntry, Providers } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import {
   type CliEnv,
@@ -33,6 +28,8 @@ import {
   runCli,
 } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const homeFiles = (home: string): string[] => {
   const out: string[] = [];
@@ -69,7 +66,7 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
   );
   const base = Layer.mergeAll(
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     providers,
     Layer.succeed(
       Progress,
@@ -81,7 +78,7 @@ const uploadLayers = (env: CliEnv, keeper: "socket" | "direct") => {
         hint: () => Effect.void,
       }),
     ),
-    Style.Default.pipe(Layer.provide(CliOutput.Test)),
+    Style.Default.pipe(Layer.provide(testOutput)),
   );
   return (
     keeper === "socket" ? KeeperClient.Default : KeeperClient.Direct
@@ -626,8 +623,8 @@ describe("upload", () => {
         const env = makeEnv();
         const error = yield* Effect.gen(function* () {
           yield* createSandbox({ os: "linux", provider: "fake" });
-          const output = yield* CliOutput;
-          const id = Chunk.toReadonlyArray(yield* Ref.get(output.captured.out))
+          const output = yield* CapturedOutput;
+          const id = Chunk.toReadonlyArray(yield* Ref.get(output.out))
             .join("")
             .trim();
           const { folder, files } = yield* grownFolder;

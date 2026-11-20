@@ -2,7 +2,7 @@ import { FileSystem, type Error as PlatformError } from "@effect/platform";
 import { Effect, Redacted, Schema } from "effect";
 import { withDeadlinePush } from "./deadline.ts";
 import {
-  ProviderError,
+  localFailure,
   platformReason,
   SecretsFileLineError,
   SecretsFileUnreadableError,
@@ -16,11 +16,11 @@ import { shellJoin } from "./shell.ts";
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export const Secret = Schema.Struct({
+const Secret = Schema.Struct({
   name: Schema.String.pipe(Schema.pattern(NAME)),
   value: Schema.RedactedFromSelf(Schema.String),
 });
-export type Secret = typeof Secret.Type;
+type Secret = typeof Secret.Type;
 
 export const parseEnvLines = Effect.fn("secrets.parseEnvLines")(function* (
   path: string,
@@ -85,10 +85,7 @@ const secretsFileError =
           reason: "is not readable",
         });
       default:
-        return new ProviderError({
-          provider: "local",
-          reason: platformReason(error),
-        });
+        return localFailure(platformReason(error));
     }
   };
 

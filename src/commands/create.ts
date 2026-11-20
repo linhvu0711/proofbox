@@ -8,8 +8,8 @@ import {
   withDeadlinePush,
 } from "../deadline.ts";
 import {
+  localFailure,
   MissingCapabilityError,
-  ProviderError,
   platformReason,
   SetupEnvClashError,
   SetupNeedsWorkError,
@@ -92,18 +92,17 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     const script =
       setupPath === undefined
         ? undefined
-        : yield* fs.readFile(setupPath).pipe(
-            Effect.catchAll((error) =>
-              Effect.fail(
-                error._tag === "SystemError" && error.reason === "NotFound"
-                  ? new SetupScriptMissingError({ path: setupPath })
-                  : new ProviderError({
-                      provider: "local",
-                      reason: platformReason(error),
-                    }),
+        : yield* fs
+            .readFile(setupPath)
+            .pipe(
+              Effect.catchAll((error) =>
+                Effect.fail(
+                  error._tag === "SystemError" && error.reason === "NotFound"
+                    ? new SetupScriptMissingError({ path: setupPath })
+                    : localFailure(platformReason(error)),
+                ),
               ),
-            ),
-          );
+            );
     const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
       options.secretsFile === undefined
@@ -171,8 +170,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
         ),
       );
     // A failed upload or Setup script must not leave the made Sandbox
-    // behind; runSetupScript already deletes it for a non-zero script exit,
-    // and this covers every other way the steps fail.
+    // behind: this deletes it for every way the steps fail.
     yield* Effect.gen(function* () {
       if (options.work !== undefined && files !== undefined) {
         yield* sendWorkFolder(id, options.work, files, workLimit);

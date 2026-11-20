@@ -10,7 +10,7 @@ import {
 import { type HelperLimit, type HelperTable, runHelper } from "./helper.ts";
 import type { Os } from "./provider.ts";
 
-export const PIXEL_HELPER: HelperTable = {
+const PIXEL_HELPER: HelperTable = {
   feature: "desktop",
   paths: { linux: "/opt/proofbox/pixel", macos: "/opt/proofbox/pixel" },
 };
@@ -49,26 +49,19 @@ const WaitLine = Schema.Struct({
 
 export const ActionLogLine = Schema.Union(ActionLine, WaitLine);
 
-export const PACE_HUMAN = {
+const PACE_HUMAN = {
   glideMs: 400,
   letterMs: 100,
   typeMaxMs: 10000,
   settleMs: 700,
 };
 
-export const PACE_FAST = {
+const PACE_FAST = {
   glideMs: 0,
   letterMs: 12,
   typeMaxMs: 3000,
   settleMs: 0,
 };
-
-export interface Pace {
-  readonly glideMs: number;
-  readonly letterMs: number;
-  readonly typeMaxMs: number;
-  readonly settleMs: number;
-}
 
 export const resolvePace = Effect.fn("pixel.resolvePace")(function* (
   options: {

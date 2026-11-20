@@ -6,6 +6,7 @@ import {
   BadTokenFlagError,
   LoginExpiredError,
   LoginTimeoutError,
+  localFailure,
   NoLoginNeededError,
   NoLoginWayError,
   NoRegionsError,
@@ -84,11 +85,7 @@ export const loginToProvider = Effect.fn("auth.loginToProvider")(
     if (options.token) {
       const raw = yield* Effect.tryPromise({
         try: () => text(process.stdin),
-        catch: (cause) =>
-          new ProviderError({
-            provider: "local",
-            reason: cause instanceof Error ? cause.message : String(cause),
-          }),
+        catch: (cause) => localFailure(cause),
       });
       const token = raw.trim();
       if (token === "") {

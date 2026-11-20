@@ -13,6 +13,7 @@ import {
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
 import {
+  causeText,
   LinuxSshdError,
   type ProviderError,
   type ProviderUnavailableError,
@@ -27,7 +28,6 @@ import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
 import {
   brandFor,
-  describe,
   fail,
   gone,
   type MakeRequest,
@@ -145,7 +145,7 @@ export const makeLinuxHost = (deps: {
     }
     const labels = yield* Effect.try({
       try: () => JSON.parse(first.slice(0, separator)) as unknown,
-      catch: (cause) => fail(describe(cause)),
+      catch: (cause) => fail(causeText(cause)),
     });
     const info = yield* sandboxInfoFromLabels(
       brandFor(ref),
@@ -240,7 +240,7 @@ export const makeLinuxHost = (deps: {
     }).pipe(
       Effect.catchIf(
         (error): error is string => typeof error === "string",
-        (error) => Effect.fail(fail(describe(error))),
+        (error) => Effect.fail(fail(causeText(error))),
       ),
     );
     yield* Effect.addFinalizer(() =>

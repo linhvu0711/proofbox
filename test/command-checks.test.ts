@@ -17,8 +17,6 @@ import { afterEach, describe, expect } from "vitest";
 import {
   CHECKS_START,
   type ChecksShell,
-  checksTrailer,
-  pushFailedTrailer,
   runCommand,
 } from "../src/command-checks.ts";
 import { commandEvents } from "../src/command-events.ts";
@@ -28,6 +26,7 @@ import {
   type ExecEvent,
   SandboxInfo,
 } from "../src/provider.ts";
+import { checksTrailer, pushFailedTrailer } from "./support/checks.ts";
 
 const tempRoots: string[] = [];
 

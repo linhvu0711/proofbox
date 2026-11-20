@@ -5,7 +5,6 @@ import { NodeContext } from "@effect/platform-node";
 import { it as effectIt } from "@effect/vitest";
 import { Chunk, Duration, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { openLive } from "../src/commands/live.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { Progress } from "../src/progress.ts";
@@ -14,10 +13,11 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
 
@@ -47,7 +47,7 @@ const withLiveView = (root: string): Provider => {
 const layers = (provider: Provider) =>
   Layer.mergeAll(
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     Layer.succeed(
       Providers,
       new Map<string, ProviderEntry>([["fake", providerEntry(provider)]]),
@@ -73,16 +73,16 @@ const liveOutput = (provider: Provider, json: boolean) =>
       idle: Duration.minutes(5),
       maxLife: Duration.hours(1),
     });
-    const output = yield* CliOutput;
+    const output = yield* CapturedOutput;
     const fiber = yield* Effect.fork(openLive(`fake:${info.name}`, { json }));
-    yield* Ref.get(output.captured.out).pipe(
+    yield* Ref.get(output.out).pipe(
       Effect.repeat({
         schedule: Schedule.spaced(Duration.millis(10)),
         until: (chunks) => Chunk.size(chunks) > 0,
       }),
     );
     yield* Fiber.interrupt(fiber);
-    return Chunk.join(yield* Ref.get(output.captured.out), "");
+    return Chunk.join(yield* Ref.get(output.out), "");
   }).pipe(Effect.provide(layers(provider)));
 
 describe("live", () => {

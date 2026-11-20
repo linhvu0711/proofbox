@@ -129,4 +129,68 @@ describe("Namespace helpers", () => {
       authorization: `Bearer ${TOKEN}`,
     });
   });
+  it("extend-main with a zero seconds argument makes no API call", async () => {
+    // Given: a fake Namespace API, a cap file one hour ahead, the env login
+    const ns = await startFakeNamespace(() => ({ json: {} }));
+    const runtime = tempDir();
+    const home = tempDir();
+    capFile(runtime, `us:${INSTANCE}`, Math.floor(Date.now() / 1000) + 3600);
+    // When
+    const result = await runHelper(
+      "src/namespace/extend-main.ts",
+      ["us", INSTANCE, "0"],
+      {
+        PROOFBOX_RUNTIME_DIR: runtime,
+        PROOFBOX_NAMESPACE_TOKEN: TOKEN,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        HOME: home,
+      },
+    );
+    await ns.close();
+    // Then
+    expect({ exitCode: result.exitCode, calls: ns.calls.length }).toEqual({
+      exitCode: 0,
+      calls: 0,
+    });
+  });
+
+  it("expire-main with a time that is not a number makes no API call", async () => {
+    // Given: a fake Namespace API, a saved login, a cap file one hour ahead
+    const ns = await startFakeNamespace(() => ({ json: {} }));
+    const runtime = tempDir();
+    const home = tempDir();
+    const logins = join(home, ".config", "proofbox", "logins.json");
+    mkdirSync(dirname(logins), { recursive: true });
+    writeFileSync(
+      logins,
+      `${JSON.stringify({
+        namespace: {
+          way: "token",
+          token: TOKEN,
+          account: "tnt_test",
+          expiresAt: "3000-01-01T00:00:00.000Z",
+          region: "us",
+        },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    capFile(runtime, `us:${INSTANCE}`, Math.floor(Date.now() / 1000) + 3600);
+    // When
+    const result = await runHelper(
+      "src/namespace/expire-main.ts",
+      ["us", INSTANCE, "soon"],
+      {
+        PROOFBOX_RUNTIME_DIR: runtime,
+        PROOFBOX_NAMESPACE_TOKEN: undefined,
+        PROOFBOX_NAMESPACE_COMPUTE_URL: ns.url,
+        HOME: home,
+      },
+    );
+    await ns.close();
+    // Then
+    expect({ exitCode: result.exitCode, calls: ns.calls.length }).toEqual({
+      exitCode: 0,
+      calls: 0,
+    });
+  });
 });

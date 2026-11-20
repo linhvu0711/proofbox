@@ -21,6 +21,7 @@ import {
   parseDeadline,
 } from "../deadline.ts";
 import {
+  causeText,
   ProviderError,
   ProviderUnavailableError,
   SandboxGoneError,
@@ -52,9 +53,6 @@ export class SandboxFile extends Schema.Class<SandboxFile>("SandboxFile")({
   size: Schema.optional(Size),
   snapshot: Schema.optional(Schema.String),
 }) {}
-
-export const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
 
 // The checks around a command on the Caller's machine (ADR 0015): the
 // Deadline file `get` reads, with no temp file left when the write fails;
@@ -96,6 +94,7 @@ export const makeFakeProvider = (options: {
 }): Provider => {
   const fs = options.fs;
   const root = options.root;
+  const snapshots = options.snapshots;
   const fail = (reason: string) =>
     new ProviderError({ provider: "fake", reason });
   // `unfinished`: the folder is there, but create never wrote its
@@ -148,14 +147,14 @@ export const makeFakeProvider = (options: {
                 ? gone(name)
                 : error._tag === "SystemError" && error.reason === "NotFound"
                   ? gone(name, true)
-                  : fail(describe(error)),
+                  : fail(causeText(error)),
             ),
           ),
         ),
       );
     const json = yield* Effect.try({
       try: () => JSON.parse(text) as unknown,
-      catch: (cause) => fail(describe(cause)),
+      catch: (cause) => fail(causeText(cause)),
     });
     const file = yield* Schema.decodeUnknown(SandboxFile)(json).pipe(
       Effect.mapError((error) => fail(error.message)),
@@ -165,7 +164,7 @@ export const makeFakeProvider = (options: {
       .pipe(
         Effect.catchAll((error) =>
           Effect.flatMap(exists(dir), (here) =>
-            Effect.fail(here ? fail(describe(error)) : gone(name)),
+            Effect.fail(here ? fail(causeText(error)) : gone(name)),
           ),
         ),
       );
@@ -187,7 +186,7 @@ export const makeFakeProvider = (options: {
     if (info.deadline.getTime() <= current.getTime()) {
       yield* fs
         .remove(dir, { recursive: true, force: true })
-        .pipe(Effect.mapError((error) => fail(describe(error))));
+        .pipe(Effect.mapError((error) => fail(causeText(error))));
       return yield* gone(name);
     }
     return info;
@@ -202,7 +201,7 @@ export const makeFakeProvider = (options: {
     const temp = `${path}.${randomUUID()}.tmp`;
     yield* fs.writeFileString(temp, text).pipe(
       Effect.andThen(fs.rename(temp, path)),
-      Effect.mapError((error) => fail(describe(error))),
+      Effect.mapError((error) => fail(causeText(error))),
       Effect.tapError(() =>
         fs.remove(temp, { force: true }).pipe(Effect.ignore),
       ),
@@ -237,7 +236,7 @@ export const makeFakeProvider = (options: {
     );
     yield* fs
       .makeDirectory(root, { recursive: true })
-      .pipe(Effect.mapError((error) => fail(describe(error))));
+      .pipe(Effect.mapError((error) => fail(causeText(error))));
     let name: string | undefined;
     for (let i = 0; i < 5 && name === undefined; i++) {
       const candidate = makeSandboxName();
@@ -246,7 +245,7 @@ export const makeFakeProvider = (options: {
         Effect.catchAll((error) =>
           error._tag === "SystemError" && error.reason === "AlreadyExists"
             ? Effect.succeed(false)
-            : Effect.fail(fail(describe(error))),
+            : Effect.fail(fail(causeText(error))),
         ),
       );
       if (made) name = candidate;
@@ -308,7 +307,7 @@ export const makeFakeProvider = (options: {
           String(Math.floor(maxLifeAt.getTime() / 1000)),
           { mode: 0o600 },
         )
-        .pipe(Effect.mapError((error) => fail(describe(error))));
+        .pipe(Effect.mapError((error) => fail(causeText(error))));
     }
     yield* Effect.all(
       [
@@ -317,7 +316,7 @@ export const makeFakeProvider = (options: {
         fs.makeDirectory(join(dir, "secrets"), { mode: 0o700 }),
       ],
       { discard: true },
-    ).pipe(Effect.mapError((error) => fail(describe(error))));
+    ).pipe(Effect.mapError((error) => fail(causeText(error))));
     if (entry !== undefined) {
       yield* Effect.all(
         [
@@ -325,7 +324,7 @@ export const makeFakeProvider = (options: {
           fs.copy(join(entry, "state"), join(dir, "state")),
         ],
         { discard: true },
-      ).pipe(Effect.mapError((error) => fail(describe(error))));
+      ).pipe(Effect.mapError((error) => fail(causeText(error))));
     }
     const finished = yield* now;
     const deadline = nextDeadline({ now: finished, idle: req.idle, maxLifeAt });
@@ -369,7 +368,7 @@ export const makeFakeProvider = (options: {
         Effect.catchAll((error) =>
           error._tag === "SystemError" && error.reason === "NotFound"
             ? Effect.succeed([])
-            : Effect.fail(fail(describe(error))),
+            : Effect.fail(fail(causeText(error))),
         ),
       );
     // `readDirectory` gives names only; a name whose stat fails is a folder
@@ -447,7 +446,7 @@ export const makeFakeProvider = (options: {
     }
     yield* fs
       .remove(join(root, name), { recursive: true, force: true })
-      .pipe(Effect.mapError((error) => fail(describe(error))));
+      .pipe(Effect.mapError((error) => fail(causeText(error))));
     yield* unmark;
     return "deleted" as const;
   });
@@ -463,14 +462,11 @@ export const makeFakeProvider = (options: {
   // Copy into a temp entry and rename it over the old one, so a create
   // that starts from the Snapshot never sees a half-written one.
   const saveSnapshot = Effect.fn("FakeProvider.saveSnapshot")(function* (
+    snapshots: NonNullable<typeof options.snapshots>,
     sandbox: SandboxRef,
     fingerprint: string,
   ) {
     const name = sandbox.name;
-    const snapshots = options.snapshots;
-    if (snapshots === undefined) {
-      return yield* fail("this fake Provider keeps no Snapshots");
-    }
     if (snapshots.fail === "push") {
       return yield* fail("push refused");
     }
@@ -489,7 +485,7 @@ export const makeFakeProvider = (options: {
       ],
       { discard: true },
     ).pipe(
-      Effect.mapError((error) => fail(describe(error))),
+      Effect.mapError((error) => fail(causeText(error))),
       Effect.tapError(() =>
         fs.remove(temp, { recursive: true, force: true }).pipe(Effect.ignore),
       ),
@@ -555,12 +551,13 @@ export const makeFakeProvider = (options: {
       },
     },
     create,
-    ...(options.snapshots === undefined
+    ...(snapshots === undefined
       ? {}
       : {
           snapshots: {
             baseVersion: Effect.succeed("fake"),
-            save: saveSnapshot,
+            save: (sandbox, fingerprint) =>
+              saveSnapshot(snapshots, sandbox, fingerprint),
           },
         }),
     get,

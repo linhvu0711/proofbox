@@ -32,7 +32,7 @@ export const LoginsFile = Schema.Record({
 });
 export type LoginsFile = typeof LoginsFile.Type;
 
-export const loginsPath = Effect.map(Config.string("HOME"), (home) =>
+const loginsPath = Effect.map(Config.string("HOME"), (home) =>
   join(home, ".config", "proofbox", "logins.json"),
 );
 

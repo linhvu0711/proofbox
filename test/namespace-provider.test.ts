@@ -27,11 +27,7 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import {
-  CHECKS_START,
-  checksTrailer,
-  pushFailedTrailer,
-} from "../src/command-checks.ts";
+import { CHECKS_START } from "../src/command-checks.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
@@ -60,12 +56,14 @@ import type {
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { checksTrailer, pushFailedTrailer } from "./support/checks.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { eventually, startKeeper } from "./support/keeper.ts";
 import { unusedHost } from "./support/namespace-hosts.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 
 // The Compute API, faked: each call lands in `calls` as
 // `<method> <region> <instanceId?>`; `create` answers the id below.
@@ -240,7 +238,7 @@ const fakeDocker = (options: {
 
 const liveLayers = (warnings?: Array<string>) =>
   Layer.mergeAll(
-    CliOutput.Test,
+    testOutput,
     // A heartbeat-less Progress, like test/deadline.test.ts.
     Layer.succeed(
       Progress,
@@ -1217,10 +1215,8 @@ describe("Namespace Provider", () => {
           })
           .pipe(Effect.provide(Progress.Default));
         // Then
-        const output = yield* CliOutput;
-        const err = Chunk.toReadonlyArray(
-          yield* Ref.get(output.captured.err),
-        ).join("");
+        const output = yield* CapturedOutput;
+        const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
         expect(err).toBe(
           "proofbox: installing sshd\nproofbox: starting sshd\nproofbox: reading the Namespace tenant\nproofbox: pulling the Snapshot\nproofbox: setting the Snapshot expiry\nproofbox: creating docker Sandbox\nproofbox: setting the Base image expiry\nproofbox: checking the Namespace token is out of reach\n",
         );

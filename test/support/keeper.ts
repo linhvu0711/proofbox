@@ -1,6 +1,5 @@
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Layer, TestServices } from "effect";
-import { CliOutput } from "../../src/cli-output.ts";
 import { runKeeper } from "../../src/keeper/keeper.ts";
 import { KeeperClient } from "../../src/keeper/keeper-client.ts";
 import { keeperAnswers } from "../../src/keeper/lifecycle.ts";
@@ -10,9 +9,10 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../../src/provider.ts";
 import { fileStem, resolveSandboxId } from "../../src/sandbox-id.ts";
+import { testOutput } from "./output.ts";
+import { providerEntry } from "./providers.ts";
 
 // The layers a command needs to reach the Keeper of a Sandbox of
 // `provider`: the CLI side, with that one Provider, so a test can count
@@ -21,7 +21,7 @@ export const keeperClientLayers = (provider: Provider) =>
   KeeperClient.Default.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
-        Progress.Default.pipe(Layer.provideMerge(CliOutput.Test)),
+        Progress.Default.pipe(Layer.provideMerge(testOutput)),
         Layer.succeed(
           Providers,
           new Map<string, ProviderEntry>([

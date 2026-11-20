@@ -18,13 +18,13 @@ export const idleDefault = (os: Os): Duration.Duration =>
 
 export const MAX_LIFE_DEFAULT = Duration.hours(3);
 
-export interface SpanSpec {
+interface SpanSpec {
   readonly units: ReadonlyArray<"ms" | "s" | "m" | "h" | "d" | "y">;
   readonly zero: boolean;
   readonly example: string;
 }
 
-export const IDLE_SPAN: SpanSpec = {
+const IDLE_SPAN: SpanSpec = {
   units: ["s", "m", "h"],
   zero: false,
   example: "15m",

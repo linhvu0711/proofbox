@@ -71,7 +71,7 @@ interface LabelEntry {
 // What GetSSHConfig hands back for one instance: the SSH gateway endpoint,
 // the username to dial it with, a short-lived private key, and the
 // gateway's host keys in OpenSSH format ("<type> <base64 key>").
-interface SshConfig {
+export interface SshConfig {
   readonly username: string;
   readonly endpoint: string;
   readonly privateKey: Uint8Array;

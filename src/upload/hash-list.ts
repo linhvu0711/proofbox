@@ -23,7 +23,7 @@ export const toHashList = (files: ReadonlyArray<WorkFile>): HashList => ({
   ),
 });
 
-export interface HashDiff {
+interface HashDiff {
   readonly send: ReadonlyArray<string>;
   readonly remove: ReadonlyArray<string>;
 }

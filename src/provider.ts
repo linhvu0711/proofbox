@@ -2,7 +2,7 @@ import type { CommandExecutor } from "@effect/platform";
 import {
   Context,
   type Duration,
-  Effect,
+  type Effect,
   type Option,
   type Redacted,
   Schema,
@@ -52,9 +52,6 @@ export interface OsOffer {
   readonly features: ReadonlySet<Feature>;
 }
 
-export const LoginWay = Schema.Literal("browser", "token");
-export type LoginWay = typeof LoginWay.Type;
-
 export interface ProviderAccount {
   readonly account?: string;
   readonly expiresAt?: Date;
@@ -71,7 +68,7 @@ export interface TokenRequest {
 // login page's URL, `complete` holds until the page was clicked and
 // hands the Provider login it made. A Provider that can mint CI tokens
 // from the saved login's session names `makeToken`.
-export interface BrowserWay {
+interface BrowserWay {
   readonly start: Effect.Effect<
     { readonly loginId: string; readonly url: string },
     ProviderUnavailableError | ProviderError
@@ -96,7 +93,7 @@ export interface BrowserWay {
   >;
 }
 
-export interface LoginWays {
+interface LoginWays {
   readonly _tag: "Ways";
   readonly browser?: BrowserWay;
   readonly checkToken: (
@@ -110,11 +107,11 @@ export interface LoginWays {
 
 // What a Provider offers `proofbox auth`: no login at all, or its own
 // login ways.
-export type LoginPart = { readonly _tag: "None" } | LoginWays;
+type LoginPart = { readonly _tag: "None" } | LoginWays;
 
 // The token and region a command uses to act for a Provider account, from
 // the env or the saved login.
-export interface LoginInHand {
+interface LoginInHand {
   readonly token: Redacted.Redacted<string>;
   readonly region: Option.Option<string>;
 }
@@ -254,18 +251,7 @@ export interface Provider {
   readonly extend: (
     sandbox: SandboxRef,
     deadline: Date,
-  ) => Effect.Effect<
-    void,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
-  >;
+  ) => Effect.Effect<void, SandboxCallError>;
   // Scoped: the Live view stays up until the scope closes. `gone` resolves
   // with a Provider error if the view's link dies while it is open.
   readonly liveView?: (sandbox: SandboxRef) => Effect.Effect<
@@ -282,15 +268,7 @@ export interface Provider {
         | ProviderUnavailableError
       >;
     },
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError,
+    SandboxCallError,
     Scope.Scope
   >;
   // Only where an OS offer has the "snapshot" feature. `save` stores the
@@ -300,34 +278,11 @@ export interface Provider {
     readonly save: (
       sandbox: SandboxRef,
       fingerprint: string,
-    ) => Effect.Effect<
-      void,
-      | BadLoginsFileError
-      | LoginExpiredError
-      | NotLoggedInError
-      | ProviderError
-      | ProviderLimitError
-      | ProviderUnavailableError
-      | SandboxGoneError
-      | TokenRejectedError
-      | TokenPermissionError,
-      Progress
-    >;
+    ) => Effect.Effect<void, SandboxCallError, Progress>;
   };
   readonly get: (
     sandbox: SandboxRef,
-  ) => Effect.Effect<
-    SandboxInfo,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError
-  >;
+  ) => Effect.Effect<SandboxInfo, SandboxCallError>;
   readonly list: Effect.Effect<
     ListResult,
     | ProviderError
@@ -341,32 +296,13 @@ export interface Provider {
   >;
   readonly delete: (
     sandbox: SandboxRef,
-  ) => Effect.Effect<
-    "deleted" | "gone",
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | SandboxGoneError
-    | TokenRejectedError
-    | TokenPermissionError
-    | NotLoggedInError
-    | LoginExpiredError
-    | BadLoginsFileError
-  >;
+  ) => Effect.Effect<"deleted" | "gone", SandboxCallError>;
   readonly sandboxFolders: (name: string, os: Os) => SandboxFolders;
   readonly connect: (
     sandbox: SandboxRef,
   ) => Effect.Effect<
     Connection,
-    | BadLoginsFileError
-    | LoginExpiredError
-    | NotLoggedInError
-    | SandboxGoneError
-    | ProviderError
-    | ProviderLimitError
-    | ProviderUnavailableError
-    | TokenRejectedError
-    | TokenPermissionError,
+    SandboxCallError,
     Scope.Scope | CommandExecutor.CommandExecutor
   >;
 }
@@ -399,13 +335,6 @@ export interface ProviderEntry {
   readonly idPrefix: string;
   readonly load: Effect.Effect<Provider, ProviderError>;
 }
-
-// The entry for a Provider that is already built.
-export const providerEntry = (provider: Provider): ProviderEntry => ({
-  name: provider.name,
-  idPrefix: provider.idPrefix,
-  load: Effect.succeed(provider),
-});
 
 export class Providers extends Context.Tag("proofbox/Providers")<
   Providers,

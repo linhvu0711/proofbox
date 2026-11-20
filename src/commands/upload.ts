@@ -2,6 +2,7 @@ import { dirname, join, resolve } from "node:path";
 import { Duration, Effect, Schema, Stream } from "effect";
 import { withDeadlinePush } from "../deadline.ts";
 import {
+  causeText,
   ProviderError,
   UploadFailedError,
   type WorkFileGrewError,
@@ -57,7 +58,7 @@ const withUploadLock = Effect.fn("upload.withUploadLock")(function* <A, E, R>(
     failed: (cause) =>
       new ProviderError({
         provider,
-        reason: cause instanceof Error ? cause.message : String(cause),
+        reason: causeText(cause),
       }),
   })(effect);
 });

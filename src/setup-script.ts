@@ -108,8 +108,6 @@ export const runSetupScript = Effect.fn("setupScript.runSetupScript")(
             for (const line of result.lines) {
               yield* output.err(line);
             }
-            yield* provider.delete(id);
-            yield* keeper.stop(rawId);
             return yield* new SetupScriptFailedError({ code: result.code });
           }),
         ),

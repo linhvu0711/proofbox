@@ -5,11 +5,11 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, Effect, Fiber, Layer, Ref, Stream, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { baseImageVersion, ensureBaseImage } from "../src/docker/base-image.ts";
 import type { DockerClient, DockerError } from "../src/docker/docker-client.ts";
 import { Progress } from "../src/progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 
 const stubClient = (
   imageExists: boolean,
@@ -99,18 +99,16 @@ describe("Base image", () => {
       yield* TestClock.adjust("40 seconds");
       yield* Fiber.join(fiber);
       // Then
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toBe(
         "proofbox: building the Base image\nproofbox: still building the Base image (15 s)\nproofbox: still building the Base image (30 s)\n",
       );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
     ),
@@ -134,18 +132,16 @@ describe("Base image", () => {
       yield* TestClock.adjust("20 seconds");
       yield* Fiber.join(fiber);
       // Then
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toBe(
         "proofbox: pulling the Base image\nproofbox: still pulling the Base image (15 s)\n",
       );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
     ),
@@ -165,16 +161,14 @@ describe("Base image", () => {
         buildArgs: {},
       });
       // Then: nothing printed
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toBe("");
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
     ),

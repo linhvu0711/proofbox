@@ -10,6 +10,13 @@ import { formatMb } from "./upload/max-size.ts";
 export const platformReason = (error: PlatformError) =>
   error.description ?? error.message;
 
+// The text of any other failure: an Error's message, else the value as text.
+export const causeText = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause);
+
+const capitalized = (word: string) =>
+  `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;
   readonly reason: string;
@@ -18,6 +25,10 @@ export class ProviderError extends Data.TaggedError("ProviderError")<{
     return `Provider ${this.provider} failed: ${this.reason}`;
   }
 }
+
+// A failure on the Caller's own machine, as a ProviderError.
+export const localFailure = (cause: unknown) =>
+  new ProviderError({ provider: "local", reason: causeText(cause) });
 
 export class ProviderUnavailableError extends Data.TaggedError(
   "ProviderUnavailableError",
@@ -53,9 +64,6 @@ export class ToolBundleHashError extends Data.TaggedError(
         ? "Run create again"
         : `Run docker image rm ${this.tag} and try again`;
     return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. ${next}`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -233,9 +241,6 @@ export class CaptureBlockedError extends Data.TaggedError(
         : `Saved the screen to ${this.screenshot}. `;
     return `Recording on ${this.id} failed: ${this.what}, so no Proof video was made. ${saved}Record the walk again.`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
@@ -276,9 +281,6 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
   get message() {
     return `Sandbox ${this.id} can reach the Namespace workload token (${this.what}); deleted the host and refused the Sandbox`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
@@ -303,9 +305,6 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
         : `saved the screen to ${this.screenshot} and `;
     return `Sandbox ${this.id} failed the macOS prepare check (${this.what}); ${saved}deleted the Mac`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
@@ -317,9 +316,6 @@ export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
 }> {
   get message() {
     return `Sandbox ${this.id} failed the Linux sshd step (${this.what}); deleted the Sandbox`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -399,9 +395,6 @@ export class ProviderLimitError extends Data.TaggedError("ProviderLimitError")<{
   get message() {
     return `Namespace refused the Sandbox: ${this.limit}; nothing was created. Delete a Sandbox or use a smaller --size`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class MissingCapabilityError extends Data.TaggedError(
@@ -455,10 +448,7 @@ export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
   readonly provider: string;
 }> {
   get message() {
-    return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
-  }
-  get reason() {
-    return this.message;
+    return `${capitalized(this.provider)} did not accept this token. It may be wrong, revoked, or expired.`;
   }
 }
 
@@ -470,10 +460,7 @@ export class TokenPermissionError extends Data.TaggedError(
   readonly need?: string;
 }> {
   get message() {
-    return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
-  }
-  get reason() {
-    return this.message;
+    return `This ${capitalized(this.provider)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
   }
 }
 
@@ -481,7 +468,7 @@ export class TokenDeniedError extends Data.TaggedError("TokenDeniedError")<{
   readonly provider: string;
 }> {
   get message() {
-    return `Your ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} account cannot make tokens. Ask a workspace admin.`;
+    return `Your ${capitalized(this.provider)} account cannot make tokens. Ask a workspace admin.`;
   }
 }
 
@@ -508,9 +495,6 @@ export class NotLoggedInError extends Data.TaggedError("NotLoggedInError")<{
   get message() {
     return `Not logged in to ${this.provider}. Run: proofbox auth login ${this.provider}`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
@@ -518,9 +502,6 @@ export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
 }> {
   get message() {
     return `Your Provider login for ${this.provider} expired. Run: proofbox auth login ${this.provider}`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -530,9 +511,6 @@ export class LoginTimeoutError extends Data.TaggedError("LoginTimeoutError")<{
 }> {
   get message() {
     return `The browser login did not finish in ${this.wait}. Run: proofbox auth login ${this.provider}`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 

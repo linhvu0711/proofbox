@@ -1,9 +1,9 @@
 import { it } from "@effect/vitest";
 import { Chunk, Effect, Layer, Ref } from "effect";
 import { describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { Progress } from "../src/progress.ts";
 import { encodeUnderLimit } from "../src/proof/size-limit.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 
 describe("Size limit", () => {
   it.effect("an over-limit video is built again at lower quality", () =>
@@ -20,10 +20,8 @@ describe("Size limit", () => {
         limit: 10_000_000,
         raw: "/run/proofbox/recordings/1/raw.mkv",
       });
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       // Then
       expect(bytes).toBe(9_100_000);
       expect(crfs).toEqual([23, 28]);
@@ -33,8 +31,8 @@ describe("Size limit", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
-          Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
         ),
       ),
     ),
@@ -64,8 +62,8 @@ describe("Size limit", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            CliOutput.Test,
-            Progress.Default.pipe(Layer.provide(CliOutput.Test)),
+            testOutput,
+            Progress.Default.pipe(Layer.provide(testOutput)),
           ),
         ),
       ),

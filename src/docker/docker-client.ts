@@ -1,7 +1,8 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Chunk, Effect, Option, Stream } from "effect";
-import { commandEvents } from "../command-events.ts";
+import { Effect, Option, Stream } from "effect";
+import { commandEvents, toText } from "../command-events.ts";
 import {
+  causeText,
   type LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
@@ -11,13 +12,13 @@ import type { Link } from "../namespace/ssh-link.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
 
-export interface DockerExecResult {
+interface DockerExecResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-export interface DockerInspection {
+interface DockerInspection {
   readonly labels: unknown;
   readonly running: boolean;
 }
@@ -72,11 +73,6 @@ const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
   );
 
-const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
-  Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
-    "utf8",
-  );
-
 export const makeDockerClient = (
   executor: CommandExecutor.CommandExecutor,
   // A Namespace host's link: every docker line but a build goes through
@@ -97,8 +93,6 @@ export const makeDockerClient = (
         })
       : linkLost("the link was already gone");
   const fail = (reason: string) => new ProviderError({ provider, reason });
-  const describe = (cause: unknown) =>
-    cause instanceof Error ? cause.message : String(cause);
 
   // A missing `docker` binary is a spawn ENOENT (SystemError "NotFound"); a
   // stopped daemon answers every call with DOCKER_DOWN.
@@ -149,7 +143,7 @@ export const makeDockerClient = (
             process.exitCode,
           ],
           { concurrency: "unbounded" },
-        ).pipe(Effect.mapError((error) => fail(describe(error))));
+        ).pipe(Effect.mapError((error) => fail(causeText(error))));
         return {
           exitCode,
           stdout: toText(outBytes),
@@ -233,7 +227,7 @@ export const makeDockerClient = (
               process.exitCode,
             ],
             { concurrency: "unbounded" },
-          ).pipe(Effect.mapError((error) => fail(describe(error))));
+          ).pipe(Effect.mapError((error) => fail(causeText(error))));
           const stderr = toText(errBytes);
           if (exitCode === 255) {
             return yield* linkLost(tail(stderr, 3));
@@ -288,7 +282,7 @@ export const makeDockerClient = (
       executor,
       Command.make("docker", ...dockerExec),
       options,
-      { spawn: spawnError, fail, exit: (code) => Effect.succeed(code) },
+      { spawn: spawnError, fail },
     );
   };
 
@@ -317,7 +311,7 @@ export const makeDockerClient = (
     }
     const labels = yield* Effect.try({
       try: () => JSON.parse(text.slice(0, separator)) as unknown,
-      catch: (cause) => fail(describe(cause)),
+      catch: (cause) => fail(causeText(cause)),
     });
     return Option.some({
       labels,

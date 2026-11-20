@@ -1,4 +1,4 @@
-export type Clip =
+type Clip =
   | {
       readonly kind: "cut";
       readonly from: number;
@@ -13,13 +13,13 @@ export type Clip =
       readonly step: number;
     };
 
-export interface Caption {
+interface Caption {
   readonly step: number;
   readonly from: number;
   readonly to: number;
 }
 
-export interface Ring {
+interface Ring {
   readonly x: number;
   readonly y: number;
   readonly from: number;
@@ -30,19 +30,18 @@ export interface EditPlan {
   readonly clips: ReadonlyArray<Clip>;
   readonly captions: ReadonlyArray<Caption>;
   readonly rings: ReadonlyArray<Ring>;
-  readonly seconds: number;
   readonly unusedWaits: ReadonlyArray<{
     readonly reason: string;
     readonly step: number;
   }>;
 }
 
-export interface ProbeResult {
+interface ProbeResult {
   readonly duration: number;
   readonly freezes: ReadonlyArray<readonly [number, number | undefined]>;
 }
 
-export interface PlanInput {
+interface PlanInput {
   readonly duration: number;
   readonly freezes: ReadonlyArray<readonly [number, number | undefined]>;
   readonly marks: ReadonlyArray<number>;
@@ -371,5 +370,5 @@ export const planEdit = (input: PlanInput): EditPlan => {
       to: Math.min(from + 0.8, span.after),
     });
   }
-  return { clips, captions, rings, seconds: out, unusedWaits };
+  return { clips, captions, rings, unusedWaits };
 };

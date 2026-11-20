@@ -13,7 +13,6 @@ import {
   Ref,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
 import {
   deadlineText,
@@ -27,14 +26,12 @@ import {
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import {
-  type ProviderEntry,
-  Providers,
-  providerEntry,
-} from "../src/provider.ts";
+import { type ProviderEntry, Providers } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
 const makeProviders = () => {
@@ -66,7 +63,7 @@ const layers = () => {
       ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
     ),
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     // A heartbeat-less Progress: the real one leaves a sleeping fiber that
@@ -81,13 +78,13 @@ const layers = () => {
         hint: () => Effect.void,
       }),
     ),
-    Style.Default.pipe(Layer.provide(CliOutput.Test)),
+    Style.Default.pipe(Layer.provide(testOutput)),
   );
 };
 
 const sandboxName = Effect.gen(function* () {
-  const output = yield* CliOutput;
-  const out = yield* Ref.get(output.captured.out);
+  const output = yield* CapturedOutput;
+  const out = yield* Ref.get(output.out);
   return Chunk.toReadonlyArray(out).join("").trim().replace("fake:", "");
 });
 

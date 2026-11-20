@@ -5,6 +5,7 @@ import {
   AnswerTimeoutError,
   KeeperLostError,
   LinkDroppedError,
+  localFailure,
   ProviderError,
   SandboxGoneError,
   type UploadFailedError,
@@ -128,12 +129,7 @@ const narrowStdin = (options?: KeeperExecOptions): ExecOptions | undefined =>
     ? undefined
     : {
         stdin: Stream.mapError(options.stdin, (error) =>
-          error instanceof ProviderError
-            ? error
-            : new ProviderError({
-                provider: "local",
-                reason: error instanceof Error ? error.message : String(error),
-              }),
+          error instanceof ProviderError ? error : localFailure(error),
         ),
       };
 

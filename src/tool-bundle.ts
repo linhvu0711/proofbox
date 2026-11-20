@@ -4,7 +4,7 @@ const Download = Schema.Struct({ url: Schema.String, sha256: Schema.String });
 // A file proofbox carries itself, relative to images/macos/.
 const RepoFile = Schema.Struct({ file: Schema.String, sha256: Schema.String });
 
-export const ToolFile = Schema.Struct({
+const ToolFile = Schema.Struct({
   name: Schema.String,
   path: Schema.String,
   linux: Schema.optional(Schema.Struct({ amd64: Download, arm64: Download })),
@@ -12,7 +12,7 @@ export const ToolFile = Schema.Struct({
     Schema.Struct({ arm64: Schema.Union(Download, RepoFile) }),
   ),
 });
-export type ToolFile = typeof ToolFile.Type;
+type ToolFile = typeof ToolFile.Type;
 
 export const TOOL_BUNDLE: ReadonlyArray<ToolFile> = [
   ToolFile.make({

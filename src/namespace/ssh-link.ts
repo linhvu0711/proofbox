@@ -18,6 +18,7 @@ import {
 import { captureCommand, commandEvents } from "../command-events.ts";
 import { parseSpan } from "../deadline.ts";
 import {
+  causeText,
   LinkDroppedError,
   ProviderError,
   ProviderUnavailableError,
@@ -71,7 +72,7 @@ type LinkUp = Effect.Effect<
   ProviderError | ProviderUnavailableError | SandboxGoneError
 >;
 
-export type LinkOwner = "keeper" | "cli";
+type LinkOwner = "keeper" | "cli";
 // Where a link goes: the Namespace gateway itself, or the host's own sshd,
 // reached through the gateway, as `user`.
 export type LinkRoute =
@@ -111,9 +112,6 @@ const KEEP_ALIVE = [
   "-o",
   "ServerAliveCountMax=3",
 ] as const;
-
-const describe = (cause: unknown) =>
-  cause instanceof Error ? cause.message : String(cause);
 
 const linkLost = (ref: SandboxRef, detail: string) =>
   new ProviderUnavailableError({
@@ -647,7 +645,7 @@ export const makeSshForward = (
               );
             });
           }),
-        catch: (cause) => fail(describe(cause)),
+        catch: (cause) => fail(causeText(cause)),
       });
       const proc = yield* Effect.acquireRelease(
         Command.start(

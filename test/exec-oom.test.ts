@@ -15,12 +15,13 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
   SandboxInfo,
 } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
 
@@ -71,7 +72,7 @@ const layers = (os: "linux" | "macos" = "macos") => {
       ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
     ),
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
     Layer.succeed(
@@ -84,21 +85,21 @@ const layers = (os: "linux" | "macos" = "macos") => {
         hint: () => Effect.void,
       }),
     ),
-    Style.Default.pipe(Layer.provide(CliOutput.Test)),
+    Style.Default.pipe(Layer.provide(testOutput)),
   );
 };
 
 const created = Effect.gen(function* () {
   yield* createSandbox({ os: "linux", provider: "fake" });
-  const output = yield* CliOutput;
-  const out = yield* Ref.get(output.captured.out);
-  yield* Ref.set(output.captured.out, Chunk.empty());
+  const output = yield* CapturedOutput;
+  const out = yield* Ref.get(output.out);
+  yield* Ref.set(output.out, Chunk.empty());
   return Chunk.toReadonlyArray(out).join("").trim();
 });
 
 const stderr = Effect.gen(function* () {
-  const output = yield* CliOutput;
-  return Chunk.toReadonlyArray(yield* Ref.get(output.captured.err)).join("");
+  const output = yield* CapturedOutput;
+  return Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
 });
 
 describe("exec out of memory", () => {

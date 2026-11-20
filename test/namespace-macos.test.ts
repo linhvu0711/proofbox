@@ -23,12 +23,7 @@ import {
   TestClock,
 } from "effect";
 import { describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
-import {
-  CHECKS_START,
-  checksTrailer,
-  runCommand,
-} from "../src/command-checks.ts";
+import { CHECKS_START, runCommand } from "../src/command-checks.ts";
 import { ProviderUnavailableError } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import { macKillCount, makeMacHost } from "../src/namespace/mac-host.ts";
@@ -48,11 +43,13 @@ import type {
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { checksTrailer } from "./support/checks.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";
 import { unusedHost } from "./support/namespace-hosts.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
 
 type CreateRequest = CreateReq;
 
@@ -258,7 +255,7 @@ const withRuntime =
       ),
       Effect.provide(
         Layer.mergeAll(
-          CliOutput.Test,
+          testOutput,
           Layer.succeed(
             Progress,
             new Progress({
@@ -666,10 +663,8 @@ describe("Namespace macOS Provider", () => {
         .create(createMac())
         .pipe(Effect.provide(Progress.Default));
       // Then
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toContain("proofbox: checking the login password\n");
     }).pipe(withRuntime(runtimeDir())),
   );
@@ -940,10 +935,8 @@ describe("Namespace macOS Provider", () => {
         .create(createMac())
         .pipe(Effect.provide(Progress.Default));
       // Then
-      const output = yield* CliOutput;
-      const err = Chunk.toReadonlyArray(
-        yield* Ref.get(output.captured.err),
-      ).join("");
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toBe(
         "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
       );
@@ -1149,10 +1142,8 @@ describe("Namespace macOS Provider", () => {
         expect(error.message).toBe(
           "Provider namespace failed: granting Apple Events failed on the Mac: Error: unable to open database file",
         );
-        const output = yield* CliOutput;
-        const err = Chunk.toReadonlyArray(
-          yield* Ref.get(output.captured.err),
-        ).join("");
+        const output = yield* CapturedOutput;
+        const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
         expect(err).toBe(
           "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
         );

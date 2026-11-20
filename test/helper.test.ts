@@ -15,7 +15,7 @@ import {
   TestClock,
 } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { CliOutput } from "../src/cli-output.ts";
+import type { CliOutput } from "../src/cli-output.ts";
 import { clickAt } from "../src/commands/click.ts";
 import { dragFrom } from "../src/commands/drag.ts";
 import { pressKey } from "../src/commands/key.ts";
@@ -38,12 +38,13 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { CapturedOutput, testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -103,11 +104,11 @@ const layers = (mac: Provider) => {
   );
   return Layer.mergeAll(
     NodeContext.layer,
-    CliOutput.Test,
+    testOutput,
     providers,
     KeeperClient.Direct.pipe(Layer.provide(providers)),
-    Progress.Default.pipe(Layer.provide(CliOutput.Test)),
-    Style.Default.pipe(Layer.provide(CliOutput.Test)),
+    Progress.Default.pipe(Layer.provide(testOutput)),
+    Style.Default.pipe(Layer.provide(testOutput)),
   );
 };
 
@@ -136,6 +137,7 @@ const macSandbox = (answer: Answer) =>
           A,
           E,
           | CliOutput
+          | CapturedOutput
           | Providers
           | KeeperClient
           | Progress
@@ -156,10 +158,8 @@ const macSandbox = (answer: Answer) =>
 
 const captured = (which: "out" | "err") =>
   Effect.gen(function* () {
-    const output = yield* CliOutput;
-    return Chunk.toReadonlyArray(yield* Ref.get(output.captured[which])).join(
-      "",
-    );
+    const output = yield* CapturedOutput;
+    return Chunk.toReadonlyArray(yield* Ref.get(output[which])).join("");
   });
 
 const stdout = (bytes: Uint8Array): ExecEvent => ({ _tag: "Stdout", bytes });
