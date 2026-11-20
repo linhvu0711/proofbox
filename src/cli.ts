@@ -326,7 +326,7 @@ const scrollSteps = Args.text({ name: "steps" }).pipe(
         HelpDoc.p(
           value.startsWith("-")
             ? `Received unknown argument: '${value}'`
-            : `'${value}' is not a integer`,
+            : `'${value}' is not an integer`,
         ),
       ),
     ),

@@ -291,7 +291,7 @@ describe("Capability", () => {
     ]);
     // Then
     expect(result.exitCode).toBe(125);
-    expect(result.stderr).toContain("'x' is not a integer");
+    expect(result.stderr).toContain("'x' is not an integer");
   });
 
   it("scroll refuses a step count that is too large", async () => {
@@ -308,7 +308,7 @@ describe("Capability", () => {
     ]);
     // Then
     expect(result.exitCode).toBe(125);
-    expect(result.stderr).toContain("'99999999999999999999' is not a integer");
+    expect(result.stderr).toContain("'99999999999999999999' is not an integer");
   });
 
   it("key --help lists only the flags key uses", async () => {
