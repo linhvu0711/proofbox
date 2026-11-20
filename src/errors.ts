@@ -278,8 +278,6 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
 export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   readonly id: string;
   readonly what:
-    | "sshd cannot be turned on"
-    | "sshd cannot be reached"
     | "the test screenshot is blocked"
     | "the test capture is blocked"
     | "an alert is on screen"
@@ -299,7 +297,7 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
   }
 }
 
-export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
+export class SshdStepError extends Data.TaggedError("SshdStepError")<{
   readonly id: string;
   readonly what:
     | "sshd cannot be installed"
@@ -307,7 +305,7 @@ export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
     | "sshd cannot be reached";
 }> {
   get message() {
-    return `Sandbox ${this.id} failed the Linux sshd step (${this.what}); deleted the Sandbox`;
+    return `Sandbox ${this.id} failed the sshd step (${this.what}); deleted the Sandbox`;
   }
 }
 

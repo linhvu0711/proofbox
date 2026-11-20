@@ -52,9 +52,8 @@ const namespace = () =>
         api,
         fs: nodeFs,
         dockerFor: () => client,
-        openLink: () => Effect.die("unused"),
       }),
-      macos: makeMacHost({ openLink: () => Effect.die("unused"), fs: nodeFs }),
+      macos: makeMacHost({ fs: nodeFs }),
     },
   });
 

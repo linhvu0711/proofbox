@@ -8,7 +8,7 @@ export const unusedHost = (os: Os): LinuxHost => {
   const why = `the ${os} host is not part of this test`;
   return {
     os,
-    sshdUser: "root",
+    sshd: { start: "", user: "root" },
     read: () => Effect.die(why),
     writeDeadline: () => Effect.die(why),
     checks: { push: "", kills: "", run: "" },
@@ -17,7 +17,7 @@ export const unusedHost = (os: Os): LinuxHost => {
     offer: { sizes: [], features: new Set() },
     defaultSize: { cpu: 1, ramGb: 1 },
     machine: { arch: "amd64", selectors: [] },
-    make: () => Effect.die(why),
+    prepare: () => Effect.die(why),
     folders: { state: "", secrets: "" },
     baseVersion: Effect.die(why),
     saveSnapshot: () => Effect.die(why),

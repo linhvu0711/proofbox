@@ -454,7 +454,6 @@ const makeProvider = (
         api,
         fs: nodeFs,
         dockerFor: () => docker,
-        openLink,
       }),
       macos: options?.macos ?? unusedHost("macos"),
     },
@@ -695,7 +694,7 @@ describe("Namespace Provider", () => {
               [provider, rel, args] as const,
             ]),
           hosts: {
-            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor, openLink }),
+            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor }),
             macos: unusedHost("macos"),
           },
         });
@@ -1324,14 +1323,18 @@ describe("Namespace Provider", () => {
     "a macOS create whose prep never ends stops at the prep limit and deletes the host",
     () =>
       Effect.gen(function* () {
-        // Given: a Mac host whose sshd step never ends; the prep limit is 1s
+        // Given: a Mac host whose prepare never ends; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
-            make: () =>
+            sshd: {
+              start: "cat /etc/ssh/ssh_host_ed25519_key.pub",
+              user: "runner",
+            },
+            prepare: () =>
               Effect.flatMap(Progress, (progress) =>
-                progress.step("turning on sshd", Effect.never),
+                progress.step("installing the Tool bundle", Effect.never),
               ),
           },
         });
@@ -1350,7 +1353,7 @@ describe("Namespace Provider", () => {
           destroys: destroys(yield* Ref.get(calls)),
         }).toEqual({
           message:
-            "Namespace did not prepare the host in 1 s (stuck at: turning on sshd); deleted the host. Try again",
+            "Namespace did not prepare the host in 1 s (stuck at: installing the Tool bundle); deleted the host. Try again",
           destroys: ["destroy us abc123def4567"],
         });
       }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
@@ -1367,7 +1370,11 @@ describe("Namespace Provider", () => {
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
-            make: () =>
+            sshd: {
+              start: "cat /etc/ssh/ssh_host_ed25519_key.pub",
+              user: "runner",
+            },
+            prepare: () =>
               Effect.flatMap(Progress, (progress) =>
                 progress.step(
                   "creating docker Sandbox",
@@ -1729,7 +1736,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be installed); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be installed); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway"],
         });
@@ -1774,7 +1781,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be started); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be started); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway"],
         });
@@ -1808,7 +1815,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be reached); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be reached); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway", "cli sshd root"],
         });
@@ -2311,7 +2318,6 @@ const warmNamespace = (
           api,
           fs: nodeFs,
           dockerFor: () => docker,
-          openLink,
         }),
         macos: unusedHost("macos"),
       },

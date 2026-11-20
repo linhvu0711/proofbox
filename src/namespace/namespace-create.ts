@@ -17,6 +17,7 @@ import {
   ProviderLimitError,
   ProviderUnavailableError,
   platformReason,
+  SshdStepError,
   UnknownRegionError,
 } from "../errors.ts";
 import { formatWait } from "../format-time.ts";
@@ -24,11 +25,17 @@ import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import type { Provider, ProviderLogin, SandboxRef } from "../provider.ts";
 import { fileStem, makeSandboxName } from "../sandbox-id.ts";
+import { shellJoin } from "../shell.ts";
 import { formatSize, type Size } from "../size.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
-import { fail, type NamespaceHost, removeHostFiles } from "./namespace-host.ts";
+import {
+  fail,
+  type NamespaceHost,
+  removeHostFiles,
+  sandboxId,
+} from "./namespace-host.ts";
 import { DEFAULT_REGION, KNOWN_REGIONS } from "./regions.ts";
-import type { OpenLink } from "./ssh-link.ts";
+import type { Link, OpenLink } from "./ssh-link.ts";
 
 type CreateRequest = Parameters<Provider["create"]>[0];
 
@@ -37,6 +44,34 @@ interface Limits {
   readonly prepSpan: Duration.Duration;
   readonly limitSpan: Duration.Duration;
 }
+
+// Adds this Sandbox's key to the login's authorized_keys over the gateway
+// link, runs the OS's line that starts sshd and prints its ed25519 host key,
+// and pins that key (ADR 0024). False when the host gives no key.
+const turnOnSshd = Effect.fn("namespaceCreate.turnOnSshd")(function* (
+  link: Link,
+  paths: KeeperPaths,
+  fs: FileSystem.FileSystem,
+  start: string,
+) {
+  const pub = yield* fs.readFileString(`${paths.key}.pub`).pipe(
+    Effect.map((text) => text.trim()),
+    Effect.mapError((error) => fail(platformReason(error))),
+  );
+  const result = yield* link.run(
+    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && ${start}`,
+  );
+  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
+    return false;
+  }
+  const [type, key] = result.stdout.trim().split(/\s+/);
+  yield* fs
+    .writeFileString(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
+      mode: 0o600,
+    })
+    .pipe(Effect.mapError((error) => fail(platformReason(error))));
+  return true;
+});
 
 export const makeNamespaceCreate = (deps: {
   readonly api: NamespaceApi;
@@ -117,6 +152,48 @@ export const makeNamespaceCreate = (deps: {
         api.destroy(ref.region ?? "", ref.name).pipe(Effect.ignore),
       ),
     );
+
+  // Turns on the host's own sshd over the gateway and opens its link
+  // (ADR 0024), the same steps on every OS.
+  const sshdStep = Effect.fn("namespaceCreate.sshdStep")(function* (
+    gateway: Link,
+    ref: SandboxRef,
+    paths: KeeperPaths,
+    sshd: NamespaceHost["sshd"],
+  ) {
+    const progress = yield* Progress;
+    const id = sandboxId(ref);
+    const install = sshd.install;
+    if (install !== undefined) {
+      yield* progress.step(
+        "installing sshd",
+        gateway.run(install).pipe(
+          Effect.filterOrFail(
+            (installed) => installed.exitCode === 0,
+            () => new SshdStepError({ id, what: "sshd cannot be installed" }),
+          ),
+        ),
+      );
+    }
+    yield* progress.step(
+      "starting sshd",
+      turnOnSshd(gateway, paths, deps.fs, sshd.start).pipe(
+        Effect.filterOrFail(
+          (on) => on,
+          () => new SshdStepError({ id, what: "sshd cannot be started" }),
+        ),
+      ),
+    );
+    return yield* deps
+      .openLink(ref, paths, "cli", { to: "sshd", user: sshd.user })
+      .pipe(
+        Effect.catchTag("ProviderUnavailableError", () =>
+          Effect.fail(
+            new SshdStepError({ id, what: "sshd cannot be reached" }),
+          ),
+        ),
+      );
+  });
 
   // The key, then the host under the create limit. A failure sweeps any
   // host this create half-made and removes the staged key.
@@ -384,19 +461,22 @@ export const makeNamespaceCreate = (deps: {
           Effect.disconnect(
             Effect.scoped(
               Effect.gen(function* () {
-                const link = yield* deps.openLink(ref, hostPaths, "cli", {
+                const gateway = yield* deps.openLink(ref, hostPaths, "cli", {
                   to: "gateway",
                 });
-                return yield* host
-                  .make(link, {
-                    req,
-                    ref,
-                    paths: hostPaths,
-                    size,
-                    maxLifeAt,
-                  })
-                  .pipe(Effect.provideService(Progress, tracked));
-              }),
+                const sshd = yield* sshdStep(
+                  gateway,
+                  ref,
+                  hostPaths,
+                  host.sshd,
+                );
+                return yield* host.prepare(sshd, {
+                  req,
+                  ref,
+                  size,
+                  maxLifeAt,
+                });
+              }).pipe(Effect.provideService(Progress, tracked)),
             ),
           ),
           prepSpan,

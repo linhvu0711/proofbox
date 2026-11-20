@@ -126,7 +126,7 @@ export const makeNamespaceProvider = (deps: {
     }
     return yield* deps.openLink(ref, hostPaths, owner, {
       to: "sshd",
-      user: host.sshdUser,
+      user: host.sshd.user,
     });
   });
 

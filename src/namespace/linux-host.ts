@@ -14,7 +14,6 @@ import {
 } from "../docker/docker-provider.ts";
 import {
   causeText,
-  LinuxSshdError,
   type ProviderError,
   type ProviderUnavailableError,
   type SandboxGoneError,
@@ -32,7 +31,6 @@ import {
   type MakeRequest,
   type NamespaceHost,
   sandboxId,
-  turnOnSshd,
 } from "./namespace-host.ts";
 import { registryRefs } from "./registry-refs.ts";
 import { DEFAULT_LINUX_SIZE, LINUX_SIZES } from "./sizes.ts";
@@ -42,7 +40,7 @@ import {
   snapshotRef,
   snapshotTag,
 } from "./snapshot-image.ts";
-import type { Link, OpenLink } from "./ssh-link.ts";
+import type { Link } from "./ssh-link.ts";
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
 // container at its Deadline (`--rm`) while the host lives on a while, so
@@ -90,7 +88,6 @@ export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
   readonly fs: FileSystem.FileSystem;
   readonly dockerFor: (link: Link) => DockerClient;
-  readonly openLink: OpenLink;
 }): LinuxHost => {
   const read = Effect.fn("linuxHost.read")(function* (
     link: Link,
@@ -324,53 +321,14 @@ export const makeLinuxHost = (deps: {
     return tag;
   });
 
-  // Sets up the host's own sshd over the gateway, then makes the Sandbox's
-  // container over sshd (ADR 0024), from a Snapshot when one is asked for
-  // and found, else from the Base image.
-  const make = Effect.fn("linuxHost.make")(function* (
-    gateway: Link,
+  // Makes the Sandbox's container over sshd (ADR 0024), from a Snapshot
+  // when one is asked for and found, else from the Base image.
+  const prepare = Effect.fn("linuxHost.prepare")(function* (
+    link: Link,
     made: MakeRequest,
   ) {
     const { req, ref, size } = made;
     const progress = yield* Progress;
-    yield* progress.step(
-      "installing sshd",
-      gateway.run(INSTALL_SSHD).pipe(
-        Effect.filterOrFail(
-          (installed) => installed.exitCode === 0,
-          () =>
-            new LinuxSshdError({
-              id: sandboxId(ref),
-              what: "sshd cannot be installed",
-            }),
-        ),
-      ),
-    );
-    yield* progress.step(
-      "starting sshd",
-      turnOnSshd(gateway, made.paths, deps.fs, START_SSHD).pipe(
-        Effect.filterOrFail(
-          (on) => on,
-          () =>
-            new LinuxSshdError({
-              id: sandboxId(ref),
-              what: "sshd cannot be started",
-            }),
-        ),
-      ),
-    );
-    const link = yield* deps
-      .openLink(ref, made.paths, "cli", { to: "sshd", user: "root" })
-      .pipe(
-        Effect.catchTag("ProviderUnavailableError", () =>
-          Effect.fail(
-            new LinuxSshdError({
-              id: sandboxId(ref),
-              what: "sshd cannot be reached",
-            }),
-          ),
-        ),
-      );
     const registry = yield* progress.step(
       "reading the Namespace tenant",
       readTenant(link),
@@ -481,7 +439,7 @@ export const makeLinuxHost = (deps: {
 
   return {
     os: "linux",
-    sshdUser: "root",
+    sshd: { install: INSTALL_SSHD, start: START_SSHD, user: "root" },
     read,
     writeDeadline,
     checks: LINUX_CHECKS,
@@ -505,7 +463,7 @@ export const makeLinuxHost = (deps: {
     },
     defaultSize: DEFAULT_LINUX_SIZE,
     machine: { arch: "amd64", selectors: [] },
-    make,
+    prepare,
     folders: { state: "/var/lib/proofbox", secrets: "/run/proofbox/secrets" },
     baseVersion: baseImageVersion(BASE_IMAGE_DIR, LINUX_TOOL_BUNDLE).pipe(
       Effect.provideService(FileSystem.FileSystem, deps.fs),
