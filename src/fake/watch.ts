@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Option } from "effect";
+import { parseDeadline } from "../deadline.ts";
 import { ProviderError } from "../errors.ts";
 import { describe } from "./fake-provider.ts";
 
@@ -15,10 +16,11 @@ const readDeadline = Effect.fn("watch.readDeadline")(function* (
   const text = yield* fs
     .readFileString(join(root, name, "deadline"))
     .pipe(Effect.mapError((error) => fail(describe(error))));
-  if (!/^[0-9]+\n?$/.test(text)) {
+  const deadline = parseDeadline(text);
+  if (Option.isNone(deadline)) {
     return yield* fail("could not read the Deadline");
   }
-  return new Date(Number(text.trim()) * 1000);
+  return deadline.value;
 });
 
 // Both loops stay inside one call, so a long-lived Sandbox keeps one span

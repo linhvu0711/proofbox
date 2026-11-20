@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Schedule } from "effect";
+import { Clock, Duration, Effect, Option, Schedule } from "effect";
 import {
   type BadLoginsFileError,
   BadSpanError,
@@ -95,6 +95,19 @@ export const parseSpan = Effect.fn("deadline.parseSpan")(
     return Effect.succeed(Duration.millis(millis));
   },
 );
+
+// The Deadline file holds whole epoch seconds and a newline, since the
+// Sandbox's own scripts read it too (images/linux/init.sh).
+export const deadlineSeconds = (deadline: Date): number =>
+  Math.floor(deadline.getTime() / 1000);
+
+export const deadlineText = (deadline: Date): string =>
+  `${deadlineSeconds(deadline)}\n`;
+
+export const parseDeadline = (text: string): Option.Option<Date> =>
+  /^[0-9]+\n?$/.test(text)
+    ? Option.some(new Date(Number(text.trim()) * 1000))
+    : Option.none();
 
 export const nextDeadline = (options: {
   readonly now: Date;

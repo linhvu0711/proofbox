@@ -3,11 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, ConfigProvider, Duration, Effect, Layer, Ref } from "effect";
+import {
+  Chunk,
+  ConfigProvider,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+} from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { createSandbox } from "../src/commands/create.ts";
-import { idleDefault, nextDeadline, parseSpan } from "../src/deadline.ts";
+import {
+  deadlineText,
+  idleDefault,
+  nextDeadline,
+  parseDeadline,
+  parseSpan,
+} from "../src/deadline.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
@@ -108,6 +122,30 @@ describe("Deadline", () => {
     });
     // Then
     expect(deadline.toISOString()).toBe("2026-09-28T13:00:00.000Z");
+  });
+
+  it.each([
+    { text: "", expected: null },
+    { text: "abc", expected: null },
+    { text: "1700000000\n", expected: "2023-11-14T22:13:20.000Z" },
+  ])(
+    "parseDeadline reads only whole epoch seconds on one line ($text)",
+    ({ text, expected }) => {
+      // Given: the Deadline file text
+      // When
+      const parsed = parseDeadline(text);
+      // Then
+      expect(Option.getOrNull(parsed)?.toISOString() ?? null).toBe(expected);
+    },
+  );
+
+  it("deadlineText writes whole epoch seconds and a newline", () => {
+    // Given
+    const date = new Date("2023-11-14T22:13:20.900Z");
+    // When
+    const text = deadlineText(date);
+    // Then
+    expect(text).toBe("1700000000\n");
   });
 
   it("idle defaults to 5 min on macOS and 15 min on Linux", () => {
