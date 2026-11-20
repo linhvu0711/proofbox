@@ -282,14 +282,14 @@ export const makeNamespaceProvider = (deps: {
     // key belongs to a create in flight, and a host registered moments ago
     // can still be ahead of the ListInstances answer.
     const stale = (file: string) =>
-      deps.fs.stat(join(dir, file)).pipe(
-        Effect.map(
-          (info) =>
-            Option.isSome(info.mtime) &&
-            Date.now() - info.mtime.value.getTime() > 600_000,
-        ),
-        Effect.orElseSucceed(() => false),
-      );
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const info = yield* deps.fs.stat(join(dir, file));
+        return (
+          Option.isSome(info.mtime) &&
+          now - info.mtime.value.getTime() > 600_000
+        );
+      }).pipe(Effect.orElseSucceed(() => false));
     yield* Effect.forEach(
       entries
         .map((entry) => /^ns-(.+)\.key$/.exec(entry)?.[1])
