@@ -58,7 +58,7 @@ export interface InstanceListed {
   readonly starting?: boolean | undefined;
 }
 
-export interface LabelEntry {
+interface LabelEntry {
   readonly name: string;
   readonly value: string;
 }
@@ -66,7 +66,7 @@ export interface LabelEntry {
 // What GetSSHConfig hands back for one instance: the SSH gateway endpoint,
 // the username to dial it with, a short-lived private key, and the
 // gateway's host keys in OpenSSH format ("<type> <base64 key>").
-export interface SshConfig {
+interface SshConfig {
   readonly username: string;
   readonly endpoint: string;
   readonly privateKey: Uint8Array;
@@ -344,12 +344,7 @@ const ROBOT_GRANTS = [
 
 export const makeNamespaceApi = (deps: {
   readonly login: ProviderLogin;
-  readonly computeUrl?: Config.Config<string>;
-  readonly registryUrl?: Config.Config<string>;
 }): NamespaceApi => {
-  const template = deps.computeUrl ?? computeUrlTemplate;
-  const registryTemplate = deps.registryUrl ?? registryUrlTemplate;
-
   // `limited: false` makes a client with no request limit, for the one
   // call that waits on purpose.
   const clientFor = (
@@ -358,7 +353,7 @@ export const makeNamespaceApi = (deps: {
     limited = true,
   ) =>
     Effect.gen(function* () {
-      const url = yield* template.pipe(
+      const url = yield* computeUrlTemplate.pipe(
         Effect.mapError(
           (error) =>
             new ProviderError({ provider: "namespace", reason: error.message }),
@@ -384,7 +379,7 @@ export const makeNamespaceApi = (deps: {
 
   const registryFor = (token: Redacted.Redacted<string>) =>
     Effect.gen(function* () {
-      const baseUrl = yield* registryTemplate.pipe(
+      const baseUrl = yield* registryUrlTemplate.pipe(
         Effect.mapError(
           (error) =>
             new ProviderError({ provider: "namespace", reason: error.message }),
@@ -572,7 +567,7 @@ export const makeNamespaceApi = (deps: {
     instanceId: string,
   ) {
     const hand = yield* deps.login;
-    const base = (yield* template.pipe(
+    const base = (yield* computeUrlTemplate.pipe(
       Effect.mapError(
         (error) =>
           new ProviderError({ provider: "namespace", reason: error.message }),
