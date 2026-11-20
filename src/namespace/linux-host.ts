@@ -1,5 +1,6 @@
 import { FileSystem } from "@effect/platform";
-import { Chunk, Duration, Effect, Schedule, Stream } from "effect";
+import { Chunk, Duration, Effect, Option, Schedule, Stream } from "effect";
+import { parseDeadline } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -134,8 +135,10 @@ export const makeLinuxHost = (deps: {
     if (first.slice(separator + 1).trim() !== "true") {
       return yield* gone(ref);
     }
-    const seconds = Number(result.stdout.trim().split("\n").pop());
-    if (!Number.isFinite(seconds)) {
+    const deadline = parseDeadline(
+      result.stdout.trim().split("\n").pop() ?? "",
+    );
+    if (Option.isNone(deadline)) {
       return yield* fail(
         `could not read the Deadline: ${(result.stderr || result.stdout).trim()}`,
       );
@@ -148,7 +151,7 @@ export const makeLinuxHost = (deps: {
       brandFor(ref),
       ref.name.slice(0, 6),
       labels,
-      seconds,
+      deadline.value,
     );
     return new SandboxInfo({
       name: ref.name,

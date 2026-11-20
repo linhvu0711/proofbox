@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
-import { Chunk, Clock, Duration, Effect, Stream } from "effect";
+import { Chunk, Clock, Duration, Effect, Option, Stream } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
+import { parseDeadline } from "../deadline.ts";
 import { sandboxInfoFromLabels } from "../docker/docker-provider.ts";
 import { packagePath } from "../entry.ts";
 import {
@@ -538,8 +539,8 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
     );
   }
   const [labelLine = "", deadlineLine = ""] = result.stdout.trim().split("\n");
-  const seconds = Number(deadlineLine);
-  if (!Number.isFinite(seconds)) {
+  const deadline = parseDeadline(deadlineLine);
+  if (Option.isNone(deadline)) {
     return yield* fail(`could not read the Deadline: ${result.stdout.trim()}`);
   }
   const labels = yield* Effect.try({
@@ -551,7 +552,7 @@ export const readMac = Effect.fn("macHost.readMac")(function* (
     brandFor(ref),
     ref.name,
     labels,
-    seconds,
+    deadline.value,
     ref.region,
   );
 });

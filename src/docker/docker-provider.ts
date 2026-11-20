@@ -1,7 +1,7 @@
 import { FileSystem } from "@effect/platform";
 import { Clock, Duration, Effect, Option, Schema } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
-import { nextDeadline } from "../deadline.ts";
+import { nextDeadline, parseDeadline } from "../deadline.ts";
 import {
   ProviderError,
   SandboxGoneError,
@@ -72,7 +72,7 @@ export const sandboxInfoFromLabels = Effect.fn(
   brand: ProviderBrand,
   name: string,
   rawLabels: unknown,
-  deadlineSeconds: number,
+  deadline: Date,
   region?: string,
 ) {
   const fail = (reason: string) =>
@@ -100,7 +100,7 @@ export const sandboxInfoFromLabels = Effect.fn(
     os: labels["proofbox.os"],
     createdAt: labels["proofbox.created-at"],
     idleSeconds: labels["proofbox.idle-seconds"],
-    deadline: new Date(deadlineSeconds * 1000),
+    deadline,
     maxLifeAt: labels["proofbox.max-life-at"],
     base: labels["proofbox.base-version"],
     snapshot: labels["proofbox.snapshot"],
@@ -139,8 +139,8 @@ export const makeDockerProvider = (options: {
       "cat",
       "/run/proofbox/deadline",
     ]);
-    const seconds = Number(read.stdout.trim());
-    if (read.exitCode !== 0 || !Number.isFinite(seconds)) {
+    const deadline = parseDeadline(read.stdout);
+    if (read.exitCode !== 0 || Option.isNone(deadline)) {
       return yield* fail(
         `could not read the Deadline: ${read.stderr.trim() || read.stdout.trim()}`,
       );
@@ -149,7 +149,7 @@ export const makeDockerProvider = (options: {
       brand,
       name,
       found.value.labels,
-      seconds,
+      deadline.value,
     );
   });
 
