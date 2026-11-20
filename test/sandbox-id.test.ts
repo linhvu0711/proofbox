@@ -1,9 +1,10 @@
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, describe, expect } from "vitest";
-import { type Provider, providerEntry } from "../src/provider.ts";
+import type { Provider } from "../src/provider.ts";
 import { fileStem, resolveSandboxId } from "../src/sandbox-id.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { providerEntry } from "./support/providers.ts";
 
 describe("Sandbox id", () => {
   afterEach(cleanupEnvs);

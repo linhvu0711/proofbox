@@ -10,9 +10,9 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../../src/provider.ts";
 import { fileStem, resolveSandboxId } from "../../src/sandbox-id.ts";
+import { providerEntry } from "./providers.ts";
 
 // The layers a command needs to reach the Keeper of a Sandbox of
 // `provider`: the CLI side, with that one Provider, so a test can count

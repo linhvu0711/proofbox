@@ -24,9 +24,10 @@ import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { logOut, withCreateMark } from "../src/local-sandboxes.ts";
 import { readLogins } from "../src/login/logins-file.ts";
-import { type Provider, Providers, providerEntry } from "../src/provider.ts";
+import { type Provider, Providers } from "../src/provider.ts";
 import { cleanupEnvs, trackTempDir } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 afterEach(() => {
   cleanupEnvs();

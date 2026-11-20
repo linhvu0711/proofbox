@@ -24,11 +24,7 @@ import {
 } from "effect";
 import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
-import {
-  CHECKS_START,
-  checksTrailer,
-  runCommand,
-} from "../src/command-checks.ts";
+import { CHECKS_START, runCommand } from "../src/command-checks.ts";
 import { ProviderUnavailableError } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import { macKillCount, makeMacHost } from "../src/namespace/mac-host.ts";
@@ -48,6 +44,7 @@ import type {
 import { Progress } from "../src/progress.ts";
 import type { ExecEvent } from "../src/provider.ts";
 import { TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { checksTrailer } from "./support/checks.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { startFakeNamespace, TENANT_1 } from "./support/fake-namespace-api.ts";

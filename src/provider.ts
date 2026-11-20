@@ -2,7 +2,7 @@ import type { CommandExecutor } from "@effect/platform";
 import {
   Context,
   type Duration,
-  Effect,
+  type Effect,
   type Option,
   type Redacted,
   Schema,
@@ -396,13 +396,6 @@ export interface ProviderEntry {
   readonly idPrefix: string;
   readonly load: Effect.Effect<Provider, ProviderError>;
 }
-
-// The entry for a Provider that is already built.
-export const providerEntry = (provider: Provider): ProviderEntry => ({
-  name: provider.name,
-  idPrefix: provider.idPrefix,
-  load: Effect.succeed(provider),
-});
 
 export class Providers extends Context.Tag("proofbox/Providers")<
   Providers,

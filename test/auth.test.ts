@@ -38,7 +38,6 @@ import { changeLogins } from "../src/login/logins-file.ts";
 import {
   type ProviderEntry,
   Providers,
-  providerEntry,
   type TokenRequest,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli, trackTempDir } from "./support/cli.ts";
@@ -56,6 +55,7 @@ import {
 } from "./support/fake-namespace-api.ts";
 import { makeFakeOpen } from "./support/fake-open.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 // A Namespace JWT the fake Compute API sees (tenant tnt_test, exp
 // 3000-01-01T00:00:00Z).

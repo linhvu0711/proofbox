@@ -14,10 +14,10 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
 

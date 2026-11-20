@@ -38,12 +38,12 @@ import {
   type Provider,
   type ProviderEntry,
   Providers,
-  providerEntry,
 } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { commandOf, withCall } from "./support/connection.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const PNG_HEAD = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,

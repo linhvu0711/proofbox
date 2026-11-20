@@ -38,12 +38,7 @@ import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { keeperAnswers } from "../src/keeper/lifecycle.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
 import { Progress } from "../src/progress.ts";
-import {
-  type ExecEvent,
-  type Provider,
-  Providers,
-  providerEntry,
-} from "../src/provider.ts";
+import { type ExecEvent, type Provider, Providers } from "../src/provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { sleepsNear } from "./support/clock.ts";
 import { withCall } from "./support/connection.ts";
@@ -53,6 +48,7 @@ import {
   startKeeper,
 } from "./support/keeper.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

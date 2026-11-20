@@ -23,9 +23,6 @@ import type {
 
 export const CHECKS_START = "\x1fproofbox-start\n";
 
-export const checksTrailer = (before: number, after: number) =>
-  `\n\x1fproofbox-checks ${before} ${after}\n`;
-
 // The shell for one Provider's checks. `push` writes the Deadline in `$d`
 // (epoch seconds), `kills` prints the kill count, and `run` runs `"$@"` as
 // the Sandbox user.
@@ -56,9 +53,6 @@ export interface Transport {
   // Deadline before the command and at its Exit.
   readonly pushHost?: (deadline: Date) => Effect.Effect<void>;
 }
-
-export const pushFailedTrailer = (detail: string) =>
-  `\n\x1fproofbox-fail ${detail}\n`;
 
 // The most of a failed push's own error the fail trailer carries.
 const FAIL_DETAIL_MAX = 200;

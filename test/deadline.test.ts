@@ -27,14 +27,11 @@ import {
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
-import {
-  type ProviderEntry,
-  Providers,
-  providerEntry,
-} from "../src/provider.ts";
+import { type ProviderEntry, Providers } from "../src/provider.ts";
 import { Style } from "../src/style.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { nodeFs } from "./support/node-fs.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const tempRoots: string[] = [];
 const makeProviders = () => {
