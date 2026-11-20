@@ -31,6 +31,7 @@ import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
 import { shellJoin } from "../shell.ts";
 import type { ApiError, ApiLoginError, NamespaceApi } from "./namespace-api.ts";
+import { gone, sandboxId } from "./namespace-host.ts";
 
 export interface HostResult {
   readonly exitCode: number;
@@ -118,17 +119,13 @@ const describe = (cause: unknown) =>
 const linkLost = (ref: SandboxRef, detail: string) =>
   new ProviderUnavailableError({
     provider: "namespace",
-    reason: `Could not connect to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} over SSH (${detail}). Try again in a minute.`,
+    reason: `Could not connect to Sandbox ${sandboxId(ref)} over SSH (${detail}). Try again in a minute.`,
   });
 
 // A host key that does not match what GetSSHConfig gave is a wrong or
 // recycled host, not a dead link — refuse at once rather than retry.
 const hostKeyRefused = (ref: SandboxRef) => {
-  const id = formatSandboxId({
-    provider: "ns",
-    region: ref.region,
-    name: ref.name,
-  });
+  const id = sandboxId(ref);
   return new ProviderUnavailableError({
     provider: "namespace",
     reason: `Refused to connect to Sandbox ${id}: its SSH host key does not match the key Namespace gave. Run: proofbox delete ${id}`,
@@ -356,7 +353,7 @@ export const makeOpenLink = (
           Effect.fail(
             new ProviderError({
               provider: "namespace",
-              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
+              reason: `could not get SSH access to Sandbox ${sandboxId(ref)} (${error.reason}); try again in a minute`,
             }),
           ),
         ),
@@ -524,15 +521,7 @@ export const makeOpenLink = (
                 ): Effect.Effect<never, LinkDownError | SandboxGoneError> =>
                   instances.some((instance) => instance.id === instanceId)
                     ? Effect.fail(error)
-                    : Effect.fail(
-                        new SandboxGoneError({
-                          id: formatSandboxId({
-                            provider: "ns",
-                            region: ref.region,
-                            name: ref.name,
-                          }),
-                        }),
-                      ),
+                    : Effect.fail(gone(ref)),
               ),
             ),
         ),
@@ -659,7 +648,7 @@ export const makeSshForward = (
           Effect.fail(
             new ProviderError({
               provider: "namespace",
-              reason: `could not get SSH access to Sandbox ${formatSandboxId({ provider: "ns", region: ref.region, name: ref.name })} (${error.reason}); try again in a minute`,
+              reason: `could not get SSH access to Sandbox ${sandboxId(ref)} (${error.reason}); try again in a minute`,
             }),
           ),
         ),
