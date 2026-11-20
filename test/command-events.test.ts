@@ -3,7 +3,7 @@ import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, Effect, Option, Stream } from "effect";
 import { describe, expect } from "vitest";
-import { commandEvents } from "../src/command-events.ts";
+import { captureCommand, commandEvents } from "../src/command-events.ts";
 
 describe("command events", () => {
   it.live("a command with no stdin reads end of input at once", () =>
@@ -34,6 +34,17 @@ describe("command events", () => {
         stdout: stdout.join(""),
         last: Option.getOrUndefined(Chunk.last(events)),
       }).toEqual({ stdout: "rc:1\n", last: { _tag: "Exit", code: 0 } });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+  it.live("captureCommand gives a command's stdout and stderr as text", () =>
+    Effect.gen(function* () {
+      // Given: Node's command executor
+      // When
+      const result = yield* captureCommand(
+        Command.make("sh", "-c", "printf a; printf b >&2"),
+      );
+      // Then
+      expect(result).toEqual({ exitCode: 0, stdout: "a", stderr: "b" });
     }).pipe(Effect.provide(NodeContext.layer)),
   );
 });

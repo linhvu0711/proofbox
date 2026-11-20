@@ -1,6 +1,6 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Chunk, Effect, Option, Stream } from "effect";
-import { commandEvents } from "../command-events.ts";
+import { Effect, Option, Stream } from "effect";
+import { commandEvents, toText } from "../command-events.ts";
 import {
   causeText,
   type LinkDroppedError,
@@ -71,11 +71,6 @@ const tail = (text: string, lines: number) =>
 const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
   DOCKER_DOWN.some(
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
-  );
-
-const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
-  Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
-    "utf8",
   );
 
 export const makeDockerClient = (

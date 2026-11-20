@@ -71,7 +71,8 @@ export const commandEvents = <E>(
     }),
   );
 
-const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
+// Collected process output as UTF-8 text.
+export const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
   Buffer.concat(Chunk.toReadonlyArray(chunks).map((bytes) => bytes)).toString(
     "utf8",
   );
