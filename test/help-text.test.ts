@@ -202,6 +202,44 @@ describe("Help text", () => {
     }
   });
 
+  it("each --help names the defaults the code uses", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const [create, login, click, type, scroll] = await Promise.all(
+      [
+        ["create"],
+        ["auth", "login"],
+        ["click"],
+        ["type"],
+        ["scroll"],
+      ].map((words) => runCli(env, [...words, "--help"])),
+    );
+    // Then
+    expect({
+      create: [
+        "with s, m, or h, for example 2h; default 3h",
+        "default 4x8 on Linux, 4x7 on macOS on namespace, no limit on docker",
+        "; default from ~/.config/proofbox/config, else namespace",
+      ].filter((text) => !create?.stdout.includes(text)),
+      login: ["where new Sandboxes go; default us"].filter(
+        (text) => !login?.stdout.includes(text),
+      ),
+      click: [
+        "fast at once; default human",
+        "default 400ms with --pace human, 0ms with fast",
+        "default 700ms with --pace human, 0ms with fast",
+        "the mouse button; default left",
+      ].filter((text) => !click?.stdout.includes(text)),
+      type: ["default 100ms with --pace human, 12ms with fast"].filter(
+        (text) => !type?.stdout.includes(text),
+      ),
+      scroll: ["for example 5; default 3"].filter(
+        (text) => !scroll?.stdout.includes(text),
+      ),
+    }).toEqual({ create: [], login: [], click: [], type: [], scroll: [] });
+  });
+
   it("record stop --help says --max-size limits the Proof video", async () => {
     // Given
     const env = makeEnv();
