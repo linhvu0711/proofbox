@@ -14,7 +14,12 @@ import {
 } from "effect";
 import type { ChecksShell } from "../command-checks.ts";
 import { commandEvents } from "../command-events.ts";
-import { nextDeadline } from "../deadline.ts";
+import {
+  deadlineText,
+  firstDeadline,
+  nextDeadline,
+  parseDeadline,
+} from "../deadline.ts";
 import {
   ProviderError,
   ProviderUnavailableError,
@@ -164,7 +169,8 @@ export const makeFakeProvider = (options: {
           ),
         ),
       );
-    if (!/^[0-9]+\n?$/.test(seconds)) {
+    const deadline = parseDeadline(seconds);
+    if (Option.isNone(deadline)) {
       return yield* fail(`could not read the Deadline: ${seconds.trim()}`);
     }
     const info = new SandboxInfo({
@@ -172,7 +178,7 @@ export const makeFakeProvider = (options: {
       os: file.os,
       createdAt: file.createdAt,
       idleSeconds: file.idleSeconds,
-      deadline: new Date(Number(seconds.trim()) * 1000),
+      deadline: deadline.value,
       maxLifeAt: file.maxLifeAt,
       size: file.size,
       snapshot: file.snapshot,
@@ -211,10 +217,7 @@ export const makeFakeProvider = (options: {
 
   // The Deadline in its own file, in epoch seconds, as Docker keeps it.
   const writeDeadline = (name: string, deadline: Date) =>
-    writeWhole(
-      join(root, name, "deadline"),
-      `${Math.floor(deadline.getTime() / 1000)}\n`,
-    );
+    writeWhole(join(root, name, "deadline"), deadlineText(deadline));
 
   const createWork = Effect.fn("FakeProvider.createWork")(function* (req: {
     readonly os: Os;
@@ -280,13 +283,11 @@ export const makeFakeProvider = (options: {
       size: req.size,
       snapshot: entry === undefined ? undefined : req.snapshot,
     });
-    const deadline = nextDeadline({
-      now: createdAt,
-      idle: req.idle,
-      maxLifeAt,
-    });
     // The Deadline file first, so a Sandbox with a sandbox.json has one.
-    yield* writeDeadline(name, deadline);
+    yield* writeDeadline(
+      name,
+      firstDeadline({ now: createdAt, idle: req.idle, maxLifeAt }),
+    );
     yield* writeFileInfo(name, file);
     const hold = options.createHold;
     if (hold !== undefined) {
@@ -326,6 +327,9 @@ export const makeFakeProvider = (options: {
         { discard: true },
       ).pipe(Effect.mapError((error) => fail(describe(error))));
     }
+    const finished = yield* now;
+    const deadline = nextDeadline({ now: finished, idle: req.idle, maxLifeAt });
+    yield* writeDeadline(name, deadline);
     if (options.watch === "process") {
       yield* spawnDetached("fake", "fake/watch-main", [root, name]);
     }

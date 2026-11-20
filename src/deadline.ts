@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Schedule } from "effect";
+import { Clock, Duration, Effect, Option, Schedule } from "effect";
 import {
   type BadLoginsFileError,
   BadSpanError,
@@ -96,6 +96,19 @@ export const parseSpan = Effect.fn("deadline.parseSpan")(
   },
 );
 
+// The Deadline file holds whole epoch seconds and a newline, since the
+// Sandbox's own scripts read it too (images/linux/init.sh).
+export const deadlineSeconds = (deadline: Date): number =>
+  Math.floor(deadline.getTime() / 1000);
+
+export const deadlineText = (deadline: Date): string =>
+  `${deadlineSeconds(deadline)}\n`;
+
+export const parseDeadline = (text: string): Option.Option<Date> =>
+  /^[0-9]+\n?$/.test(text)
+    ? Option.some(new Date(Number(text.trim()) * 1000))
+    : Option.none();
+
 export const nextDeadline = (options: {
   readonly now: Date;
   readonly idle: Duration.Duration;
@@ -106,6 +119,25 @@ export const nextDeadline = (options: {
   );
   return pushed < options.maxLifeAt ? pushed : options.maxLifeAt;
 };
+
+// Room for create's own last steps (the desktop wait and the bundle checks
+// in Docker, the state write on a Mac): the first Deadline is set before
+// them and the first push comes after, and the Linux watchdog
+// (images/linux/init.sh) deletes the container at the first Deadline.
+export const FIRST_DEADLINE_GRACE = Duration.seconds(60);
+
+export const firstDeadline = (options: {
+  readonly now: Date;
+  readonly idle: Duration.Duration;
+  readonly maxLifeAt: Date;
+}): Date =>
+  nextDeadline({
+    ...options,
+    idle: Duration.sum(options.idle, FIRST_DEADLINE_GRACE),
+  });
+
+export const pushInterval = (idle: Duration.Duration): Duration.Duration =>
+  Duration.millis(Duration.toMillis(idle) / 3);
 
 // The Deadline one push sets now: idle from now, capped at max life.
 export const pushedDeadline = Effect.fn("deadline.pushedDeadline")(
@@ -168,10 +200,9 @@ export const withDeadlinePush =
       // gives the raced effect's value.
       const result = yield* effect.pipe(
         Effect.raceFirst(
-          Effect.repeat(
-            push,
-            Schedule.spaced(Duration.millis(Duration.toMillis(idle) / 3)),
-          ).pipe(Effect.zipRight(Effect.never)),
+          Effect.repeat(push, Schedule.spaced(pushInterval(idle))).pipe(
+            Effect.zipRight(Effect.never),
+          ),
         ),
       );
       yield* push;

@@ -1,12 +1,15 @@
 import { readdirSync } from "node:fs";
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Option, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
+import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
+  makeDockerProvider,
   type ProviderBrand,
   sandboxInfoFromLabels,
 } from "../src/docker/docker-provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
 
 const NOT_RUNNING = "Docker is not running; start Docker and try again\n";
 
@@ -88,7 +91,12 @@ describe("Docker labels", () => {
         // Given: a container whose idle label is not a whole positive number
         // When
         const error = yield* Effect.flip(
-          sandboxInfoFromLabels(brand, "box", labels(label), 4_000_000_000),
+          sandboxInfoFromLabels(
+            brand,
+            "box",
+            labels(label),
+            new Date(4_000_000_000_000),
+          ),
         );
         // Then
         expect(error).toMatchObject({
@@ -106,10 +114,63 @@ describe("Docker labels", () => {
         brand,
         "box",
         labels("300"),
-        4_000_000_000,
+        new Date(4_000_000_000_000),
       );
       // Then
       expect(info.idleSeconds).toBe(300);
     }),
+  );
+});
+
+describe("Docker Deadline file", () => {
+  // A container that runs and holds these labels, whose Deadline file
+  // reads as `deadline`.
+  const fakeClient = (deadline: string): DockerClient => ({
+    serverArch: Effect.die("not used"),
+    imageExists: () => Effect.die("not used"),
+    pull: () => Effect.die("not used"),
+    push: () => Effect.die("not used"),
+    build: () => Effect.die("not used"),
+    run: () => Effect.die("not used"),
+    execText: () =>
+      Effect.succeed({ exitCode: 0, stdout: deadline, stderr: "" }),
+    execStream: () => Stream.die("not used"),
+    inspect: () =>
+      Effect.succeed(
+        Option.some({
+          labels: {
+            "proofbox.name": "abc123",
+            "proofbox.os": "linux",
+            "proofbox.created-at": "2026-01-01T00:00:00Z",
+            "proofbox.idle-seconds": "300",
+            "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+          },
+          running: true,
+        }),
+      ),
+    listNames: Effect.die("not used"),
+    remove: () => Effect.die("not used"),
+  });
+
+  it.effect(
+    "get on a Docker Sandbox whose Deadline file is empty fails with could not read the Deadline",
+    () =>
+      Effect.gen(function* () {
+        // Given: a running Sandbox whose Deadline file is empty
+        const provider = makeDockerProvider({
+          client: fakeClient(""),
+          fs: nodeFs,
+        });
+        // When
+        const error = yield* Effect.flip(
+          provider.get({ name: "abc123", region: undefined }),
+        );
+        // Then
+        expect(error).toMatchObject({
+          _tag: "ProviderError",
+          provider: "docker",
+          reason: "could not read the Deadline: ",
+        });
+      }),
   );
 });
