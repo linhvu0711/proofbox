@@ -716,56 +716,61 @@ export const makeNamespaceProvider = (deps: {
             Effect.zipRight(progress.step(label, effect)),
           ),
       });
-      // One scope, so the extend loop and the link end when the limit
+      // The extend loop lives in this scope, so it stops when the limit
       // runs out, before the host is deleted.
-      const prepared = yield* Effect.timeoutOption(
-        Effect.scoped(
-          Effect.gen(function* () {
-            // Provisioning can outlast the create duration (a cold image
-            // build): keep the host's own Deadline ahead until the Sandbox
-            // takes over, but never past the Max life. The recorded Deadline
-            // moves with it — otherwise the host-expiry destroys a host that
-            // is still being prepared once its initial allowance runs out.
-            yield* Effect.forkScoped(
-              Effect.repeat(
+      const prepared = yield* Effect.scoped(
+        Effect.gen(function* () {
+          // Provisioning can outlast the create duration (a cold image
+          // build): keep the host's own Deadline ahead until the Sandbox
+          // takes over, but never past the Max life. The recorded Deadline
+          // moves with it — otherwise the host-expiry destroys a host that
+          // is still being prepared once its initial allowance runs out.
+          yield* Effect.forkScoped(
+            Effect.repeat(
+              Effect.gen(function* () {
+                const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
+                if (left > 0) {
+                  const pushedAt =
+                    Math.floor(Date.now() / 1000) +
+                    Math.min(durationSeconds, left);
+                  yield* deps.fs
+                    .writeFileString(hostPaths.deadline, String(pushedAt), {
+                      mode: 0o600,
+                    })
+                    .pipe(Effect.ignore);
+                  yield* api
+                    .extend(region, instanceId, Math.min(durationSeconds, left))
+                    .pipe(Effect.ignore);
+                }
+              }),
+              Schedule.spaced(Duration.seconds(15)),
+            ),
+          );
+          // The host is deleted when the limit runs out, so cleanup on it,
+          // such as a `docker rm -f` on a stuck Docker, must not hold the
+          // limit up: it ends in the background.
+          return yield* Effect.timeoutOption(
+            Effect.disconnect(
+              Effect.scoped(
                 Effect.gen(function* () {
-                  const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
-                  if (left > 0) {
-                    const pushedAt =
-                      Math.floor(Date.now() / 1000) +
-                      Math.min(durationSeconds, left);
-                    yield* deps.fs
-                      .writeFileString(hostPaths.deadline, String(pushedAt), {
-                        mode: 0o600,
-                      })
-                      .pipe(Effect.ignore);
-                    yield* api
-                      .extend(
-                        region,
-                        instanceId,
-                        Math.min(durationSeconds, left),
-                      )
-                      .pipe(Effect.ignore);
-                  }
+                  const link = yield* deps.openLink(ref, hostPaths, "cli", {
+                    to: "gateway",
+                  });
+                  return yield* host
+                    .make(link, {
+                      req,
+                      ref,
+                      paths: hostPaths,
+                      size,
+                      maxLifeAt: new Date(maxLifeSeconds * 1000),
+                    })
+                    .pipe(Effect.provideService(Progress, tracked));
                 }),
-                Schedule.spaced(Duration.seconds(15)),
               ),
-            );
-            const link = yield* deps.openLink(ref, hostPaths, "cli", {
-              to: "gateway",
-            });
-            return yield* host
-              .make(link, {
-                req,
-                ref,
-                paths: hostPaths,
-                size,
-                maxLifeAt: new Date(maxLifeSeconds * 1000),
-              })
-              .pipe(Effect.provideService(Progress, tracked));
-          }),
-        ),
-        prepSpan,
+            ),
+            prepSpan,
+          );
+        }),
       );
       if (Option.isSome(prepared)) {
         return prepared.value;

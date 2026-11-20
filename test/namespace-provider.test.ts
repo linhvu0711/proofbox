@@ -1283,6 +1283,47 @@ describe("Namespace Provider", () => {
       }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
   );
 
+  it.effect(
+    "a prep timeout deletes the host without waiting for cleanup on it",
+    () =>
+      Effect.gen(function* () {
+        // Given: a Mac host whose prep never ends, and whose cleanup on an
+        // interrupt never ends either, as a `docker rm -f` on a stuck
+        // Docker would; the prep limit is 1s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          macos: {
+            ...unusedHost("macos"),
+            make: () =>
+              Effect.flatMap(Progress, (progress) =>
+                progress.step(
+                  "creating docker Sandbox",
+                  Effect.never.pipe(Effect.onInterrupt(() => Effect.never)),
+                ),
+              ),
+          },
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "macos",
+            idle: Duration.minutes(10),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "1 second", 40);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Namespace did not prepare the host in 1 s (stuck at: creating docker Sandbox); deleted the host. Try again",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
+  );
+
   it.effect("a create stopped by the prep limit extends the host no more", () =>
     Effect.gen(function* () {
       // Given: a link whose `docker pull` never ends; the prep limit is 1s
