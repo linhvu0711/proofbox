@@ -14,6 +14,9 @@ export const platformReason = (error: PlatformError) =>
 export const causeText = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
+const capitalized = (word: string) =>
+  `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+
 export class ProviderError extends Data.TaggedError("ProviderError")<{
   readonly provider: string;
   readonly reason: string;
@@ -445,7 +448,7 @@ export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
   readonly provider: string;
 }> {
   get message() {
-    return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
+    return `${capitalized(this.provider)} did not accept this token. It may be wrong, revoked, or expired.`;
   }
 }
 
@@ -457,7 +460,7 @@ export class TokenPermissionError extends Data.TaggedError(
   readonly need?: string;
 }> {
   get message() {
-    return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
+    return `This ${capitalized(this.provider)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
   }
 }
 
@@ -465,7 +468,7 @@ export class TokenDeniedError extends Data.TaggedError("TokenDeniedError")<{
   readonly provider: string;
 }> {
   get message() {
-    return `Your ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} account cannot make tokens. Ask a workspace admin.`;
+    return `Your ${capitalized(this.provider)} account cannot make tokens. Ask a workspace admin.`;
   }
 }
 
