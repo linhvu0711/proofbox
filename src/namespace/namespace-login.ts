@@ -4,7 +4,7 @@ import { FileSystem } from "@effect/platform";
 import { extractClaims } from "@namespacelabs/sdk/auth";
 import { Clock, Effect, Redacted } from "effect";
 import { ProviderError, platformReason } from "../errors.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { runtimeDir } from "../keeper/paths.ts";
 import { loginFor } from "../login/provider-login.ts";
 import type { LoginFiles } from "../provider.ts";
 import { issueTenantToken } from "./namespace-signin.ts";
@@ -49,7 +49,7 @@ export const tenantTokenFor = Effect.fn("namespaceLogin.tenantTokenFor")(
       new ProviderError({ provider: "namespace", reason });
     const text = Redacted.value(session);
     const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
-    const dir = (yield* keeperPaths({ provider: "ns", name: "__probe__" })).dir;
+    const dir = yield* runtimeDir("ns");
     const path = join(dir, `ns-tenant-${hash}.json`);
     return yield* lockFor(path).withPermits(1)(
       Effect.gen(function* () {

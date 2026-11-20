@@ -4,6 +4,7 @@ import { Command, FileSystem } from "@effect/platform";
 import { Config, Effect } from "effect";
 import { captureCommand } from "../command-events.ts";
 import { ProviderError, platformReason } from "../errors.ts";
+import { fileStem } from "../sandbox-id.ts";
 
 export interface KeeperPaths {
   readonly dir: string;
@@ -26,16 +27,16 @@ export interface KeeperPaths {
   readonly os: string;
 }
 
-export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
-  readonly provider: string;
-  readonly name: string;
-}) {
+// The folder that holds every Keeper's files on this machine.
+export const runtimeDir = Effect.fn("paths.runtimeDir")(function* (
+  provider: string,
+) {
   const dir = yield* Config.string("PROOFBOX_RUNTIME_DIR").pipe(
     Config.withDefault(join(tmpdir(), `proofbox-${process.getuid?.() ?? 0}`)),
     Effect.mapError(
       (cause) =>
         new ProviderError({
-          provider: id.provider,
+          provider,
           reason: String(cause),
         }),
     ),
@@ -48,11 +49,19 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
     Effect.mapError(
       (error) =>
         new ProviderError({
-          provider: id.provider,
+          provider,
           reason: platformReason(error),
         }),
     ),
   );
+  return dir;
+});
+
+export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
+  readonly provider: string;
+  readonly name: string;
+}) {
+  const dir = yield* runtimeDir(id.provider);
   const stem = `${id.provider}-${id.name}`;
   return {
     dir,
@@ -69,6 +78,15 @@ export const keeperPaths = Effect.fn("paths.keeperPaths")(function* (id: {
     os: join(dir, `${stem}.os`),
   };
 });
+
+// The Keeper files of one Sandbox id.
+export const keeperPathsOf = Effect.fn("paths.keeperPathsOf")(
+  (id: {
+    readonly prefix: string;
+    readonly region: string | undefined;
+    readonly name: string;
+  }) => keeperPaths({ provider: id.prefix, name: fileStem(id) }),
+);
 
 // When a process started: on Linux its start tick in /proc, which every
 // Linux has, else the text of /bin/ps, which macOS always has. Gone means

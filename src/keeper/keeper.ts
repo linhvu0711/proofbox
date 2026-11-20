@@ -20,10 +20,10 @@ import {
 } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
-import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { programOf, writeKeeperLog } from "./keeper-log.ts";
 import { holdKeeper, keeperAnswers } from "./lifecycle.ts";
-import { keeperPaths } from "./paths.ts";
+import { keeperPathsOf } from "./paths.ts";
 import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
 
 // The socket did not take a frame: the Caller is gone.
@@ -92,10 +92,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const provider = id.provider;
-  const paths = yield* keeperPaths({
-    provider: id.prefix,
-    name: fileStem(id),
-  });
+  const paths = yield* keeperPathsOf(id);
   if (yield* keeperAnswers(paths.socket)) {
     return;
   }

@@ -11,7 +11,7 @@ import {
 } from "effect";
 import { ProviderError, platformReason } from "./errors.ts";
 import { KeeperClient } from "./keeper/keeper-client.ts";
-import { keeperPaths, ownStart, stillRuns } from "./keeper/paths.ts";
+import { ownStart, runtimeDir, stillRuns } from "./keeper/paths.ts";
 import {
   type LoginsFile,
   readLogins,
@@ -30,7 +30,7 @@ const localSandboxes = Effect.fn("localSandboxes.localSandboxes")(function* (
   prefix: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" })).dir;
+  const dir = yield* runtimeDir(prefix);
   const entries = yield* fs.readDirectory(dir).pipe(
     Effect.mapError(
       (error) =>
@@ -65,7 +65,7 @@ const localSandboxes = Effect.fn("localSandboxes.localSandboxes")(function* (
 const markCreate = Effect.fn("localSandboxes.markCreate")(function* (
   prefix: string,
 ) {
-  const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" })).dir;
+  const dir = yield* runtimeDir(prefix);
   const path = join(
     dir,
     `${prefix}-creating-${process.pid}-${randomBytes(4).toString("hex")}`,
@@ -100,7 +100,7 @@ const liveCreates = Effect.fn("localSandboxes.liveCreates")(function* (
   prefix: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const dir = (yield* keeperPaths({ provider: prefix, name: "__probe__" })).dir;
+  const dir = yield* runtimeDir(prefix);
   const entries = yield* fs.readDirectory(dir).pipe(
     Effect.mapError(
       (error) =>
@@ -331,10 +331,7 @@ export const logOut = Effect.fn("localSandboxes.logOut")(function* (
   for (const files of provider.loginFiles) {
     const cleared = yield* Effect.either(
       Effect.gen(function* () {
-        const dir = (yield* keeperPaths({
-          provider: provider.idPrefix,
-          name: "__probe__",
-        })).dir;
+        const dir = yield* runtimeDir(provider.idPrefix);
         const fs = yield* FileSystem.FileSystem;
         yield* Effect.gen(function* () {
           for (const file of yield* fs.readDirectory(dir)) {

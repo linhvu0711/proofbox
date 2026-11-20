@@ -9,13 +9,9 @@ import { Command, FileSystem } from "@effect/platform";
 import { Effect, Option, Schedule } from "effect";
 import { captureCommand } from "../command-events.ts";
 import { ProviderError, platformReason } from "../errors.ts";
-import {
-  fileStem,
-  formatSandboxId,
-  type ResolvedSandboxId,
-} from "../sandbox-id.ts";
+import { formatSandboxId, type ResolvedSandboxId } from "../sandbox-id.ts";
 import { spawnDetached } from "../spawn-detached.ts";
-import { type KeeperPaths, keeperPaths } from "./paths.ts";
+import { type KeeperPaths, keeperPathsOf } from "./paths.ts";
 import {
   connectKeeper,
   encodeRequest,
@@ -32,10 +28,6 @@ const KEEPER_AWAY = new Set([...RETRY_CODES, "EPIPE", "ECONNRESET"]);
 
 export const keeperAway = (error: ProviderError) =>
   KEEPER_AWAY.has(error.reason);
-
-const pathsOf = Effect.fn("lifecycle.pathsOf")((id: ResolvedSandboxId) =>
-  keeperPaths({ provider: id.prefix, name: fileStem(id) }),
-);
 
 const removeKeeperFiles = Effect.fn("lifecycle.removeKeeperFiles")(function* (
   paths: KeeperPaths,
@@ -54,7 +46,7 @@ const removeKeeperFiles = Effect.fn("lifecycle.removeKeeperFiles")(function* (
 export const startKeeper = Effect.fn("lifecycle.startKeeper")(function* (
   id: ResolvedSandboxId,
 ) {
-  const paths = yield* pathsOf(id);
+  const paths = yield* keeperPathsOf(id);
   yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
     formatSandboxId({
       provider: id.prefix,
@@ -77,7 +69,7 @@ export const reachKeeper = Effect.fn("lifecycle.reachKeeper")(function* (
   id: ResolvedSandboxId,
   request: RequestFrame,
 ) {
-  const paths = yield* pathsOf(id);
+  const paths = yield* keeperPathsOf(id);
   // The Keeper never read a request it dropped, so after a new Keeper
   // starts the request goes again.
   const connect = connectKeeper(paths.socket, id.provider.name).pipe(
@@ -105,7 +97,7 @@ export const stopKeeper = Effect.fn("lifecycle.stopKeeper")(function* (
   id: ResolvedSandboxId,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const paths = yield* pathsOf(id);
+  const paths = yield* keeperPathsOf(id);
   const pidText = yield* fs
     .readFileString(paths.pid)
     .pipe(Effect.orElseSucceed(() => ""));
@@ -158,7 +150,7 @@ export const holdKeeper = Effect.fn("lifecycle.holdKeeper")(function* (
   onClient: (socket: Socket) => void,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const paths = yield* pathsOf(id);
+  const paths = yield* keeperPathsOf(id);
   // Under the lock, check the socket again: a Keeper that waited for
   // the lock finds the first one's socket answers, and ends.
   return yield* withStartLock(

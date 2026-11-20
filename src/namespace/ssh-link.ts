@@ -26,7 +26,7 @@ import {
   type SandboxGoneError,
 } from "../errors.ts";
 import { writeKeeperLog } from "../keeper/keeper-log.ts";
-import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, runtimeDir } from "../keeper/paths.ts";
 import type { ExecEvent, ExecOptions, SandboxRef } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
 import type {
@@ -617,9 +617,9 @@ export const makeSshForward = (
   return (ref, port) =>
     Effect.gen(function* () {
       const { config, gateway: target } = yield* gatewayConfig(api, ref);
-      const dir = (yield* keeperPaths({ provider: "ns", name: ref.name }).pipe(
+      const dir = yield* runtimeDir("ns").pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
-      )).dir;
+      );
       const pid = process.pid;
       const key = join(dir, `ns-f${pid}-${seq++}.sshkey`);
       const hosts = `${key}.known-hosts`;

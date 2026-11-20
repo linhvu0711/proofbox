@@ -20,14 +20,14 @@ import {
   type SandboxCallError,
   type SandboxRef,
 } from "../provider.ts";
-import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import {
   keeperAway,
   reachKeeper,
   startKeeper,
   stopKeeper,
 } from "./lifecycle.ts";
-import { keeperPaths } from "./paths.ts";
+import { keeperPathsOf } from "./paths.ts";
 import {
   connectKeeper,
   encodeInput,
@@ -357,10 +357,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
       const info = Effect.fn("KeeperClient.info")(
         function* (rawId: string) {
           const id = yield* resolveSandboxId(rawId, providers);
-          const paths = yield* keeperPaths({
-            provider: id.prefix,
-            name: fileStem(id),
-          });
+          const paths = yield* keeperPathsOf(id);
           // No Keeper took the request: none answers, or one left before it
           // read it.
           const socket = yield* connectKeeper(

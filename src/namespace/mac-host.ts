@@ -13,7 +13,7 @@ import {
   TokenExposedError,
   ToolBundleHashError,
 } from "../errors.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { runtimeDir } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
@@ -385,10 +385,7 @@ const saveScreen = Effect.fn("macHost.saveScreen")(function* (
   if (exit?._tag !== "Exit" || exit.code !== 0 || bytes.length === 0) {
     return undefined;
   }
-  const path = join(
-    (yield* keeperPaths({ provider: "ns", name: ref.name })).dir,
-    `ns-${ref.name}-prepare.png`,
-  );
+  const path = join(yield* runtimeDir("ns"), `ns-${ref.name}-prepare.png`);
   yield* fs
     .writeFile(path, bytes, { mode: 0o600 })
     .pipe(Effect.mapError((error) => fail(platformReason(error))));

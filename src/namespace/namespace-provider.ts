@@ -22,7 +22,7 @@ import {
   UnknownRegionError,
 } from "../errors.ts";
 import { formatWait } from "../format-time.ts";
-import { type KeeperPaths, keeperPaths } from "../keeper/paths.ts";
+import { type KeeperPaths, keeperPaths, runtimeDir } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import type {
   ListResult,
@@ -293,7 +293,9 @@ export const makeNamespaceProvider = (deps: {
         fileStem({ name: host.instance.id, region: host.region }),
       ),
     );
-    const dir = (yield* paths("__probe__")).dir;
+    const dir = yield* runtimeDir("ns").pipe(
+      Effect.provideService(FileSystem.FileSystem, deps.fs),
+    );
     const entries = yield* deps.fs
       .readDirectory(dir)
       .pipe(Effect.orElseSucceed(() => []));
