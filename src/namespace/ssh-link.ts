@@ -71,7 +71,7 @@ type LinkUp = Effect.Effect<
   ProviderError | ProviderUnavailableError | SandboxGoneError
 >;
 
-export type LinkOwner = "keeper" | "cli";
+type LinkOwner = "keeper" | "cli";
 // Where a link goes: the Namespace gateway itself, or the host's own sshd,
 // reached through the gateway, as `user`.
 export type LinkRoute =

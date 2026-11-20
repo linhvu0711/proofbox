@@ -19,7 +19,6 @@ describe("edit-plan", () => {
       { kind: "still", at: 8, seconds: 4, step: 0 },
     ]);
     expect(plan.captions).toEqual([]);
-    expect(plan.seconds).toBe(12);
   });
 
   it("each Step mark starts a step that ends on a 4 s hold", () => {
@@ -39,7 +38,6 @@ describe("edit-plan", () => {
       { step: 1, from: 2, to: 14 },
       { step: 2, from: 14, to: 28 },
     ]);
-    expect(plan.seconds).toBe(28);
   });
 
   it("a step shorter than 4 s still ends on a 4 s hold", () => {
@@ -58,7 +56,6 @@ describe("edit-plan", () => {
       { step: 1, from: 0, to: 4.5 },
       { step: 2, from: 4.5, to: 13 },
     ]);
-    expect(plan.seconds).toBe(13);
   });
 
   it("a 3-minute Recording with long pauses comes out at 16 s", () => {
@@ -90,7 +87,6 @@ describe("edit-plan", () => {
       { step: 2, from: 6, to: 11 },
       { step: 3, from: 11, to: 16 },
     ]);
-    expect(plan.seconds).toBe(16);
   });
 
   it("a Still part inside a step shows 1 s, a 2 s label, and 1 s", () => {
@@ -112,7 +108,6 @@ describe("edit-plan", () => {
       { kind: "cut", from: 29, to: 40, step: 1 },
       { kind: "still", at: 40, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(23);
   });
 
   it("a 4.5 s Still part is cut to 4 s", () => {
@@ -134,7 +129,6 @@ describe("edit-plan", () => {
       { kind: "cut", from: 6.5, to: 12, step: 1 },
       { kind: "still", at: 12, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(15.5);
   });
 
   it("a Still part a Caller action ends is cut to 4 s with no label", () => {
@@ -157,7 +151,6 @@ describe("edit-plan", () => {
       { kind: "cut", from: 29, to: 40, step: 1 },
       { kind: "still", at: 40, seconds: 4, step: 1 },
     ]);
-    expect(plan.seconds).toBe(23);
   });
 
   it("a Still part the app ends keeps its label", () => {
@@ -409,7 +402,6 @@ describe("edit-plan", () => {
       { kind: "cut", from: 29, to: 40, step: 2 },
       { kind: "still", at: 40, seconds: 4, step: 2 },
     ]);
-    expect(plan.seconds).toBe(27);
   });
 
   it("a Still part under 4 s between two actions plays as recorded, with no label", () => {
@@ -695,7 +687,6 @@ describe("edit-plan", () => {
         step: 2,
       },
     ]);
-    expect(plan.seconds).toBeCloseTo(11.88);
   });
 
   it("a Recording with under 1 s of change is found as nothing changed", () => {

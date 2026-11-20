@@ -52,9 +52,6 @@ export interface OsOffer {
   readonly features: ReadonlySet<Feature>;
 }
 
-export const LoginWay = Schema.Literal("browser", "token");
-export type LoginWay = typeof LoginWay.Type;
-
 export interface ProviderAccount {
   readonly account?: string;
   readonly expiresAt?: Date;
@@ -71,7 +68,7 @@ export interface TokenRequest {
 // login page's URL, `complete` holds until the page was clicked and
 // hands the Provider login it made. A Provider that can mint CI tokens
 // from the saved login's session names `makeToken`.
-export interface BrowserWay {
+interface BrowserWay {
   readonly start: Effect.Effect<
     { readonly loginId: string; readonly url: string },
     ProviderUnavailableError | ProviderError
@@ -96,7 +93,7 @@ export interface BrowserWay {
   >;
 }
 
-export interface LoginWays {
+interface LoginWays {
   readonly _tag: "Ways";
   readonly browser?: BrowserWay;
   readonly checkToken: (
@@ -110,11 +107,11 @@ export interface LoginWays {
 
 // What a Provider offers `proofbox auth`: no login at all, or its own
 // login ways.
-export type LoginPart = { readonly _tag: "None" } | LoginWays;
+type LoginPart = { readonly _tag: "None" } | LoginWays;
 
 // The token and region a command uses to act for a Provider account, from
 // the env or the saved login.
-export interface LoginInHand {
+interface LoginInHand {
   readonly token: Redacted.Redacted<string>;
   readonly region: Option.Option<string>;
 }

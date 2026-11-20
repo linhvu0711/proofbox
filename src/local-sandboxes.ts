@@ -203,7 +203,7 @@ export type LogoutFailure =
 // What logout did: the ids it deleted, the Sandboxes and Unfinished
 // Sandboxes it left because another machine started them, and its
 // failures in the order they happened.
-export type LogoutResult =
+type LogoutResult =
   | { readonly _tag: "NoLogin" }
   | {
       readonly _tag: "LoggedOut";

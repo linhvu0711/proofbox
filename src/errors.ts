@@ -54,9 +54,6 @@ export class ToolBundleHashError extends Data.TaggedError(
         : `Run docker image rm ${this.tag} and try again`;
     return `Tool bundle file ${this.file} has the wrong hash; deleted ${this.sandboxId}. ${next}`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class SandboxGoneError extends Data.TaggedError("SandboxGoneError")<{
@@ -233,9 +230,6 @@ export class CaptureBlockedError extends Data.TaggedError(
         : `Saved the screen to ${this.screenshot}. `;
     return `Recording on ${this.id} failed: ${this.what}, so no Proof video was made. ${saved}Record the walk again.`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class StopFlagsError extends Data.TaggedError("StopFlagsError")<{
@@ -276,9 +270,6 @@ export class TokenExposedError extends Data.TaggedError("TokenExposedError")<{
   get message() {
     return `Sandbox ${this.id} can reach the Namespace workload token (${this.what}); deleted the host and refused the Sandbox`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
@@ -303,9 +294,6 @@ export class MacPrepareError extends Data.TaggedError("MacPrepareError")<{
         : `saved the screen to ${this.screenshot} and `;
     return `Sandbox ${this.id} failed the macOS prepare check (${this.what}); ${saved}deleted the Mac`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
@@ -317,9 +305,6 @@ export class LinuxSshdError extends Data.TaggedError("LinuxSshdError")<{
 }> {
   get message() {
     return `Sandbox ${this.id} failed the Linux sshd step (${this.what}); deleted the Sandbox`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -399,9 +384,6 @@ export class ProviderLimitError extends Data.TaggedError("ProviderLimitError")<{
   get message() {
     return `Namespace refused the Sandbox: ${this.limit}; nothing was created. Delete a Sandbox or use a smaller --size`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class MissingCapabilityError extends Data.TaggedError(
@@ -457,9 +439,6 @@ export class TokenRejectedError extends Data.TaggedError("TokenRejectedError")<{
   get message() {
     return `${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} did not accept this token. It may be wrong, revoked, or expired.`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class TokenPermissionError extends Data.TaggedError(
@@ -471,9 +450,6 @@ export class TokenPermissionError extends Data.TaggedError(
 }> {
   get message() {
     return `This ${this.provider.charAt(0).toUpperCase()}${this.provider.slice(1)} token lacks permission for ${this.call}. Use a token that can ${this.need ?? "manage instances"}.`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -508,9 +484,6 @@ export class NotLoggedInError extends Data.TaggedError("NotLoggedInError")<{
   get message() {
     return `Not logged in to ${this.provider}. Run: proofbox auth login ${this.provider}`;
   }
-  get reason() {
-    return this.message;
-  }
 }
 
 export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
@@ -518,9 +491,6 @@ export class LoginExpiredError extends Data.TaggedError("LoginExpiredError")<{
 }> {
   get message() {
     return `Your Provider login for ${this.provider} expired. Run: proofbox auth login ${this.provider}`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 
@@ -530,9 +500,6 @@ export class LoginTimeoutError extends Data.TaggedError("LoginTimeoutError")<{
 }> {
   get message() {
     return `The browser login did not finish in ${this.wait}. Run: proofbox auth login ${this.provider}`;
-  }
-  get reason() {
-    return this.message;
   }
 }
 

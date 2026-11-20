@@ -96,6 +96,7 @@ export const makeFakeProvider = (options: {
 }): Provider => {
   const fs = options.fs;
   const root = options.root;
+  const snapshots = options.snapshots;
   const fail = (reason: string) =>
     new ProviderError({ provider: "fake", reason });
   // `unfinished`: the folder is there, but create never wrote its
@@ -463,14 +464,11 @@ export const makeFakeProvider = (options: {
   // Copy into a temp entry and rename it over the old one, so a create
   // that starts from the Snapshot never sees a half-written one.
   const saveSnapshot = Effect.fn("FakeProvider.saveSnapshot")(function* (
+    snapshots: NonNullable<typeof options.snapshots>,
     sandbox: SandboxRef,
     fingerprint: string,
   ) {
     const name = sandbox.name;
-    const snapshots = options.snapshots;
-    if (snapshots === undefined) {
-      return yield* fail("this fake Provider keeps no Snapshots");
-    }
     if (snapshots.fail === "push") {
       return yield* fail("push refused");
     }
@@ -555,12 +553,13 @@ export const makeFakeProvider = (options: {
       },
     },
     create,
-    ...(options.snapshots === undefined
+    ...(snapshots === undefined
       ? {}
       : {
           snapshots: {
             baseVersion: Effect.succeed("fake"),
-            save: saveSnapshot,
+            save: (sandbox, fingerprint) =>
+              saveSnapshot(snapshots, sandbox, fingerprint),
           },
         }),
     get,

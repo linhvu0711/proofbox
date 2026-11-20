@@ -11,7 +11,7 @@ import { readLogins } from "./logins-file.ts";
 export const envTokenName = (provider: string) =>
   `PROOFBOX_${provider.toUpperCase()}_TOKEN`;
 
-export const envRegionName = (provider: string) =>
+const envRegionName = (provider: string) =>
   `PROOFBOX_${provider.toUpperCase()}_REGION`;
 
 export const envToken = (provider: string) =>

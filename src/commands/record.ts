@@ -95,7 +95,7 @@ export const startRecording = Effect.fn("record.startRecording")(function* (
 
 // A Step mark's label, as `mark` set it (cut to 60 characters): the helper keeps it
 // in the Step's caption file (`captionFile`), with no newline.
-export const readStepLabel = Effect.fn("record.readStepLabel")(function* (
+const readStepLabel = Effect.fn("record.readStepLabel")(function* (
   id: string,
   dir: string,
   step: number,

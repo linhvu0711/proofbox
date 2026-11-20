@@ -5,7 +5,7 @@ import { formatMb } from "../upload/max-size.ts";
 
 export const PROOF_SIZE_DEFAULT = 10_000_000;
 
-export const CRF_STEPS = [23, 28, 33] as const;
+const CRF_STEPS = [23, 28, 33] as const;
 
 export const encodeUnderLimit = Effect.fn("sizeLimit.encodeUnderLimit")(
   function* <E, R>(

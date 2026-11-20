@@ -11,13 +11,13 @@ import type { Link } from "../namespace/ssh-link.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { shellJoin } from "../shell.ts";
 
-export interface DockerExecResult {
+interface DockerExecResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-export interface DockerInspection {
+interface DockerInspection {
   readonly labels: unknown;
   readonly running: boolean;
 }
@@ -288,7 +288,7 @@ export const makeDockerClient = (
       executor,
       Command.make("docker", ...dockerExec),
       options,
-      { spawn: spawnError, fail, exit: (code) => Effect.succeed(code) },
+      { spawn: spawnError, fail },
     );
   };
 

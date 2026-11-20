@@ -18,7 +18,7 @@ export const makeSandboxName = (length = 6) =>
 const ID_PATTERN =
   /^([a-z][a-z0-9-]*):(?:([a-z][a-z0-9-]*):)?([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
-export interface SandboxId {
+interface SandboxId {
   readonly provider: string;
   readonly region: string | undefined;
   readonly name: string;
@@ -37,7 +37,7 @@ export const fileStem = (id: {
   readonly region: string | undefined;
 }) => (id.region === undefined ? id.name : `${id.region}:${id.name}`);
 
-export const parseSandboxId = Effect.fn("sandboxId.parseSandboxId")(function* (
+const parseSandboxId = Effect.fn("sandboxId.parseSandboxId")(function* (
   raw: string,
   known: ReadonlyArray<string>,
 ) {

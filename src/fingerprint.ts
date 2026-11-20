@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { WorkFile } from "./upload/work-files.ts";
 
 // A lockfile has one of these names, in any folder of the Work folder.
-export const LOCKFILES: ReadonlySet<string> = new Set([
+const LOCKFILES: ReadonlySet<string> = new Set([
   "pnpm-lock.yaml",
   "package-lock.json",
   "npm-shrinkwrap.json",
