@@ -221,6 +221,50 @@ describe("ssh link", () => {
     },
   );
 
+  it.effect("the Live view forward carries the link's keep-alive", () => {
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    const log = join(runtime, "ssh.log");
+    const fake = fakeSshForward(log);
+    return Effect.gen(function* () {
+      // Given
+      const api: NamespaceApi = {
+        create: () => Effect.die("unused"),
+        wait: () => Effect.die("unused"),
+        destroy: () => Effect.die("unused"),
+        extend: () => Effect.die("unused"),
+        list: () => Effect.die("unused"),
+        checkToken: () => Effect.die("unused"),
+        ensureImageExpiry: () => Effect.die("unused"),
+        makeToken: () => Effect.die("unused"),
+        sshConfig: () =>
+          Effect.succeed({
+            username: "abc123def4567",
+            endpoint: "ssh.iad4.namespace.so",
+            privateKey: new Uint8Array(PEM),
+            hostKeys: [HOST_KEY],
+          }),
+      };
+      const executor = yield* CommandExecutor.CommandExecutor;
+      // When
+      yield* makeSshForward(
+        api,
+        executor,
+        nodeFs,
+        fake.path,
+      )({ name: "abc123def4567", region: "us" }, 5900);
+      // Then
+      expect(readFileSync(log, "utf8")).toContain(
+        "-o ServerAliveInterval=10 -o ServerAliveCountMax=3",
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
+
   it.effect("the link's known_hosts file is owner-only", () => {
     const fake = fakeSsh();
     const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));

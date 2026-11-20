@@ -109,7 +109,8 @@ const linkWaitText = Config.string("PROOFBOX_NS_LINK_WAIT").pipe(
 // A stalled link ends after three unanswered probes 10 s apart, 30 to 40
 // s in all: well inside the 120 s helper limit (ADR 0019), with room for
 // one lost answer. Both the master and the gateway hop carry it, since
-// either one can sit on the stalled path.
+// either one can sit on the stalled path. The Live view's forward carries
+// it too, so a Live view on a dead link ends instead of hanging.
 const KEEP_ALIVE = [
   "-o",
   "ServerAliveInterval=10",
@@ -710,6 +711,7 @@ export const makeSshForward = (
             "StrictHostKeyChecking=yes",
             "-o",
             `UserKnownHostsFile=${hosts}`,
+            ...KEEP_ALIVE,
             "-o",
             "ExitOnForwardFailure=yes",
             "-L",
