@@ -11,7 +11,7 @@ import {
   Schedule,
 } from "effect";
 import { captureCommand } from "../command-events.ts";
-import { parseSpan } from "../deadline.ts";
+import { deadlineText, firstDeadline, parseSpan } from "../deadline.ts";
 import {
   type ProviderError,
   ProviderLimitError,
@@ -98,7 +98,6 @@ export const makeNamespaceCreate = (deps: {
     // Set once the prep timeout has deleted the host, so cleanup does not
     // delete it again.
     let hostDeleted = false;
-    let deadlineAt = 0;
     const cleanup = Effect.gen(function* () {
       yield* Effect.all(
         [
@@ -160,16 +159,14 @@ export const makeNamespaceCreate = (deps: {
           `ssh-keygen failed: exit ${keygen.exitCode}: ${keygen.stderr.trim()}`,
         );
       }
-      const durationSeconds = Math.min(
-        Duration.toSeconds(req.idle) + 60,
-        Duration.toSeconds(req.maxLife),
-      );
       // Max life counts from the create call, so the Sandbox's
       // maxLifeAt, the host-cap file the detached pushes read, and the
       // provisioning keepalive all stop at the same instant — anchor it
-      // before the host is created, not after.
-      const maxLifeSeconds = Math.floor(
-        (Date.now() + Duration.toMillis(req.maxLife)) / 1000,
+      // before the host is created, not after. Whole seconds, since the
+      // Max life file holds whole seconds.
+      const startedAt = yield* Clock.currentTimeMillis;
+      const maxLifeAt = new Date(
+        Math.floor((startedAt + Duration.toMillis(req.maxLife)) / 1000) * 1000,
       );
       const sshKey = (yield* deps.fs
         .readFileString(`${keyBase}.pub`)
@@ -200,10 +197,10 @@ export const makeNamespaceCreate = (deps: {
           example: "45s",
         },
       ).pipe(Effect.mapError((error) => fail(error.message)));
-      const instanceId = yield* Effect.timeoutOption(
+      const { instanceId, deadline } = yield* Effect.timeoutOption(
         Effect.gen(function* () {
-          const nowMillis = yield* Clock.currentTimeMillis;
-          deadlineAt = Math.floor((nowMillis + durationSeconds * 1000) / 1000);
+          const now = new Date(yield* Clock.currentTimeMillis);
+          const deadline = firstDeadline({ now, idle: req.idle, maxLifeAt });
           const made = yield* api
             .create(region, {
               shape: {
@@ -219,7 +216,7 @@ export const makeNamespaceCreate = (deps: {
                 { name: "proofbox.size", value: formatSize(size) },
                 { name: "proofbox.create-token", value: createToken },
               ],
-              deadline: new Date(nowMillis + durationSeconds * 1000),
+              deadline,
               authorizedSshKeys: [sshKey],
             })
             .pipe(
@@ -231,7 +228,7 @@ export const makeNamespaceCreate = (deps: {
               }),
             );
           yield* api.wait(region, made);
-          return made;
+          return { instanceId: made, deadline };
         }),
         span,
       ).pipe(
@@ -284,7 +281,7 @@ export const makeNamespaceCreate = (deps: {
       );
       const ref: SandboxRef = { name: instanceId, region };
       hostRef = ref;
-      if (maxLifeSeconds <= Math.floor(Date.now() / 1000)) {
+      if (maxLifeAt.getTime() <= (yield* Clock.currentTimeMillis)) {
         return yield* fail(
           "making the host took the whole Max life; try a larger --max-life",
         );
@@ -295,12 +292,14 @@ export const makeNamespaceCreate = (deps: {
         yield* deps.fs.rename(`${keyBase}.pub`, `${hostPaths.key}.pub`);
         yield* deps.fs.writeFileString(
           hostPaths.maxLife,
-          String(maxLifeSeconds),
+          String(Math.floor(maxLifeAt.getTime() / 1000)),
           { mode: 0o600 },
         );
-        yield* deps.fs.writeFileString(hostPaths.deadline, String(deadlineAt), {
-          mode: 0o600,
-        });
+        yield* deps.fs.writeFileString(
+          hostPaths.deadline,
+          deadlineText(deadline),
+          { mode: 0o600 },
+        );
         yield* deps.fs.writeFileString(hostPaths.os, req.os, { mode: 0o600 });
       }).pipe(
         Effect.mapError((error) =>
@@ -313,7 +312,7 @@ export const makeNamespaceCreate = (deps: {
       yield* deps.spawnDetached("namespace", "namespace/expire-main", [
         region,
         instanceId,
-        String(maxLifeSeconds),
+        String(Math.floor(maxLifeAt.getTime() / 1000)),
       ]);
       // The step host prep is in, for the timeout message: Progress keeps
       // the running label only when the output is live.
@@ -337,18 +336,24 @@ export const makeNamespaceCreate = (deps: {
           yield* Effect.forkScoped(
             Effect.repeat(
               Effect.gen(function* () {
-                const left = maxLifeSeconds - Math.floor(Date.now() / 1000);
-                if (left > 0) {
-                  const pushedAt =
-                    Math.floor(Date.now() / 1000) +
-                    Math.min(durationSeconds, left);
+                const now = new Date(yield* Clock.currentTimeMillis);
+                if (now < maxLifeAt) {
+                  const pushed = firstDeadline({
+                    now,
+                    idle: req.idle,
+                    maxLifeAt,
+                  });
                   yield* deps.fs
-                    .writeFileString(hostPaths.deadline, String(pushedAt), {
+                    .writeFileString(hostPaths.deadline, deadlineText(pushed), {
                       mode: 0o600,
                     })
                     .pipe(Effect.ignore);
                   yield* api
-                    .extend(region, instanceId, Math.min(durationSeconds, left))
+                    .extend(
+                      region,
+                      instanceId,
+                      Math.ceil((pushed.getTime() - now.getTime()) / 1000),
+                    )
                     .pipe(Effect.ignore);
                 }
               }),
@@ -371,7 +376,7 @@ export const makeNamespaceCreate = (deps: {
                       ref,
                       paths: hostPaths,
                       size,
-                      maxLifeAt: new Date(maxLifeSeconds * 1000),
+                      maxLifeAt,
                     })
                     .pipe(Effect.provideService(Progress, tracked));
                 }),

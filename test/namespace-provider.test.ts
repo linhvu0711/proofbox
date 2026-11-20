@@ -85,6 +85,8 @@ const fakeApi = (
     readonly destroyError?: ApiError;
     // Whether the nth `destroy` (1-based) never ends, after it is recorded.
     readonly destroyStalls?: (n: number) => boolean;
+    // How long `wait` takes on the Clock, after it is recorded.
+    readonly waitTakes?: Duration.DurationInput;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
@@ -101,7 +103,14 @@ const fakeApi = (
         }
         return "abc123def4567";
       }),
-    wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
+    wait: (region, instanceId) =>
+      note(`wait ${region} ${instanceId}`).pipe(
+        Effect.zipRight(
+          options?.waitTakes === undefined
+            ? Effect.void
+            : Effect.sleep(options.waitTakes),
+        ),
+      ),
     destroy: (region, instanceId) =>
       Effect.suspend(() => {
         destroyed += 1;
@@ -413,6 +422,7 @@ const makeProvider = (
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly destroyError?: ApiError;
     readonly destroyStalls?: (n: number) => boolean;
+    readonly waitTakes?: Duration.DurationInput;
     readonly region?: string;
     readonly forward?: SshForward;
     readonly openLink?: OpenLink;
@@ -1221,6 +1231,36 @@ describe("Namespace Provider", () => {
           "proofbox: installing sshd\nproofbox: starting sshd\nproofbox: reading the Namespace tenant\nproofbox: pulling the Snapshot\nproofbox: setting the Snapshot expiry\nproofbox: creating docker Sandbox\nproofbox: setting the Base image expiry\nproofbox: checking the Namespace token is out of reach\n",
         );
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a create whose host takes longer than the Max life fails and deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace takes 40 s to make the host; the Max life is 30 s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          waitTakes: "40 seconds",
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(10),
+            maxLife: Duration.seconds(30),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "10 seconds", 10);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Provider namespace failed: making the host took the whole Max life; try a larger --max-life",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig(), Effect.provide(liveLayers())),
   );
 
   it.effect(
