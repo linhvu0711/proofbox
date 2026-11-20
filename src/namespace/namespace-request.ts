@@ -18,7 +18,7 @@ const requestTimeout = Config.string("PROOFBOX_NS_REQUEST_TIMEOUT").pipe(
   Config.withDefault("30s"),
 );
 
-export const requestMillis = Effect.gen(function* () {
+const requestMillis = Effect.gen(function* () {
   const span = yield* parseSpan(
     "PROOFBOX_NS_REQUEST_TIMEOUT",
     yield* requestTimeout,

@@ -31,7 +31,8 @@ import type {
 import { formatSandboxId } from "../sandbox-id.ts";
 import {
   limitedTransport,
-  requestMillis,
+  type Meanings,
+  postJson,
   unreachable,
 } from "./namespace-request.ts";
 import { DEFAULT_REGION } from "./regions.ts";
@@ -84,12 +85,6 @@ const SshConfigBody = Schema.Struct({
   endpoint: Schema.String,
   sshPrivateKey: Schema.String,
   sshHostKeys: Schema.NonEmptyArray(Schema.String),
-});
-
-// A Connect error body; both fields may be absent on a bare HTTP error.
-const ConnectErrorBody = Schema.Struct({
-  code: Schema.optional(Schema.String),
-  message: Schema.optional(Schema.String),
 });
 
 // What a create asks the Compute API for; proofbox shapes it.
@@ -159,6 +154,43 @@ export interface NamespaceApi {
 // ends at the first `)` so the size is included.
 const capacityClause = /ran out of capacity:[^)]*\)/;
 
+// What a refused Compute or registry call means: `host` is the instance a
+// `not_found` is about, `need` the right a permission error names.
+const apiMeanings = (options?: {
+  readonly host?: { readonly region: string; readonly instanceId: string };
+  readonly need?: string;
+}): Meanings<ApiError> => {
+  const host = options?.host;
+  return {
+    unauthenticated: () => new TokenRejectedError({ provider: "namespace" }),
+    permissionDenied: (call) =>
+      new TokenPermissionError({
+        provider: "namespace",
+        call,
+        ...(options?.need === undefined ? {} : { need: options.need }),
+      }),
+    resourceExhausted: (message) => {
+      const found = capacityClause.exec(message);
+      return new ProviderLimitError({
+        provider: "namespace",
+        limit: found === null ? message : found[0],
+      });
+    },
+    ...(host === undefined
+      ? {}
+      : {
+          notFound: () =>
+            new SandboxGoneError({
+              id: formatSandboxId({
+                provider: "ns",
+                region: host.region,
+                name: host.instanceId,
+              }),
+            }),
+        }),
+  };
+};
+
 // Maps a failed Compute call to the proofbox error: `call` is the service
 // method name (`CreateInstance`), `host` the instance a `not_found` is
 // about.
@@ -210,56 +242,6 @@ export const fromConnect =
       reason: `${service}.${call} failed: ${cause.rawMessage}`,
     });
   };
-
-// The same mapping as fromConnect for a call made over raw Connect JSON:
-// `status` the HTTP code, `body` the decoded JSON (an error body holds
-// Connect's `code` and `message` strings).
-export const httpError = (
-  call: string,
-  status: number,
-  body:
-    | {
-        readonly code?: string | undefined;
-        readonly message?: string | undefined;
-      }
-    | undefined,
-  host?: { readonly region: string; readonly instanceId: string },
-): ApiError => {
-  const code = body?.code;
-  const message = body?.message ?? `HTTP ${status}`;
-  if (code === "unauthenticated") {
-    return new TokenRejectedError({ provider: "namespace" });
-  }
-  if (code === "permission_denied") {
-    return new TokenPermissionError({
-      provider: "namespace",
-      call: `ComputeService.${call}`,
-    });
-  }
-  if (code === "resource_exhausted") {
-    const found = capacityClause.exec(message);
-    return new ProviderLimitError({
-      provider: "namespace",
-      limit: found === null ? message : found[0],
-    });
-  }
-  if (code === "not_found" && host !== undefined) {
-    return new SandboxGoneError({
-      id: formatSandboxId({
-        provider: "ns",
-        region: host.region,
-        name: host.instanceId,
-      }),
-    });
-  }
-  if (code === "unavailable" || code === "deadline_exceeded" || status >= 500) {
-    return unreachable();
-  }
-  return new ProviderError({
-    provider: "namespace",
-    reason: `ComputeService.${call} failed: ${message}`,
-  });
-};
 
 // The Compute API base URL for a region; `{region}` in
 // PROOFBOX_NAMESPACE_COMPUTE_URL is replaced by the region.
@@ -522,41 +504,17 @@ export const makeNamespaceApi = (deps: {
           new ProviderError({ provider: "namespace", reason: error.message }),
       ),
     )).replaceAll("{region}", region);
-    const ms = yield* requestMillis;
-    const response = yield* Effect.tryPromise({
-      try: async () => {
-        const res = await fetch(
-          `${base}/namespace.cloud.compute.v1beta.ComputeService/GetSSHConfig`,
-          {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${Redacted.value(hand.token)}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ instanceId }),
-            signal: AbortSignal.timeout(ms),
-          },
-        );
-        const body: unknown = await res.json().catch(() => undefined);
-        return { status: res.status, body };
-      },
-      catch: () => unreachable(),
+    const answer = yield* postJson({
+      base,
+      service: "namespace.cloud.compute.v1beta.ComputeService",
+      method: "GetSSHConfig",
+      body: { instanceId },
+      bearer: Redacted.value(hand.token),
+      meanings: apiMeanings({ host: { region, instanceId } }),
     });
-    const decoded = yield* Schema.decodeUnknown(SshConfigBody)(
-      response.body,
-    ).pipe(Effect.option);
-    if (response.status !== 200) {
-      const errorBody = yield* Schema.decodeUnknown(ConnectErrorBody)(
-        response.body,
-      ).pipe(
-        Effect.option,
-        Effect.map((body) => Option.getOrUndefined(body)),
-      );
-      return yield* httpError("GetSSHConfig", response.status, errorBody, {
-        region,
-        instanceId,
-      });
-    }
+    const decoded = yield* Schema.decodeUnknown(SshConfigBody)(answer).pipe(
+      Effect.option,
+    );
     if (Option.isNone(decoded)) {
       return yield* new ProviderError({
         provider: "namespace",
