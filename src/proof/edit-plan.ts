@@ -113,40 +113,6 @@ export const withoutSpans = (
     freezes,
   );
 
-const POINT_ACTIONS: ReadonlySet<string> = new Set([
-  "click",
-  "key",
-  "scroll",
-  "drag",
-]);
-
-// The time each action ran: typing from its `type` line (before the first
-// letter) to its `typed` line (after the last), and a click, key, scroll, or
-// drag at its line's time, which `planEdit` widens by 1 s each side like
-// any change. Typing still running at record stop runs to the end of the
-// Recording.
-export const actionSpans = (
-  lines: ReadonlyArray<{ readonly kind: string; readonly t: number }>,
-  duration: number,
-): ReadonlyArray<readonly [number, number]> => {
-  const spans: (readonly [number, number])[] = [];
-  let open: number | undefined;
-  for (const { kind, t } of lines) {
-    if (kind === "type") {
-      open = t;
-    } else if (kind === "typed") {
-      spans.push([open ?? 0, t]);
-      open = undefined;
-    } else if (POINT_ACTIONS.has(kind)) {
-      spans.push([t, t]);
-    }
-  }
-  if (open !== undefined) {
-    spans.push([open, duration]);
-  }
-  return spans;
-};
-
 export const nothingChanged = (probe: ProbeResult): boolean => {
   let still = 0;
   let position = 0;
