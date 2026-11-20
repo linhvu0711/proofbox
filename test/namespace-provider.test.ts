@@ -14,6 +14,7 @@ import {
   Cause,
   Chunk,
   ConfigProvider,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -1337,6 +1338,7 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: a Mac host whose prepare never ends; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const stuck = yield* Deferred.make<void>();
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
@@ -1346,7 +1348,12 @@ describe("Namespace Provider", () => {
             },
             prepare: () =>
               Effect.flatMap(Progress, (progress) =>
-                progress.step("installing the Tool bundle", Effect.never),
+                progress.step(
+                  "installing the Tool bundle",
+                  Deferred.succeed(stuck, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                  ),
+                ),
               ),
           },
         });
@@ -1358,6 +1365,9 @@ describe("Namespace Provider", () => {
             maxLife: Duration.hours(3),
           }),
         );
+        // The clock moves only once prepare is stuck: the sshd step before
+        // it reads and writes real files, which can outlast a 1 s step.
+        yield* Deferred.await(stuck);
         const exit = yield* driveClock(fiber, "1 second", 40);
         // Then
         expect({
@@ -1379,6 +1389,7 @@ describe("Namespace Provider", () => {
         // interrupt never ends either, as a `docker rm -f` on a stuck
         // Docker would; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const stuck = yield* Deferred.make<void>();
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
@@ -1390,7 +1401,10 @@ describe("Namespace Provider", () => {
               Effect.flatMap(Progress, (progress) =>
                 progress.step(
                   "creating docker Sandbox",
-                  Effect.never.pipe(Effect.onInterrupt(() => Effect.never)),
+                  Deferred.succeed(stuck, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                    Effect.onInterrupt(() => Effect.never),
+                  ),
                 ),
               ),
           },
@@ -1403,6 +1417,9 @@ describe("Namespace Provider", () => {
             maxLife: Duration.hours(3),
           }),
         );
+        // The clock moves only once prepare is stuck: the sshd step before
+        // it reads and writes real files, which can outlast a 1 s step.
+        yield* Deferred.await(stuck);
         const exit = yield* driveClock(fiber, "1 second", 40);
         // Then
         expect({
