@@ -237,7 +237,7 @@ export const makeNamespaceCreate = (deps: {
             ? Effect.fail(
                 new ProviderUnavailableError({
                   provider: "namespace",
-                  reason: `Namespace did not make the host in ${spanText.replace(/(\d)([a-z])/g, "$1 $2")}; deleted any half-made host. Try again`,
+                  reason: `Namespace did not make the host in ${formatWait(span)}; deleted any half-made host. Try again`,
                 }),
               )
             : Effect.succeed(made.value),

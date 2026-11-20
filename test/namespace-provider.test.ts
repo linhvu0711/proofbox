@@ -462,7 +462,7 @@ const makeProvider = (
 };
 
 // A fresh runtime folder, with the prep limit set when one is given.
-const prepConfig = (prepTimeout?: string) => {
+const prepConfig = (prepTimeout?: string, createTimeout?: string) => {
   const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
   return Effect.withConfigProvider(
     ConfigProvider.fromMap(
@@ -471,6 +471,9 @@ const prepConfig = (prepTimeout?: string) => {
         ...(prepTimeout === undefined
           ? []
           : [["PROOFBOX_NS_PREPARE_TIMEOUT", prepTimeout] as const]),
+        ...(createTimeout === undefined
+          ? []
+          : [["PROOFBOX_NS_CREATE_TIMEOUT", createTimeout] as const]),
       ]),
     ),
   );
@@ -1261,6 +1264,31 @@ describe("Namespace Provider", () => {
           destroys: ["destroy us abc123def4567"],
         });
       }).pipe(prepConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a create whose host is not made in time names the wait in minutes and seconds",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace takes 5 min to make the host; the create limit is 90s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          waitTakes: "5 minutes",
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(10),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "10 seconds", 12);
+        // Then
+        expect(failureMessage(exit)).toBe(
+          "Namespace did not make the host in 1 min 30 s; deleted any half-made host. Try again",
+        );
+      }).pipe(prepConfig(undefined, "90s"), Effect.provide(liveLayers())),
   );
 
   it.effect(
