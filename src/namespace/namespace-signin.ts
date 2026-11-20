@@ -1,7 +1,11 @@
 import { extractClaims } from "@namespacelabs/sdk/auth";
-import { Config, Effect, Option, Redacted, Schema } from "effect";
-import { LoginExpiredError, ProviderError } from "../errors.ts";
-import { unreachable } from "./namespace-api.ts";
+import { Config, Data, Effect, Option, Redacted, Schema } from "effect";
+import {
+  LoginExpiredError,
+  ProviderError,
+  type ProviderUnavailableError,
+} from "../errors.ts";
+import { type Meanings, postJson } from "./namespace-request.ts";
 
 // The one file that names nsl.signin.SigninService, so a change on
 // Namespace's side is a one-file fix. Each call is a Connect-JSON POST
@@ -10,42 +14,10 @@ const iamUrl = Config.string("PROOFBOX_NAMESPACE_IAM_URL").pipe(
   Config.withDefault("https://private-api.global.namespaceapis.com"),
 );
 
-const SigninErrorBody = Schema.Struct({
-  code: Schema.optional(Schema.String),
-  message: Schema.optional(Schema.String),
-});
-
-const decodeErrorBody = (body: unknown) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(SigninErrorBody)(body));
-
-// Maps a refused sign-in call like httpError maps a refused Compute
-// call, naming SigninService.<method>.
-const signinError = (method: string, status: number, body: unknown) => {
-  const error = decodeErrorBody(body);
-  const message = error?.message ?? `HTTP ${status}`;
-  if (
-    error?.code === "unavailable" ||
-    error?.code === "deadline_exceeded" ||
-    status >= 500
-  ) {
-    return unreachable();
-  }
-  return new ProviderError({
-    provider: "namespace",
-    reason: `SigninService.${method} failed: ${message}`,
-  });
-};
-
 // The held CompleteTenantLogin ends early on a Namespace-side
 // deadline; the Caller asks again with the same login id when it sees
-// one of these endings.
-const endedEarly = (answer: {
-  readonly status: number;
-  readonly body: unknown;
-}) =>
-  answer.status === 408 ||
-  answer.status === 504 ||
-  decodeErrorBody(answer.body)?.code === "deadline_exceeded";
+// one.
+class EndedEarlyError extends Data.TaggedError("EndedEarlyError") {}
 
 // A sign-in call answered oddly (a body that is not the expected JSON)
 // is a Provider error, not a bug.
@@ -55,10 +27,14 @@ const badAnswer = (method: string) =>
     reason: `SigninService.${method} gave an incomplete answer`,
   });
 
-const post = Effect.fn("namespaceSignin.post")(function* (
+const signinPost = Effect.fn("namespaceSignin.post")(function* <E = never>(
   method: string,
   body: unknown,
-  bearer?: string,
+  options?: {
+    readonly meanings?: Meanings<E>;
+    readonly bearer?: string;
+    readonly limited?: boolean;
+  },
 ) {
   const base = yield* iamUrl.pipe(
     Effect.mapError(
@@ -66,22 +42,12 @@ const post = Effect.fn("namespaceSignin.post")(function* (
         new ProviderError({ provider: "namespace", reason: error.message }),
     ),
   );
-  return yield* Effect.tryPromise({
-    try: async () => {
-      const res = await fetch(`${base}/nsl.signin.SigninService/${method}`, {
-        method: "POST",
-        headers: {
-          ...(bearer === undefined
-            ? {}
-            : { authorization: `Bearer ${bearer}` }),
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-      const json: unknown = await res.json().catch(() => undefined);
-      return { status: res.status, body: json };
-    },
-    catch: () => unreachable(),
+  return yield* postJson({
+    base,
+    service: "nsl.signin.SigninService",
+    method,
+    body,
+    ...options,
   });
 });
 
@@ -136,17 +102,14 @@ const CompletedLogin = Schema.Struct({
 // A 30-day login: opens the wait for a click on the login page and names
 // the page's URL.
 export const startLogin = Effect.fn("namespaceSignin.startLogin")(function* () {
-  const answer = yield* post(
+  const answer = yield* signinPost(
     "StartLogin",
     Schema.encodeSync(StartLoginBody)({
       supportedKinds: ["tenant"],
       sessionDurationSecs: 2_592_000,
     }),
   );
-  if (answer.status !== 200) {
-    return yield* signinError("StartLogin", answer.status, answer.body);
-  }
-  const decoded = yield* Schema.decodeUnknown(StartedLogin)(answer.body).pipe(
+  const decoded = yield* Schema.decodeUnknown(StartedLogin)(answer).pipe(
     Effect.option,
   );
   if (Option.isNone(decoded)) {
@@ -163,20 +126,23 @@ export const startLogin = Effect.fn("namespaceSignin.startLogin")(function* () {
 
 export const completeLogin = Effect.fn("namespaceSignin.completeLogin")(
   function* (loginId: string) {
-    const body = Schema.encodeSync(LoginIdBody)({ loginId });
-    let answer = yield* post("CompleteTenantLogin", body);
-    while (endedEarly(answer)) {
-      answer = yield* post("CompleteTenantLogin", body);
-    }
-    if (answer.status !== 200) {
-      return yield* signinError(
-        "CompleteTenantLogin",
-        answer.status,
-        answer.body,
-      );
-    }
+    const answer = yield* signinPost(
+      "CompleteTenantLogin",
+      Schema.encodeSync(LoginIdBody)({ loginId }),
+      {
+        // The login wait bounds this call; it waits while the Caller
+        // logs in.
+        limited: false,
+        meanings: { deadlineExceeded: () => new EndedEarlyError() },
+      },
+    ).pipe(
+      Effect.retry({
+        until: (error): error is ProviderError | ProviderUnavailableError =>
+          !(error instanceof EndedEarlyError),
+      }),
+    );
     const decoded = yield* Schema.decodeUnknown(Schema.Tuple(CompletedLogin))(
-      answer.body,
+      answer,
     ).pipe(Effect.option);
     if (Option.isNone(decoded)) {
       return yield* badAnswer("CompleteTenantLogin");
@@ -198,23 +164,18 @@ export const completeLogin = Effect.fn("namespaceSignin.completeLogin")(
 // Compute call then uses, and one that works in every region.
 export const issueTenantToken = Effect.fn("namespaceSignin.issueTenantToken")(
   function* (session: string) {
-    const answer = yield* post(
+    const answer = yield* signinPost(
       "IssueTenantTokenFromSession",
       Schema.encodeSync(TenantTokenBody)({ tokenDurationSecs: 3600 }),
-      session,
+      {
+        bearer: session,
+        meanings: {
+          unauthenticated: () =>
+            new LoginExpiredError({ provider: "namespace" }),
+        },
+      },
     );
-    const error = decodeErrorBody(answer.body);
-    if (answer.status === 401 || error?.code === "unauthenticated") {
-      return yield* new LoginExpiredError({ provider: "namespace" });
-    }
-    if (answer.status !== 200) {
-      return yield* signinError(
-        "IssueTenantTokenFromSession",
-        answer.status,
-        answer.body,
-      );
-    }
-    const decoded = yield* Schema.decodeUnknown(IssuedToken)(answer.body).pipe(
+    const decoded = yield* Schema.decodeUnknown(IssuedToken)(answer).pipe(
       Effect.option,
     );
     if (Option.isNone(decoded)) {
