@@ -1,6 +1,6 @@
-import { Duration, Effect } from "effect";
+import { Effect } from "effect";
 import { BadStepsError } from "../errors.ts";
-import { resolvePace, runPixel } from "../pixel.ts";
+import { runAction } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 
 const BUTTONS = { up: "4", down: "5", left: "6", right: "7" } as const;
@@ -19,12 +19,10 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
   if (options.steps < 1) {
     return yield* new BadStepsError({ steps: options.steps });
   }
-  const pace = yield* resolvePace(options);
-  const shot = options.screenshot === undefined ? "0" : "1";
-  yield* runPixel(
-    options.id,
-    [
-      "scroll",
+  yield* runAction(options, {
+    name: "scroll",
+    points: [[options.x, options.y]],
+    args: (pace, shot) => [
       String(options.x),
       String(options.y),
       BUTTONS[options.direction],
@@ -33,19 +31,9 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    {
-      screenshot: options.screenshot,
-      points: [[options.x, options.y]],
-      // The helper turns the wheel once per step, 50 ms apart.
-      limit: {
-        _tag: "Act",
-        name: "scroll",
-        extra: Duration.millis(
-          pace.glideMs + options.steps * 50 + pace.settleMs,
-        ),
-      },
-    },
-  );
+    // The helper turns the wheel once per step, 50 ms apart.
+    extraMs: (pace) => pace.glideMs + options.steps * 50 + pace.settleMs,
+  });
   const progress = yield* Progress;
   yield* progress.done(
     `scrolled ${options.direction} ${options.steps} at ${options.x},${options.y}`,

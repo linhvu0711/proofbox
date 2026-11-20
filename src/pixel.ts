@@ -63,6 +63,13 @@ const PACE_FAST = {
   settleMs: 0,
 };
 
+interface Pace {
+  readonly glideMs: number;
+  readonly letterMs: number;
+  readonly typeMaxMs: number;
+  readonly settleMs: number;
+}
+
 export const resolvePace = Effect.fn("pixel.resolvePace")(function* (
   options: {
     readonly pace: "human" | "fast";
@@ -126,7 +133,7 @@ export const runPixel = Effect.fn("pixel.runPixel")(function* (
   helperArgv: ReadonlyArray<string>,
   options: {
     readonly screenshot?: string | undefined;
-    readonly points?: ReadonlyArray<readonly [number, number]>;
+    readonly points?: ReadonlyArray<readonly [number, number]> | undefined;
     readonly limit: HelperLimit;
   },
 ) {
@@ -165,4 +172,37 @@ export const runPixel = Effect.fn("pixel.runPixel")(function* (
     yield* writeOut(options.screenshot, collected.stdout);
   }
   return collected.stdout;
+});
+
+// A Pixel action: the Pace, the screenshot flag, and the time limit are the
+// same for each; the action gives its own argv and the time it takes.
+export const runAction = Effect.fn("pixel.runAction")(function* (
+  options: {
+    readonly id: string;
+    readonly screenshot?: string | undefined;
+    readonly pace: "human" | "fast";
+    readonly glide?: string | undefined;
+    readonly letter?: string | undefined;
+    readonly typeMax?: string | undefined;
+    readonly settle?: string | undefined;
+  },
+  action: {
+    readonly name: string;
+    readonly textLength?: number | undefined;
+    readonly points?: ReadonlyArray<readonly [number, number]> | undefined;
+    readonly args: (pace: Pace, shot: "0" | "1") => ReadonlyArray<string>;
+    readonly extraMs: (pace: Pace) => number;
+  },
+) {
+  const pace = yield* resolvePace(options, action.textLength ?? 0);
+  const shot = options.screenshot === undefined ? "0" : "1";
+  yield* runPixel(options.id, [action.name, ...action.args(pace, shot)], {
+    screenshot: options.screenshot,
+    points: action.points,
+    limit: {
+      _tag: "Act",
+      name: action.name,
+      extra: Duration.millis(action.extraMs(pace)),
+    },
+  });
 });
