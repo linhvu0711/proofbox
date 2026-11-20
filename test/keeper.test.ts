@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection, createServer, type Server } from "node:net";
@@ -334,6 +335,39 @@ describe("Keeper", () => {
     const newPid = keeperPid(env, name);
     expect(newPid).not.toBe(oldPid);
     expect(alive(newPid)).toBe(true);
+  });
+
+  it("exec starts a new Keeper when the old socket cannot be reached", async () => {
+    // Given: a Sandbox whose Keeper was killed, and a socket path that
+    // links to itself, so a connect fails with ELOOP
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const name = id.slice("fake:".length);
+    const oldPid = keeperPid(env, name);
+    process.kill(oldPid, "SIGKILL");
+    for (let i = 0; i < 50 && alive(oldPid); i++) {
+      await sleep(100);
+    }
+    const socket = join(env.runtime, `fake-${name}.sock`);
+    rmSync(socket, { force: true });
+    symlinkSync(socket, socket);
+    // When
+    const result = await runCli(env, ["exec", id, "--", "echo", "back"]);
+    // Then
+    const newPid = keeperPid(env, name);
+    expect({
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      newKeeper: newPid !== oldPid && alive(newPid),
+    }).toEqual({ stdout: "back\n", stderr: "", exitCode: 0, newKeeper: true });
   });
 
   it("delete stops the Keeper", async () => {

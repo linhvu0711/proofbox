@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -88,6 +88,14 @@ export const cleanupEnvs = () => {
 // a space whole inside NODE_OPTIONS.
 export const keeperCannotStart: Readonly<Record<string, string>> = {
   NODE_OPTIONS: `--import=${new URL("./no-keeper.ts", import.meta.url).href}`,
+};
+
+// A lock folder whose owner is a process that no longer runs, as a
+// proofbox killed while it held the lock leaves.
+export const lockOfDeadProcess = (dir: string): void => {
+  const dead = spawnSync("true").pid;
+  mkdirSync(dir);
+  writeFileSync(join(dir, "owner"), `${dead}\ndead\n\n`);
 };
 
 export const trackTempDir = (dir: string): void => {

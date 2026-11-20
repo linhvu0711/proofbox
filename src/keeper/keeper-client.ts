@@ -1,6 +1,18 @@
-import { FileSystem } from "@effect/platform";
-import { Clock, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
+import { Command, FileSystem } from "@effect/platform";
+import {
+  Clock,
+  Duration,
+  Effect,
+  Either,
+  HashSet,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Stream,
+} from "effect";
 import { runCommand } from "../command-checks.ts";
+import { captureCommand } from "../command-events.ts";
 import {
   AnswerTimeoutError,
   KeeperLostError,
@@ -20,18 +32,19 @@ import {
   type SandboxCallError,
   type SandboxRef,
 } from "../provider.ts";
-import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
 import {
-  keeperAway,
-  reachKeeper,
-  startKeeper,
-  stopKeeper,
-} from "./lifecycle.ts";
-import { keeperPaths } from "./paths.ts";
+  formatSandboxId,
+  type ResolvedSandboxId,
+  resolveSandboxId,
+} from "../sandbox-id.ts";
+import { spawnDetached } from "../spawn-detached.ts";
+import { removeKeeperFiles } from "./lifecycle.ts";
+import { keeperPathsOf } from "./paths.ts";
 import {
   connectKeeper,
   encodeInput,
   encodeRequest,
+  type RequestFrame,
   readReplies,
   writeFrame,
 } from "./protocol.ts";
@@ -191,9 +204,122 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         },
       );
 
+      // The Sandboxes whose Keeper failed to start in this run: a later
+      // command of the run goes without one, and does not wait again.
+      const failedStarts = yield* Ref.make(HashSet.empty<string>());
+
+      // Starts the Keeper of Sandbox `id` and waits until its socket
+      // answers. `stale` is the code a connect to the old socket path gave:
+      // the new Keeper clears that path under its start lock, so it is
+      // waited out too.
+      const spawnKeeper = Effect.fn("KeeperClient.spawnKeeper")(function* (
+        id: ResolvedSandboxId,
+        stale?: string,
+      ) {
+        const paths = yield* keeperPathsOf(id);
+        yield* spawnDetached(id.provider.name, "keeper/keeper-main", [
+          formatSandboxId({
+            provider: id.prefix,
+            region: id.region,
+            name: id.name,
+          }),
+        ]).pipe(
+          Effect.zipRight(
+            connectKeeper(paths.socket, id.provider.name).pipe(
+              Effect.retry({
+                while: (error) =>
+                  error.reason === "ENOENT" ||
+                  error.reason === "ECONNREFUSED" ||
+                  error.reason === stale,
+                schedule: Schedule.spaced("50 millis").pipe(
+                  Schedule.upTo("10 seconds"),
+                ),
+              }),
+            ),
+          ),
+          Effect.tap((socket) => Effect.sync(() => socket.destroy())),
+          Effect.tapError(() =>
+            Ref.update(failedStarts, HashSet.add(paths.socket)),
+          ),
+        );
+      });
+
+      // A socket to the Keeper of Sandbox `id` that has taken `request`, or
+      // the Provider's read of the Sandbox when no Keeper takes it. Any
+      // failure to talk to the Keeper counts as no Keeper, and a new one
+      // starts, since losing a Keeper changes nothing.
+      const reach = Effect.fn("KeeperClient.reach")(function* (
+        id: ResolvedSandboxId,
+        request: RequestFrame,
+      ) {
+        const paths = yield* keeperPathsOf(id);
+        // The Keeper never read a request it dropped, so after a new Keeper
+        // starts the request goes again.
+        const connect = connectKeeper(paths.socket, id.provider.name).pipe(
+          Effect.tap((socket) =>
+            writeFrame(socket, id.provider.name, encodeRequest(request)),
+          ),
+        );
+        return yield* connect.pipe(
+          Effect.map((socket) => Either.right(socket)),
+          Effect.catchAll((error) =>
+            Effect.gen(function* () {
+              // With no Keeper, the Provider says first whether the Sandbox
+              // is still there: a gone one fails here, with no Keeper
+              // started for it.
+              const read = yield* id.provider.get(id);
+              if (HashSet.has(yield* Ref.get(failedStarts), paths.socket)) {
+                return Either.left(read);
+              }
+              return yield* Effect.zipRight(
+                spawnKeeper(id, error.reason),
+                connect,
+              ).pipe(
+                Effect.map((socket) => Either.right(socket)),
+                Effect.orElseSucceed(() => Either.left(read)),
+              );
+            }),
+          ),
+        );
+      });
+
+      // Ends the Keeper of Sandbox `id`, if one runs, and removes its files.
+      const endKeeper = Effect.fn("KeeperClient.endKeeper")(function* (
+        id: ResolvedSandboxId,
+      ) {
+        const paths = yield* keeperPathsOf(id);
+        const pidText = yield* fs
+          .readFileString(paths.pid)
+          .pipe(Effect.orElseSucceed(() => ""));
+        const pid = Number.parseInt(pidText.trim(), 10);
+        if (Number.isFinite(pid)) {
+          // A stale pid file can name a reused, unrelated pid; only signal a
+          // process that still runs keeper-main.
+          const isKeeper = yield* captureCommand(
+            Command.make("ps", "-p", String(pid), "-o", "command="),
+          ).pipe(
+            Effect.map(
+              ({ exitCode, stdout }) =>
+                exitCode === 0 && stdout.includes("keeper-main"),
+            ),
+            Effect.orElseSucceed(() => false),
+          );
+          if (isKeeper) {
+            yield* Effect.sync(() => {
+              try {
+                process.kill(pid, "SIGTERM");
+              } catch {
+                // ESRCH and friends: Keeper already gone
+              }
+            });
+          }
+        }
+        yield* removeKeeperFiles(paths);
+      });
+
       const start = Effect.fn("KeeperClient.start")(
         function* (rawId: string) {
-          yield* startKeeper(yield* resolveSandboxId(rawId, providers));
+          yield* spawnKeeper(yield* resolveSandboxId(rawId, providers));
         },
         Effect.provideService(FileSystem.FileSystem, fs),
       );
@@ -206,16 +332,17 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
         ) {
           const id = yield* resolveSandboxId(rawId, providers);
           const provider = id.provider;
-          const socket = yield* reachKeeper(
+          const reached = yield* reach(
             id,
             options?.stdin === undefined
               ? { exec: [...argv] }
               : { exec: [...argv], stdin: true },
           );
-          if (socket._tag === "None") {
+          if (Either.isLeft(reached)) {
             yield* warnNotStarted("Keeper did not start; running without it");
             return yield* execDirect(provider, id, argv, options);
           }
+          const socket = reached.right;
           const feederError = yield* Ref.make<StdinError | undefined>(
             undefined,
           );
@@ -224,14 +351,14 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             yield* Effect.forkScoped(
               Stream.runForEach(stdin, (chunk) =>
                 writeFrame(
-                  socket.value,
+                  socket,
                   id.provider.name,
                   encodeInput({ in: Buffer.from(chunk).toString("base64") }),
                 ),
               ).pipe(
                 Effect.zipRight(
                   writeFrame(
-                    socket.value,
+                    socket,
                     id.provider.name,
                     encodeInput({ end: true }),
                   ),
@@ -240,7 +367,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
                   Effect.zipRight(
                     Ref.set(feederError, error),
                     Effect.sync(() => {
-                      socket.value.destroy();
+                      socket.destroy();
                     }),
                   ),
                 ),
@@ -254,7 +381,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
               ),
             );
           const events: Stream.Stream<ExecEvent, KeeperExecError> = readReplies(
-            socket.value,
+            socket,
             id.provider.name,
           ).pipe(
             Stream.mapEffect(
@@ -335,7 +462,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
             events,
             options?.limit,
             writeFrame(
-              socket.value,
+              socket,
               id.provider.name,
               encodeInput({ giveUp: true }),
             ).pipe(Effect.ignore),
@@ -346,52 +473,25 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
 
       const stop = Effect.fn("KeeperClient.stop")(
         function* (rawId: string) {
-          yield* stopKeeper(yield* resolveSandboxId(rawId, providers));
+          yield* endKeeper(yield* resolveSandboxId(rawId, providers));
         },
         Effect.provideService(FileSystem.FileSystem, fs),
       );
 
       // The Sandbox as the warm Keeper read it at connect, with no remote
-      // call. With no Keeper up, the Provider reads it, as before the
-      // Keeper did the checks; the command after starts the Keeper.
+      // call. With no Keeper answering, reach starts one; when none starts,
+      // the Provider's read stands.
       const info = Effect.fn("KeeperClient.info")(
         function* (rawId: string) {
           const id = yield* resolveSandboxId(rawId, providers);
-          const paths = yield* keeperPaths({
-            provider: id.prefix,
-            name: fileStem(id),
-          });
-          // No Keeper took the request: none answers, or one left before it
-          // read it.
-          const socket = yield* connectKeeper(
-            paths.socket,
-            id.provider.name,
-          ).pipe(
-            Effect.option,
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.succeedNone,
-                onSome: (socket) =>
-                  writeFrame(
-                    socket,
-                    id.provider.name,
-                    encodeRequest({ info: true }),
-                  ).pipe(
-                    Effect.as(Option.some(socket)),
-                    Effect.catchIf(
-                      (error) => keeperAway(error),
-                      () => Effect.succeedNone,
-                    ),
-                  ),
-              }),
-            ),
-          );
-          if (Option.isNone(socket)) {
-            return yield* id.provider.get(id);
+          const reached = yield* reach(id, { info: true });
+          if (Either.isLeft(reached)) {
+            return reached.left;
           }
+          const socket = reached.right;
           // The reader never ends before a last frame, so an empty reply
           // counts as a close.
-          const reply = yield* readReplies(socket.value, id.provider.name).pipe(
+          const reply = yield* readReplies(socket, id.provider.name).pipe(
             Stream.runHead,
             Effect.flatMap(
               Option.match({
@@ -418,7 +518,7 @@ export class KeeperClient extends Effect.Service<KeeperClient>()(
           // run commands with no Deadline push: stop it, so the next command
           // starts a new one.
           if ("fail" in reply && reply.fail === "bad request") {
-            yield* stopKeeper(id);
+            yield* endKeeper(id);
             return yield* id.provider.get(id);
           }
           return yield* new ProviderError({

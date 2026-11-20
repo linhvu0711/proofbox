@@ -10,7 +10,7 @@ import {
 } from "../errors.ts";
 import { withFileLock } from "../file-lock.ts";
 import { KeeperClient } from "../keeper/keeper-client.ts";
-import { keeperPaths } from "../keeper/paths.ts";
+import { runtimeDir } from "../keeper/paths.ts";
 import { Progress } from "../progress.ts";
 import { Providers } from "../provider.ts";
 import { sandboxFiles } from "../sandbox-file.ts";
@@ -48,8 +48,8 @@ const withUploadLock = Effect.fn("upload.withUploadLock")(function* <A, E, R>(
   name: string,
   effect: Effect.Effect<A, E, R>,
 ) {
-  const paths = yield* keeperPaths({ provider, name });
-  const lockDir = join(paths.dir, `upload-${name}.lock`);
+  const dir = yield* runtimeDir(provider);
+  const lockDir = join(dir, `upload-${name}.lock`);
   const reason = `another upload to ${name} is in flight; delete ${lockDir} if it is stale`;
   return yield* withFileLock({
     dir: lockDir,

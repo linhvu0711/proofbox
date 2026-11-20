@@ -17,14 +17,10 @@ import {
   KeeperClient,
   type KeeperExecOptions,
 } from "./keeper/keeper-client.ts";
-import { keeperPaths } from "./keeper/paths.ts";
+import { keeperPathsOf } from "./keeper/paths.ts";
 import { Progress } from "./progress.ts";
 import { type Feature, lacksFeature, type Os, Providers } from "./provider.ts";
-import {
-  fileStem,
-  type ResolvedSandboxId,
-  resolveSandboxId,
-} from "./sandbox-id.ts";
+import { type ResolvedSandboxId, resolveSandboxId } from "./sandbox-id.ts";
 
 // A helper in the Sandbox, the feature it serves, and its path per OS.
 export interface HelperTable {
@@ -106,10 +102,7 @@ const withHelperLimit = Effect.fn("helper.withHelperLimit")(function* <A, E, R>(
       ),
     ),
   );
-  const paths = yield* keeperPaths({
-    provider: id.prefix,
-    name: fileStem(id),
-  });
+  const paths = yield* keeperPathsOf(id);
   const noAnswer = (kind: NoAnswerError["kind"], after: Duration.Duration) =>
     new NoAnswerError({
       id: rawId,

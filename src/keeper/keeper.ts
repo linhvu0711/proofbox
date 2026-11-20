@@ -20,11 +20,16 @@ import {
 } from "../errors.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
 import { Providers } from "../provider.ts";
-import { fileStem, resolveSandboxId } from "../sandbox-id.ts";
+import { resolveSandboxId } from "../sandbox-id.ts";
 import { programOf, writeKeeperLog } from "./keeper-log.ts";
 import { holdKeeper, keeperAnswers } from "./lifecycle.ts";
-import { keeperPaths } from "./paths.ts";
-import { decodeInput, decodeRequest, encodeReply } from "./protocol.ts";
+import { keeperPathsOf } from "./paths.ts";
+import {
+  decodeInput,
+  decodeRequest,
+  encodeReply,
+  writeFrame,
+} from "./protocol.ts";
 
 // The socket did not take a frame: the Caller is gone.
 class SocketWriteError extends Data.TaggedError("SocketWriteError")<{
@@ -41,19 +46,6 @@ class BadRequestError extends Data.TaggedError("BadRequestError") {
     return "bad request";
   }
 }
-
-const writeFrame = Effect.fn("keeper.writeFrame")(
-  (socket: Socket, frame: unknown) =>
-    Effect.async<void, SocketWriteError>((resume) => {
-      socket.write(`${JSON.stringify(frame)}\n`, (error) =>
-        resume(
-          error
-            ? Effect.fail(new SocketWriteError({ detail: error.message }))
-            : Effect.void,
-        ),
-      );
-    }),
-);
 
 const frameOf = (event: ExecEvent) => {
   switch (event._tag) {
@@ -92,10 +84,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
   const providers = yield* Providers;
   const id = yield* resolveSandboxId(rawId, providers);
   const provider = id.provider;
-  const paths = yield* keeperPaths({
-    provider: id.prefix,
-    name: fileStem(id),
-  });
+  const paths = yield* keeperPathsOf(id);
   if (yield* keeperAnswers(paths.socket)) {
     return;
   }
@@ -107,6 +96,14 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
         CommandExecutor.CommandExecutor | FileSystem.FileSystem
       >();
       const handleClient = (socket: Socket) => {
+        // The Keeper logs its own kind for a Caller that left, apart from a
+        // Provider fault.
+        const sendFrame = (frame: unknown) =>
+          writeFrame(socket, provider.name, frame).pipe(
+            Effect.mapError(
+              (error) => new SocketWriteError({ detail: error.reason }),
+            ),
+          );
         let pending = "";
         // The lines in hand: a Caller that gives up writes its give-up
         // frame and closes at once, so the close waits for that frame.
@@ -169,7 +166,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                   } else {
                     tally.err += event.bytes.length;
                   }
-                  const send = writeFrame(socket, frameOf(event));
+                  const send = sendFrame(frameOf(event));
                   // An empty chunk carries no byte, so it is not the first.
                   return tally.firstMs === undefined && event.bytes.length > 0
                     ? Effect.flatMap(Clock.currentTimeMillis, (now) => {
@@ -183,7 +180,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                 tally.exit = event.code;
                 execEnded = true;
                 return log(start, "done").pipe(
-                  Effect.zipRight(writeFrame(socket, frameOf(event))),
+                  Effect.zipRight(sendFrame(frameOf(event))),
                 );
               }),
               Effect.as("done"),
@@ -197,8 +194,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                     : `error: ${errorKind(error)}`;
                 return log(start, ended).pipe(
                   Effect.zipRight(
-                    writeFrame(
-                      socket,
+                    sendFrame(
                       error instanceof SandboxGoneError
                         ? { gone: error.id }
                         : error instanceof LinkDroppedError
@@ -262,7 +258,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
             if ("info" in request) {
               mode = "plain";
               closeSocket = true;
-              yield* writeFrame(socket, encodeReply({ info: connection.info }));
+              yield* sendFrame(encodeReply({ info: connection.info }));
               const now = yield* Clock.currentTimeMillis;
               yield* writeKeeperLog(paths.log, {
                 at: new Date(now),
@@ -351,7 +347,7 @@ export const runKeeper = Effect.fn("keeper.runKeeper")(function* (
                       Effect.sync(() => {
                         closeSocket = true;
                       }),
-                      writeFrame(socket, {
+                      sendFrame({
                         fail: causeText(error),
                       }),
                     )

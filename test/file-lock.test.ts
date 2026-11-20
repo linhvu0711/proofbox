@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
@@ -6,7 +12,7 @@ import { it } from "@effect/vitest";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect } from "vitest";
 import { withFileLock } from "../src/file-lock.ts";
-import { trackTempDir } from "./support/cli.ts";
+import { lockOfDeadProcess, trackTempDir } from "./support/cli.ts";
 
 const tempDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "proofbox-lock-"));
@@ -82,6 +88,91 @@ describe("file-lock", () => {
       expect(error).toBe("busy");
       expect(existsSync(lock)).toBe(true);
     }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live(
+    "a lock whose owner is gone waits while another taker reclaims it",
+    () =>
+      Effect.gen(function* () {
+        // Given: a lock a killed proofbox left, and a reclaim guard another
+        // taker holds right now
+        const lock = join(tempDir(), "x.lock");
+        lockOfDeadProcess(lock);
+        mkdirSync(`${lock}.reclaim`);
+        // When
+        const error = yield* withFileLock({
+          dir: lock,
+          wait: "300 millis",
+          busy: () => "busy",
+          failed: () => "failed",
+        })(Effect.void).pipe(Effect.flip);
+        // Then
+        expect(error).toBe("busy");
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("a reclaim guard a killed taker left is cleared", () =>
+    Effect.gen(function* () {
+      // Given: a lock a killed proofbox left, and a reclaim guard a minute
+      // old
+      const lock = join(tempDir(), "x.lock");
+      lockOfDeadProcess(lock);
+      const guard = `${lock}.reclaim`;
+      mkdirSync(guard);
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(guard, old, old);
+      // When
+      const ran = yield* withFileLock({
+        dir: lock,
+        wait: "1 second",
+        busy: () => "busy",
+        failed: () => "failed",
+      })(Effect.succeed("ran"));
+      // Then
+      expect({ ran, held: existsSync(lock), guard: existsSync(guard) }).toEqual(
+        { ran: "ran", held: false, guard: false },
+      );
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live(
+    "one lock effect run twice at once holds the lock one at a time",
+    () =>
+      Effect.gen(function* () {
+        // Given: one locked effect, built once, and work that counts who is
+        // inside at once
+        const lock = join(tempDir(), "x.lock");
+        let inside = 0;
+        let most = 0;
+        let ran = 0;
+        const locked = withFileLock({
+          dir: lock,
+          wait: "5 seconds",
+          busy: () => "busy",
+          failed: () => "failed",
+        })(
+          Effect.sync(() => {
+            inside += 1;
+            most = Math.max(most, inside);
+          }).pipe(
+            Effect.zipRight(Effect.sleep("50 millis")),
+            Effect.zipRight(
+              Effect.sync(() => {
+                inside -= 1;
+                ran += 1;
+              }),
+            ),
+          ),
+        );
+        // When: the same effect runs twice at once
+        yield* Effect.all([locked, locked], { concurrency: "unbounded" });
+        // Then
+        expect({ most, ran, held: existsSync(lock) }).toEqual({
+          most: 1,
+          ran: 2,
+          held: false,
+        });
+      }).pipe(Effect.provide(NodeContext.layer)),
   );
 
   it.live("two takers of one free lock hold it one at a time", () =>
