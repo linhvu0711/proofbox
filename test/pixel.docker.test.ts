@@ -366,8 +366,11 @@ describe("Pixel actions", () => {
     expect(result.exitCode).toBe(0);
     const { count, gap } = letterGap(await readXev(env, id));
     expect(count).toBe(59);
+    // Each letter adds its own send work on top of the 12 ms wait, so the
+    // gap runs over 12, never under. CI measured 13.2 (#263); 15 still
+    // fails on the 40 ms pace.
     expect(gap).toBeGreaterThanOrEqual(10.8);
-    expect(gap).toBeLessThanOrEqual(13.2);
+    expect(gap).toBeLessThanOrEqual(15);
   });
 
   it("type with --letter 40ms waits 40 ms between letters", async () => {

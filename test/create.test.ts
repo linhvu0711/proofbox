@@ -77,7 +77,7 @@ describe("create", () => {
         "--setup",
         script,
       ],
-      { set: { ...keeperCannotStart(env), FORCE_COLOR: "1" } },
+      { set: { ...keeperCannotStart, FORCE_COLOR: "1" } },
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/^fake:[a-z0-9]{6}\n$/);
@@ -93,7 +93,7 @@ describe("create", () => {
   it("a create with no Keeper prints only its own Keeper line", async () => {
     // Given: a Work folder and Setup script with a Keeper that cannot start
     const env = makeEnv();
-    const set = keeperCannotStart(env);
+    const set = keeperCannotStart;
     const folder = makeGitFolder({ committed: { "a.txt": "a\n" } });
     const script = setupScript("echo hi\n");
     // When

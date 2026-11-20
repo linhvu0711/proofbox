@@ -110,7 +110,7 @@ describe("upload", () => {
   it("an upload with no Keeper warns once and still sends the files", async () => {
     // Given: a Sandbox whose Keeper cannot start and a one-file git folder
     const env = makeEnv();
-    const set = keeperCannotStart(env);
+    const set = keeperCannotStart;
     const created = await runCli(
       env,
       ["create", "--os", "linux", "--provider", "fake"],
