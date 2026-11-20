@@ -8,6 +8,7 @@ import {
   RecordingRunningError,
   StopFlagsError,
 } from "../errors.ts";
+import { formatMb } from "../format-bytes.ts";
 import {
   fetchHelper,
   type HelperLimit,
@@ -31,7 +32,6 @@ import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
 import { Style } from "../style.ts";
-import { formatMb } from "../upload/max-size.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",

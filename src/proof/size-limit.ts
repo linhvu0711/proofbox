@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { ProofTooBigError } from "../errors.ts";
+import { formatMb } from "../format-bytes.ts";
 import { Progress } from "../progress.ts";
-import { formatMb } from "../upload/max-size.ts";
 
 export const PROOF_SIZE_DEFAULT = 10_000_000;
 

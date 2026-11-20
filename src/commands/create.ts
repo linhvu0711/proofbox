@@ -31,7 +31,7 @@ import { setupEnvNames } from "../setup-env.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
 import { Style } from "../style.ts";
-import { MAX_SIZE_DEFAULT, parseMaxSize } from "../upload/max-size.ts";
+import { MAX_SIZE_DEFAULT } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
 export const createSandbox = Effect.fn("create.createSandbox")(
@@ -43,7 +43,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     readonly work?: string | undefined;
     readonly setup?: string | undefined;
     readonly secretsFile?: string | undefined;
-    readonly maxSize?: string | undefined;
+    readonly maxSize?: number | undefined;
     readonly size?: string | undefined;
   }) {
     const fs = yield* FileSystem.FileSystem;
@@ -85,10 +85,6 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     if (setupPath !== undefined && options.work === undefined) {
       return yield* new SetupNeedsWorkError();
     }
-    const maxSize =
-      options.maxSize === undefined
-        ? undefined
-        : yield* parseMaxSize(options.maxSize);
     const script =
       setupPath === undefined
         ? undefined
@@ -103,7 +99,7 @@ export const createSandbox = Effect.fn("create.createSandbox")(
                 ),
               ),
             );
-    const workLimit = maxSize ?? MAX_SIZE_DEFAULT;
+    const workLimit = options.maxSize ?? MAX_SIZE_DEFAULT;
     const secrets =
       options.secretsFile === undefined
         ? undefined

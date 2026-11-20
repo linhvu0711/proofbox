@@ -1,8 +1,8 @@
 import type { PlatformError } from "@effect/platform/Error";
 import { Data, type Duration } from "effect";
+import { formatMb } from "./format-bytes.ts";
 import { formatWait } from "./format-time.ts";
 import type { Os } from "./provider.ts";
-import { formatMb } from "./upload/max-size.ts";
 
 // The text of a file failure for a ProviderError reason: the Node message,
 // as it read before file access went through `FileSystem`, whose own
@@ -147,14 +147,6 @@ export class SecretsSendFailedError extends Data.TaggedError(
 }> {
   get message() {
     return `Sending Secrets to ${this.id} failed: sh exited ${this.code}. This Sandbox was deleted; create again.`;
-  }
-}
-
-export class BadMaxSizeError extends Data.TaggedError("BadMaxSizeError")<{
-  readonly value: string;
-}> {
-  get message() {
-    return `Bad --max-size "${this.value}": use a whole number with MB or GB, for example 800MB`;
   }
 }
 

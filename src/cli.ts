@@ -57,6 +57,16 @@ const workMaxSize = Options.text("max-size").pipe(
   Options.optional,
 );
 
+// --max-size on create, upload, and record stop: the bytes, or undefined
+// for the command's own default.
+const readMaxSize = Effect.fn("cli.readMaxSize")(
+  (value: Option.Option<string>) =>
+    Option.match(value, {
+      onNone: () => Effect.succeed(undefined),
+      onSome: (text) => parseMaxSize(text),
+    }),
+);
+
 const makeCommands = (providers: ReadonlyArray<string>) => {
   const providerArg = Args.choice(
     providers.map((name): [string, string] => [name, name]),
@@ -124,16 +134,18 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       maxSize,
       size,
     }) =>
-      createSandbox({
-        os,
-        provider: Option.getOrUndefined(provider),
-        idle: Option.getOrUndefined(idle),
-        maxLife: Option.getOrUndefined(maxLife),
-        work: Option.getOrUndefined(work),
-        setup: Option.getOrUndefined(setup),
-        secretsFile: Option.getOrUndefined(secretsFile),
-        maxSize: Option.getOrUndefined(maxSize),
-        size: Option.getOrUndefined(size),
+      Effect.gen(function* () {
+        yield* createSandbox({
+          os,
+          provider: Option.getOrUndefined(provider),
+          idle: Option.getOrUndefined(idle),
+          maxLife: Option.getOrUndefined(maxLife),
+          work: Option.getOrUndefined(work),
+          setup: Option.getOrUndefined(setup),
+          secretsFile: Option.getOrUndefined(secretsFile),
+          maxSize: yield* readMaxSize(maxSize),
+          size: Option.getOrUndefined(size),
+        });
       }),
   ).pipe(Command.withDescription("create a Sandbox and print its Sandbox id"));
 
@@ -587,15 +599,11 @@ const recordStop = Command.make(
   },
   ({ id, out, discard, maxSize, json }) =>
     Effect.gen(function* () {
-      const limit = yield* maxSize.pipe(
-        Option.map((value) => parseMaxSize(value)),
-        Option.getOrElse(() => Effect.succeed(undefined)),
-      );
       yield* stopRecording({
         id,
         out: Option.getOrUndefined(out),
         discard,
-        maxSize: limit,
+        maxSize: yield* readMaxSize(maxSize),
         json,
       });
     }),
@@ -627,11 +635,11 @@ const upload = Command.make(
   },
   ({ id, folder, maxSize }) =>
     Effect.gen(function* () {
-      const limit = yield* maxSize.pipe(
-        Option.map((value) => parseMaxSize(value)),
-        Option.getOrElse(() => Effect.succeed(undefined)),
-      );
-      yield* uploadWorkFolder({ id, folder, maxSize: limit });
+      yield* uploadWorkFolder({
+        id,
+        folder,
+        maxSize: yield* readMaxSize(maxSize),
+      });
     }),
 ).pipe(
   Command.withDescription(

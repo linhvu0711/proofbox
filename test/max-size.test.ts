@@ -14,9 +14,11 @@ describe("max-size", () => {
   it.effect("a bad --max-size is refused", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(parseMaxSize("1TB"));
-      expect(error.message).toBe(
-        'Bad --max-size "1TB": use a whole number with MB or GB, for example 800MB',
-      );
+      expect({ tag: error._tag, message: error.message }).toEqual({
+        tag: "BadSpanError",
+        message:
+          'Bad --max-size "1TB": use a whole number with MB or GB, for example 800MB',
+      });
     }),
   );
 
