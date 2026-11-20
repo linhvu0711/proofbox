@@ -34,7 +34,6 @@ import { readSecretsFile, sendSecrets } from "../secrets.ts";
 import { setupEnvNames } from "../setup-env.ts";
 import { runSetupScript } from "../setup-script.ts";
 import { formatSize, parseSize } from "../size.ts";
-import { Style } from "../style.ts";
 import { MAX_SIZE_DEFAULT } from "../upload/max-size.ts";
 import { readWorkFolder, sendWorkFolder } from "./upload.ts";
 
@@ -222,12 +221,6 @@ export const createSandbox = Effect.fn("create.createSandbox")(
       ),
     );
     yield* output.out(`${id}\n`);
-    // The hints are for a person only, and the end time costs a Provider
-    // call, so a program pays for none of it.
-    const style = yield* Style;
-    if (!style.look) {
-      return;
-    }
     yield* progress.hint(`run a command: proofbox exec ${id} -- <command>`);
     if (liveViewOn(provider, options.os) !== undefined) {
       yield* progress.hint(`watch the screen: proofbox live ${id}`);
@@ -238,13 +231,17 @@ export const createSandbox = Effect.fn("create.createSandbox")(
     // out only that time.
     const now = new Date(yield* Clock.currentTimeMillis);
     const latest = formatClock(info.maxLifeAt, now);
-    const current = yield* provider.get(sandbox).pipe(Effect.option);
     yield* progress.hint(
-      Option.match(current, {
-        onNone: () => `ends at ${latest} at the latest`,
-        onSome: (held) =>
-          `ends at ${formatClock(held.deadline, now)} if idle, at ${latest} at the latest`,
-      }),
+      provider.get(sandbox).pipe(
+        Effect.option,
+        Effect.map((current) =>
+          Option.match(current, {
+            onNone: () => `ends at ${latest} at the latest`,
+            onSome: (held) =>
+              `ends at ${formatClock(held.deadline, now)} if idle, at ${latest} at the latest`,
+          }),
+        ),
+      ),
     );
   },
   Effect.scoped,

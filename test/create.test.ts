@@ -9,8 +9,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
+import { it as effectIt } from "@effect/vitest";
+import { ConfigProvider, Effect, Layer } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { createSandbox } from "../src/commands/create.ts";
+import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { formatClock } from "../src/format-time.ts";
+import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { Progress } from "../src/progress.ts";
+import { type Provider, Providers } from "../src/provider.ts";
+import { Style } from "../src/style.ts";
 import {
   cleanupEnvs,
   keeperCannotStart,
@@ -19,6 +28,9 @@ import {
   runCli,
   trackTempDir,
 } from "./support/cli.ts";
+import { nodeFs } from "./support/node-fs.ts";
+import { testOutput } from "./support/output.ts";
+import { providerEntry } from "./support/providers.ts";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -799,4 +811,60 @@ describe("create", () => {
       made: existsSync(env.root) ? readdirSync(env.root) : [],
     }).toEqual({ exitCode: 125, unknown: true, made: [] });
   });
+});
+
+describe("create hints", () => {
+  // A fake Provider that counts its `get` calls, the call the end-time hint
+  // makes; its own temp root and runtime dir, and no FORCE_COLOR.
+  const countedLayers = () => {
+    const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+    const runtime = mkdtempSync(
+      join(
+        process.platform === "darwin" ? "/tmp" : tmpdir(),
+        "proofbox-runtime-",
+      ),
+    );
+    trackTempDir(root);
+    trackTempDir(runtime);
+    const fake = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
+    const calls = { get: 0 };
+    const counted: Provider = {
+      ...fake,
+      get: (ref) =>
+        Effect.suspend(() => {
+          calls.get += 1;
+          return fake.get(ref);
+        }),
+    };
+    const providers = Layer.succeed(
+      Providers,
+      new Map([["fake", providerEntry(counted)]]),
+    );
+    const layers = Layer.mergeAll(
+      Layer.setConfigProvider(
+        ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
+      ),
+      NodeContext.layer,
+      testOutput,
+      providers,
+      KeeperClient.Direct.pipe(Layer.provide(providers)),
+      Progress.Default.pipe(Layer.provide(testOutput)),
+      Style.Default.pipe(Layer.provide(testOutput)),
+    );
+    return { calls, layers };
+  };
+
+  effectIt.effect(
+    "without a terminal create asks the Provider nothing for its hints",
+    () => {
+      // Given: a fake Provider that counts its get calls; no terminal
+      const { calls, layers } = countedLayers();
+      return Effect.gen(function* () {
+        // When
+        yield* createSandbox({ os: "linux", provider: "fake" });
+        // Then
+        expect(calls.get).toBe(0);
+      }).pipe(Effect.provide(layers));
+    },
+  );
 });

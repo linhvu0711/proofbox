@@ -116,11 +116,17 @@ export class Progress extends Effect.Service<Progress>()("proofbox/Progress", {
       style.look ? message(`${style.mark("ok")} ${text}\n`) : Effect.void,
     );
     // A hint: the next command to run. Only a person reads it, so it shows
-    // only with the look.
-    const hint = Effect.fn("Progress.hint")((text: string) =>
-      style.look
-        ? message(`${style.paint("dim", `  ${text}`)}\n`)
-        : Effect.void,
+    // only with the look. A hint that costs work, such as a Provider call,
+    // comes as an effect, and runs only then too.
+    const hint = Effect.fn("Progress.hint")(
+      <R = never>(text: string | Effect.Effect<string, never, R>) =>
+        style.look
+          ? (typeof text === "string" ? Effect.succeed(text) : text).pipe(
+              Effect.flatMap((line) =>
+                message(`${style.paint("dim", `  ${line}`)}\n`),
+              ),
+            )
+          : Effect.void,
     );
     return { step, warn, note, done, hint };
   }),
