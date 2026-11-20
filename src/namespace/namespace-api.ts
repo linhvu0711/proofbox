@@ -1,5 +1,4 @@
 import { timestampDate, timestampFromDate } from "@bufbuild/protobuf/wkt";
-import { Code, ConnectError } from "@connectrpc/connect";
 import {
   createComputeClient,
   createGlobalTransport,
@@ -32,6 +31,7 @@ import { formatSandboxId } from "../sandbox-id.ts";
 import {
   limitedTransport,
   type Meanings,
+  namespaceError,
   postJson,
   unreachable,
 } from "./namespace-request.ts";
@@ -191,58 +191,6 @@ const apiMeanings = (options?: {
   };
 };
 
-// Maps a failed Compute call to the proofbox error: `call` is the service
-// method name (`CreateInstance`), `host` the instance a `not_found` is
-// about.
-export const fromConnect =
-  (
-    call: string,
-    host?: { readonly region: string; readonly instanceId: string },
-    service = "ComputeService",
-    need?: string,
-  ) =>
-  (cause: unknown): ApiError => {
-    if (!(cause instanceof ConnectError)) {
-      return unreachable();
-    }
-    if (cause.code === Code.Unauthenticated) {
-      return new TokenRejectedError({ provider: "namespace" });
-    }
-    if (cause.code === Code.PermissionDenied) {
-      return new TokenPermissionError({
-        provider: "namespace",
-        call: `${service}.${call}`,
-        ...(need === undefined ? {} : { need }),
-      });
-    }
-    if (cause.code === Code.ResourceExhausted) {
-      const found = capacityClause.exec(cause.rawMessage);
-      return new ProviderLimitError({
-        provider: "namespace",
-        limit: found === null ? cause.rawMessage : found[0],
-      });
-    }
-    if (cause.code === Code.NotFound && host !== undefined) {
-      return new SandboxGoneError({
-        id: formatSandboxId({
-          provider: "ns",
-          region: host.region,
-          name: host.instanceId,
-        }),
-      });
-    }
-    if (
-      cause.code === Code.Unavailable ||
-      cause.code === Code.DeadlineExceeded
-    ) {
-      return unreachable();
-    }
-    return new ProviderError({
-      provider: "namespace",
-      reason: `${service}.${call} failed: ${cause.rawMessage}`,
-    });
-  };
-
 // The Compute API base URL for a region; `{region}` in
 // PROOFBOX_NAMESPACE_COMPUTE_URL is replaced by the region.
 const computeUrlTemplate = Config.string("PROOFBOX_NAMESPACE_COMPUTE_URL").pipe(
@@ -350,7 +298,7 @@ export const makeNamespaceApi = (deps: {
             labelFilter,
             paginationCursor: cursor,
           }),
-        catch: fromConnect("ListInstances"),
+        catch: namespaceError("ComputeService.ListInstances", apiMeanings()),
       });
       for (const instance of page.instances) {
         found.push({
@@ -391,7 +339,7 @@ export const makeNamespaceApi = (deps: {
     ).pipe(Effect.mapError(() => unreachable()));
     yield* Effect.tryPromise({
       try: () => client.compute.listInstances({ maxEntries: 1n }),
-      catch: fromConnect("ListInstances"),
+      catch: namespaceError("ComputeService.ListInstances", apiMeanings()),
     }).pipe(
       // checkToken's failure ways stay narrow; an odd answer reads as
       // unreachable.
@@ -439,7 +387,7 @@ export const makeNamespaceApi = (deps: {
           },
           documentedPurpose: "proofbox Sandbox",
         }),
-      catch: fromConnect("CreateInstance"),
+      catch: namespaceError("ComputeService.CreateInstance", apiMeanings()),
     });
     const instanceId = made.metadata?.instanceId;
     if (instanceId === undefined || instanceId === "") {
@@ -459,7 +407,10 @@ export const makeNamespaceApi = (deps: {
     const client = yield* loggedClient(region, false);
     yield* Effect.tryPromise({
       try: () => client.compute.waitInstanceSync({ instanceId }),
-      catch: fromConnect("WaitInstanceSync", { region, instanceId }),
+      catch: namespaceError(
+        "ComputeService.WaitInstanceSync",
+        apiMeanings({ host: { region, instanceId } }),
+      ),
     });
   });
 
@@ -470,7 +421,10 @@ export const makeNamespaceApi = (deps: {
     const client = yield* loggedClient(region);
     yield* Effect.tryPromise({
       try: () => client.compute.destroyInstance({ instanceId }),
-      catch: fromConnect("DestroyInstance", { region, instanceId }),
+      catch: namespaceError(
+        "ComputeService.DestroyInstance",
+        apiMeanings({ host: { region, instanceId } }),
+      ),
     });
   });
 
@@ -486,7 +440,10 @@ export const makeNamespaceApi = (deps: {
           instanceId,
           ensureMinimum: { seconds: BigInt(seconds), nanos: 0 },
         }),
-      catch: fromConnect("ExtendInstance", { region, instanceId }),
+      catch: namespaceError(
+        "ComputeService.ExtendInstance",
+        apiMeanings({ host: { region, instanceId } }),
+      ),
     });
   });
 
@@ -548,11 +505,9 @@ export const makeNamespaceApi = (deps: {
               nanos: 0,
             },
           }),
-        catch: fromConnect(
-          "UpdateImageLifetime",
-          undefined,
-          "ContainerRegistryService",
-          "update registry images",
+        catch: namespaceError(
+          "ContainerRegistryService.UpdateImageLifetime",
+          apiMeanings({ need: "update registry images" }),
         ),
       });
     },
@@ -588,25 +543,15 @@ export const makeNamespaceApi = (deps: {
           expiresAt: timestampFromDate(request.expiresAt),
           access: { grants: ROBOT_GRANTS },
         }),
-      catch: (cause) => {
-        if (
-          !(cause instanceof ConnectError) ||
-          cause.code === Code.Unavailable ||
-          cause.code === Code.DeadlineExceeded
-        ) {
-          return unreachable();
-        }
-        if (cause.code === Code.PermissionDenied) {
-          return new TokenDeniedError({ provider: "namespace" });
-        }
-        if (cause.code === Code.Unauthenticated) {
-          return new LoginExpiredError({ provider: "namespace" });
-        }
-        return new ProviderError({
-          provider: "namespace",
-          reason: `TokenService.CreateRevokableToken failed: ${cause.rawMessage}`,
-        });
-      },
+      catch: namespaceError<TokenDeniedError | LoginExpiredError>(
+        "TokenService.CreateRevokableToken",
+        {
+          permissionDenied: () =>
+            new TokenDeniedError({ provider: "namespace" }),
+          unauthenticated: () =>
+            new LoginExpiredError({ provider: "namespace" }),
+        },
+      ),
     });
     if (made.bearerToken === "") {
       return yield* new ProviderError({
