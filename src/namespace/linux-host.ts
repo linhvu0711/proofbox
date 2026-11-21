@@ -212,14 +212,23 @@ export const makeLinuxHost = (deps: {
   // A Snapshot without an expiry is kept forever; failing to set one only
   // costs registry space, so it warns and goes on.
   const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
-    snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) =>
-        deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Snapshot expiry (${error.message})`),
-      ),
-    );
+    deps
+      .dockerFor(link)
+      .repoDigest(tag)
+      .pipe(
+        Effect.flatMap((digest) =>
+          Option.match(snapshotRef(tag, digest), {
+            onNone: () =>
+              Effect.fail(
+                fail(`could not read the Snapshot digest: ${digest}`),
+              ),
+            onSome: (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+          }),
+        ),
+        Effect.catchAll((error) =>
+          progress.warn(`could not set the Snapshot expiry (${error.message})`),
+        ),
+      );
 
   // A Base image version without an expiry is kept forever too. Its index
   // and each child digest expire on their own; a Base the registry does

@@ -197,6 +197,8 @@ const fakeDocker = (options: {
         options.pushed?.push(tag);
       }),
     commit: () => Effect.void,
+    repoDigest: () =>
+      Effect.succeed("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12"),
     build: () => Effect.void,
     run: (args) =>
       Effect.sync(() => {
@@ -371,7 +373,7 @@ const snapshotRun =
       if (commandLine.startsWith("'docker' 'push'")) {
         return answers.push ?? done();
       }
-      if (commandLine.startsWith("docker image inspect")) {
+      if (commandLine.startsWith("'docker' 'image' 'inspect'")) {
         return done("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n");
       }
       if (commandLine.startsWith("docker buildx imagetools inspect")) {

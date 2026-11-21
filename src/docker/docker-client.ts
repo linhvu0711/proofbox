@@ -59,6 +59,8 @@ export interface DockerClient<E = never> {
     container: string,
     tag: string,
   ) => Effect.Effect<void, DockerError | E>;
+  // The image's first repo digest, as `<registry>/<repo>@sha256:<digest>`.
+  readonly repoDigest: (tag: string) => Effect.Effect<string, DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
     readonly tag: string;
@@ -271,6 +273,22 @@ export const makeDockerClient = <E = never>(
     }
   });
 
+  const repoDigest = Effect.fn("DockerClient.repoDigest")(function* (
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "image",
+      "inspect",
+      "--format",
+      "{{index .RepoDigests 0}}",
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      return yield* refuse("docker image inspect failed", result);
+    }
+    return result.stdout.trim();
+  });
+
   const build = Effect.fn("DockerClient.build")(function* (image: {
     readonly dir: string;
     readonly tag: string;
@@ -395,6 +413,7 @@ export const makeDockerClient = <E = never>(
     pull,
     push,
     commit,
+    repoDigest,
     build,
     run,
     execText,
