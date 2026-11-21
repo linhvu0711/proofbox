@@ -1,4 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandExecutor } from "@effect/platform";
@@ -120,28 +127,126 @@ describe("Docker client over a Namespace link", () => {
 });
 
 describe("Docker client build", () => {
+  // A host that reads the whole build input, then answers exit 0. It keeps
+  // the byte count it read in `received`.
+  const readingHost = (received: { bytes: number }): DockerHost => ({
+    provider: "docker",
+    run: () => Effect.die("not used"),
+    stream: (_argv, options) =>
+      Stream.unwrap(
+        Effect.as(
+          options?.stdin === undefined
+            ? Effect.void
+            : Stream.runForEach(options.stdin, (chunk) =>
+                Effect.sync(() => {
+                  received.bytes += chunk.length;
+                }),
+              ),
+          Stream.make({ _tag: "Exit" as const, code: 0 }),
+        ),
+      ),
+    unavailable: new ProviderUnavailableError({
+      provider: "docker",
+      reason: "not used",
+    }),
+  });
+
+  it.live("a build with TAPE set sends the folder to Docker", () => {
+    const parent = mkdtempSync(join(tmpdir(), "proofbox-build-"));
+    trackTempDir(parent);
+    const folder = join(parent, "context");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "Dockerfile"), "FROM scratch\n");
+    const archive = join(parent, "work.tar");
+    writeFileSync(archive, "keep");
+    const received = { bytes: 0 };
+    const tape = process.env.TAPE;
+    return Effect.gen(function* () {
+      // Given: TAPE names an archive file
+      process.env.TAPE = archive;
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        readingHost(received),
+      );
+      // When
+      yield* docker.build({
+        dir: folder,
+        tag: "proofbox-test:1",
+        buildArgs: {},
+      });
+      // Then
+      expect({
+        sent: received.bytes > 0,
+        archive: readFileSync(archive, "utf8"),
+      }).toEqual({ sent: true, archive: "keep" });
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (tape === undefined) {
+            delete process.env.TAPE;
+          } else {
+            process.env.TAPE = tape;
+          }
+        }),
+      ),
+      Effect.provide(NodeContext.layer),
+    );
+  });
+
+  it.live(
+    "a build whose folder tar writes many errors reports the tar",
+    () => {
+      const parent = mkdtempSync(join(tmpdir(), "proofbox-build-"));
+      trackTempDir(parent);
+      const folder = join(parent, "context");
+      mkdirSync(folder);
+      // Each unreadable folder is one tar error line; 3000 lines are more
+      // than a pipe holds.
+      const locked = Array.from({ length: 3000 }, (_, index) =>
+        join(folder, String(index).padStart(200, "d")),
+      );
+      for (const path of locked) {
+        mkdirSync(path);
+        chmodSync(path, 0o000);
+      }
+      return Effect.gen(function* () {
+        // Given
+        const docker = makeDockerClient(
+          yield* CommandExecutor.CommandExecutor,
+          readingHost({ bytes: 0 }),
+        );
+        // When
+        const error = yield* Effect.flip(
+          docker.build({ dir: folder, tag: "proofbox-test:1", buildArgs: {} }),
+        );
+        // Then
+        expect({
+          _tag: error._tag,
+          packs:
+            error._tag === "ProviderError" &&
+            error.reason.startsWith(
+              `could not pack the build folder ${folder}: tar exited`,
+            ),
+        }).toEqual({ _tag: "ProviderError", packs: true });
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            for (const path of locked) {
+              chmodSync(path, 0o700);
+            }
+          }),
+        ),
+        Effect.provide(NodeContext.layer),
+      );
+    },
+    20_000,
+  );
+
   it.live("a build whose folder tar fails reports the tar", () => {
     const parent = mkdtempSync(join(tmpdir(), "proofbox-build-"));
     trackTempDir(parent);
     const folder = join(parent, "missing");
-    // A host that reads the whole build input, then answers exit 0.
-    const host: DockerHost = {
-      provider: "docker",
-      run: () => Effect.die("not used"),
-      stream: (_argv, options) =>
-        Stream.unwrap(
-          Effect.as(
-            options?.stdin === undefined
-              ? Effect.void
-              : Stream.runDrain(options.stdin),
-            Stream.make({ _tag: "Exit" as const, code: 0 }),
-          ),
-        ),
-      unavailable: new ProviderUnavailableError({
-        provider: "docker",
-        reason: "not used",
-      }),
-    };
+    const host = readingHost({ bytes: 0 });
     return Effect.gen(function* () {
       // Given
       const docker = makeDockerClient(

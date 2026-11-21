@@ -157,7 +157,7 @@ export const makeDockerClient = <E = never>(
     Stream.unwrapScoped(
       Effect.gen(function* () {
         const process = yield* Command.start(
-          Command.make("tar", "-C", dir, "-c", "."),
+          Command.make("tar", "-C", dir, "-c", "-f", "-", "."),
         ).pipe(
           Effect.provideService(CommandExecutor.CommandExecutor, executor),
           Effect.mapError((error) => fail(error.message)),
@@ -174,9 +174,17 @@ export const makeDockerClient = <E = never>(
                 ),
           ),
         );
+        // tar blocks once its stderr pipe is full, so stderr is read too.
+        const drained = process.stderr.pipe(
+          Stream.mapError((error) => fail(causeText(error))),
+          Stream.drain,
+        );
         return Stream.concat(
-          process.stdout.pipe(
-            Stream.mapError((error) => fail(causeText(error))),
+          Stream.merge(
+            process.stdout.pipe(
+              Stream.mapError((error) => fail(causeText(error))),
+            ),
+            drained,
           ),
           exited,
         );
