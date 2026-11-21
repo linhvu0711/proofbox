@@ -8,8 +8,8 @@ import {
 } from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
 import {
+  createDockerSandbox,
   LINUX_CHECKS,
-  makeDockerProvider,
   sandboxInfoFromLabels,
 } from "../docker/docker-provider.ts";
 import {
@@ -342,31 +342,35 @@ export const makeLinuxHost = (deps: {
       req.snapshot === undefined
         ? undefined
         : yield* pullStart(link, registry, req.snapshot, progress);
-    const inner = makeDockerProvider({
-      client: deps.dockerFor(link),
-      fs: deps.fs,
-      imageTag: snapshotImage ?? baseTag,
-      registry: true,
-      memoryReserveGb: MEMORY_RESERVE_GB,
-      // Publish the VNC port for the Live view; the host has only a
-      // private address, and the SSH gateway forwards onto that
-      // address, so the publish must cover it — loopback binds are
-      // unreachable.
-      runArgs: [
-        "-p",
-        "5900:5900",
-        ...(snapshotImage === undefined
-          ? []
-          : ["--label", `proofbox.snapshot=${req.snapshot}`]),
-      ],
-      brand: brandFor(ref),
-    });
-    const info = yield* inner.create({
-      ...req,
-      size,
-      name: ref.name.slice(0, 6),
-      maxLifeAt: made.maxLifeAt,
-    });
+    const info = yield* createDockerSandbox(
+      {
+        client: deps.dockerFor(link),
+        fs: deps.fs,
+        brand: brandFor(ref),
+        imageTag: snapshotImage ?? baseTag,
+        registry: true,
+        memoryReserveGb: MEMORY_RESERVE_GB,
+        // Publish the VNC port for the Live view; the host has only a
+        // private address, and the SSH gateway forwards onto that
+        // address, so the publish must cover it — loopback binds are
+        // unreachable.
+        runArgs: [
+          "-p",
+          "5900:5900",
+          ...(snapshotImage === undefined
+            ? []
+            : ["--label", `proofbox.snapshot=${req.snapshot}`]),
+        ],
+      },
+      {
+        os: req.os,
+        idle: req.idle,
+        maxLife: req.maxLife,
+        size,
+        name: ref.name.slice(0, 6),
+        maxLifeAt: made.maxLifeAt,
+      },
+    );
     // A Snapshot's Fingerprint holds the Base version, so this is its
     // Base too.
     yield* progress.step(
