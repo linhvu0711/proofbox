@@ -37,6 +37,7 @@ import {
 import {
   LinkDroppedError,
   NotLoggedInError,
+  ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
@@ -165,9 +166,13 @@ const fakeDocker = (options: {
   readonly tokenService?: number;
   // Collects the image of every `docker run`, its last argument.
   readonly images?: Array<string>;
-  // Whether the host already has the image, and whether a pull finds it.
+  // What the registry holds for the Base tag: its index and child digests.
+  readonly registryDigests?: ReadonlyArray<string> | "missing";
+  // Whether the host already has the image, and what a pull answers.
   readonly exists?: boolean;
-  readonly pulled?: boolean;
+  readonly pull?: (
+    tag: string,
+  ) => Effect.Effect<"pulled" | "missing", ProviderError>;
   // Collect the tag of every pull and every push.
   readonly pulls?: Array<string>;
   readonly pushed?: Array<string>;
@@ -185,14 +190,25 @@ const fakeDocker = (options: {
     serverArch: Effect.succeed("amd64"),
     imageExists: () => Effect.succeed(options.exists ?? true),
     pull: (tag) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         options.pulls?.push(tag);
-        return options.pulled ?? true;
+        return options.pull?.(tag) ?? Effect.succeed("pulled" as const);
       }),
     push: (tag) =>
       Effect.sync(() => {
         options.pushed?.push(tag);
       }),
+    commit: () => Effect.void,
+    repoDigest: () =>
+      Effect.succeed("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12"),
+    registryDigests: () =>
+      Effect.succeed(
+        options.registryDigests ?? [
+          "sha256:ba5e",
+          "sha256:cd34",
+          "sha256:ef56",
+        ],
+      ),
     build: () => Effect.void,
     run: (args) =>
       Effect.sync(() => {
@@ -292,13 +308,6 @@ interface RunResult {
 
 const done = (stdout = ""): RunResult => ({ exitCode: 0, stdout, stderr: "" });
 
-// The Base tag's digests as `docker buildx imagetools inspect` prints
-// them: the index and its 2 children.
-const BASE_INDEX = JSON.stringify({
-  digest: "sha256:ba5e",
-  manifests: [{ digest: "sha256:cd34" }, { digest: "sha256:ef56" }],
-});
-
 const BASE_EXPIRY = [
   "ensureImageExpiry proofbox-base-linux@sha256:ba5e 336",
   "ensureImageExpiry proofbox-base-linux@sha256:cd34 336",
@@ -311,9 +320,6 @@ const SSHD_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n";
 const tenantRun = (commandLine: string) => {
   if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
     return Effect.succeed(done(SSHD_HOST_KEY));
-  }
-  if (commandLine.startsWith("docker buildx imagetools inspect")) {
-    return Effect.succeed(done(BASE_INDEX));
   }
   return Effect.succeed(
     done(commandLine.includes("metadata.json") ? "tenant_x\n" : ""),
@@ -349,9 +355,8 @@ const listRun = (commandLine: string) => {
 const snapshotRun =
   (
     answers: {
-      readonly pull?: RunResult;
+      readonly commit?: RunResult;
       readonly push?: RunResult;
-      readonly base?: RunResult;
     },
     ran?: Array<string>,
   ) =>
@@ -361,17 +366,14 @@ const snapshotRun =
       if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
         return done(SSHD_HOST_KEY);
       }
-      if (commandLine.startsWith("docker pull")) {
-        return answers.pull ?? done();
+      if (commandLine.startsWith("'docker' 'commit'")) {
+        return answers.commit ?? done();
       }
-      if (commandLine.startsWith("docker commit")) {
+      if (commandLine.startsWith("'docker' 'push'")) {
         return answers.push ?? done();
       }
-      if (commandLine.startsWith("docker image inspect")) {
+      if (commandLine.startsWith("'docker' 'image' 'inspect'")) {
         return done("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n");
-      }
-      if (commandLine.startsWith("docker buildx imagetools inspect")) {
-        return answers.base ?? done(BASE_INDEX);
       }
       return done(commandLine.includes("metadata.json") ? "tenant_x\n" : "");
     });
@@ -489,11 +491,8 @@ const prepConfig = (prepTimeout?: string, createTimeout?: string) => {
   );
 };
 
-// A link whose `docker pull` never ends, as a stalled registry pull would.
-const stalledPullRun: Link["run"] = (commandLine) =>
-  commandLine.startsWith("docker pull")
-    ? Effect.never
-    : snapshotRun({})(commandLine);
+// A Docker client whose pull never ends, as a stalled registry pull would.
+const stalledPull = () => fakeDocker({ pull: () => Effect.never });
 
 // A short real pause, so the create's file and ssh-keygen work can finish
 // between two TestClock moves.
@@ -993,7 +992,7 @@ describe("Namespace Provider", () => {
             "ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336",
             ...BASE_EXPIRY,
           ],
-          pulls: [],
+          pulls: ["nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e"],
         });
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
@@ -1006,14 +1005,8 @@ describe("Namespace Provider", () => {
       const images: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ images }),
-        snapshotRun({
-          pull: {
-            exitCode: 1,
-            stdout: "",
-            stderr: "Error response from daemon: manifest unknown\n",
-          },
-        }),
+        fakeDocker({ images, pull: () => Effect.succeed("missing" as const) }),
+        snapshotRun({}),
       );
       // When
       const info = yield* provider.create({
@@ -1046,7 +1039,11 @@ describe("Namespace Provider", () => {
       const pushed: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ exists: false, pulled: false, pushed }),
+        fakeDocker({
+          exists: false,
+          pull: () => Effect.succeed("missing" as const),
+          pushed,
+        }),
       );
       // When
       yield* provider.create({
@@ -1100,15 +1097,8 @@ describe("Namespace Provider", () => {
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const provider = makeProvider(
           calls,
-          fakeDocker({}),
-          snapshotRun({
-            base: {
-              exitCode: 1,
-              stdout: "",
-              stderr:
-                "ERROR: nscr.io/tenant_x/proofbox-base-linux:0123456789ab: not found\n",
-            },
-          }),
+          fakeDocker({ registryDigests: "missing" }),
+          snapshotRun({}),
         );
         // When
         yield* provider.create({
@@ -1209,10 +1199,17 @@ describe("Namespace Provider", () => {
       const images: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ images }),
-        snapshotRun({
-          pull: { exitCode: 1, stdout: "", stderr: "dial tcp: i/o timeout\n" },
+        fakeDocker({
+          images,
+          pull: () =>
+            Effect.fail(
+              new ProviderError({
+                provider: "namespace",
+                reason: "docker pull failed: dial tcp: i/o timeout",
+              }),
+            ),
         }),
+        snapshotRun({}),
       );
       // When
       yield* provider.create({
@@ -1318,9 +1315,9 @@ describe("Namespace Provider", () => {
     "a Linux create whose docker pull never ends stops at the prep limit and deletes the host",
     () =>
       Effect.gen(function* () {
-        // Given: a link whose `docker pull` never ends; the prep limit is 1s
+        // Given: a Docker pull that never ends; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
         // When
         const fiber = yield* Effect.fork(
           provider.create({
@@ -1450,7 +1447,7 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: a stalled `docker pull`, and a first delete that never ends
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}), {
           destroyStalls: (n) => n === 1,
         });
         const fiber = yield* Effect.fork(
@@ -1480,9 +1477,9 @@ describe("Namespace Provider", () => {
 
   it.effect("a create stopped by the prep limit extends the host no more", () =>
     Effect.gen(function* () {
-      // Given: a link whose `docker pull` never ends; the prep limit is 1s
+      // Given: a Docker pull that never ends; the prep limit is 1s
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
       const fiber = yield* Effect.fork(
         provider.create({
           os: "linux",
@@ -1506,9 +1503,9 @@ describe("Namespace Provider", () => {
 
   it.effect("with no prep setting a stalled create stops at 15 minutes", () =>
     Effect.gen(function* () {
-      // Given: a link whose `docker pull` never ends; no prep setting
+      // Given: a Docker pull that never ends; no prep setting
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
       // When
       const fiber = yield* Effect.fork(
         provider.create({
@@ -1538,7 +1535,7 @@ describe("Namespace Provider", () => {
       return Effect.gen(function* () {
         // Given: a stalled `docker pull`, and every delete fails as unreachable
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}), {
           destroyError: new ProviderUnavailableError({
             provider: "namespace",
             reason:
@@ -1579,11 +1576,7 @@ describe("Namespace Provider", () => {
         // Given: every command on the link succeeds
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const ran: Array<string> = [];
-        const provider = makeProvider(
-          calls,
-          fakeDocker({}),
-          snapshotRun({}, ran),
-        );
+        const provider = makeProvider(calls, undefined, snapshotRun({}, ran));
         const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
           Effect.orDie,
         );
@@ -1594,17 +1587,57 @@ describe("Namespace Provider", () => {
         );
         // Then
         expect({
-          pushed: ran.filter((line) => line.startsWith("docker commit")),
+          pushed: ran.filter(
+            (line) =>
+              line.startsWith("'docker' 'commit'") ||
+              line.startsWith("'docker' 'push'"),
+          ),
           expiry: (yield* Ref.get(calls)).filter((call) =>
             call.startsWith("ensureImageExpiry"),
           ),
         }).toEqual({
           pushed: [
-            "docker commit --pause=false proofbox-abc123 nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e && docker push nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
+            "'docker' 'commit' '--pause=false' 'proofbox-abc123' 'nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e'",
+            "'docker' 'push' 'nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e'",
           ],
           expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
         });
       }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a save whose Snapshot expiry call fails warns and still saves",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: the registry does not answer the Snapshot's expiry call
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, undefined, snapshotRun({}), {
+          expiryError: (image) =>
+            image === "proofbox-snapshot-linux@sha256:ab12"
+              ? new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason: "the Registry did not answer",
+                })
+              : undefined,
+        });
+        const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
+          Effect.orDie,
+        );
+        // When
+        yield* snapshots.save(
+          { name: "abc123def4567", region: "us" },
+          "22d0cf15eb8e",
+        );
+        // Then
+        expect(warnings).toEqual([
+          "could not set the Snapshot expiry (the Registry did not answer)",
+        ]);
+      }).pipe(
+        runtimeConfig("us:abc123def4567"),
+        Effect.provide(liveLayers(warnings)),
+      );
+    },
   );
 
   it.effect("a failed push fails save with the docker error", () =>
@@ -1613,7 +1646,7 @@ describe("Namespace Provider", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
-        fakeDocker({}),
+        undefined,
         snapshotRun({
           push: {
             exitCode: 1,
@@ -1638,6 +1671,49 @@ describe("Namespace Provider", () => {
       }).toEqual({
         message:
           "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
+        expiry: [],
+      });
+    }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
+  );
+
+  it.effect("a failed commit fails save with the docker commit error", () =>
+    Effect.gen(function* () {
+      // Given: Docker cannot commit the container
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: Array<string> = [];
+      const provider = makeProvider(
+        calls,
+        undefined,
+        snapshotRun(
+          {
+            commit: {
+              exitCode: 1,
+              stdout: "",
+              stderr:
+                "Error response from daemon: No such container: proofbox-abc123\n",
+            },
+          },
+          ran,
+        ),
+      );
+      const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
+        Effect.orDie,
+      );
+      // When
+      const error = yield* Effect.flip(
+        snapshots.save({ name: "abc123def4567", region: "us" }, "22d0cf15eb8e"),
+      );
+      // Then
+      expect({
+        message: error.message,
+        pushed: ran.filter((line) => line.startsWith("'docker' 'push'")),
+        expiry: (yield* Ref.get(calls)).filter((call) =>
+          call.startsWith("ensureImageExpiry"),
+        ),
+      }).toEqual({
+        message:
+          "Provider namespace failed: docker commit failed: Error response from daemon: No such container: proofbox-abc123",
+        pushed: [],
         expiry: [],
       });
     }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),

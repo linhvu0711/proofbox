@@ -33,12 +33,7 @@ import {
 } from "./namespace-host.ts";
 import { registryRefs } from "./registry-refs.ts";
 import { DEFAULT_LINUX_SIZE, LINUX_SIZES } from "./sizes.ts";
-import {
-  pullSnapshot,
-  pushSnapshot,
-  snapshotRef,
-  snapshotTag,
-} from "./snapshot-image.ts";
+import { snapshotRef, snapshotTag } from "./snapshot-image.ts";
 import type { Link } from "./ssh-link.ts";
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
@@ -217,34 +212,48 @@ export const makeLinuxHost = (deps: {
   // A Snapshot without an expiry is kept forever; failing to set one only
   // costs registry space, so it warns and goes on.
   const keepSnapshot = (link: Link, tag: string, progress: Progress) =>
-    snapshotRef(link, tag).pipe(
-      Effect.flatMap((ref) =>
-        deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Snapshot expiry (${error.message})`),
-      ),
-    );
+    deps
+      .dockerFor(link)
+      .repoDigest(tag)
+      .pipe(
+        Effect.flatMap((digest) =>
+          Option.match(snapshotRef(tag, digest), {
+            onNone: () =>
+              Effect.fail(
+                fail(`could not read the Snapshot digest: ${digest}`),
+              ),
+            onSome: (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+          }),
+        ),
+        Effect.catchAll((error) =>
+          progress.warn(`could not set the Snapshot expiry (${error.message})`),
+        ),
+      );
 
   // A Base image version without an expiry is kept forever too. Its index
   // and each child digest expire on their own; a Base the registry does
   // not hold is skipped. Every digest gets its call even when one fails,
   // so a child never expires before its index.
   const keepBase = (link: Link, tag: string, progress: Progress) =>
-    registryRefs(link, tag).pipe(
-      Effect.flatMap((refs) =>
-        refs === "missing"
-          ? Effect.void
-          : Effect.validateAll(
-              refs,
-              (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-              { discard: true },
-            ).pipe(Effect.mapError((errors) => errors[0])),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Base image expiry (${error.message})`),
-      ),
-    );
+    deps
+      .dockerFor(link)
+      .registryDigests(tag)
+      .pipe(
+        Effect.flatMap((digests) =>
+          digests === "missing"
+            ? Effect.void
+            : Effect.validateAll(
+                registryRefs(tag, digests),
+                (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+                { discard: true },
+              ).pipe(Effect.mapError((errors) => errors[0])),
+        ),
+        Effect.catchAll((error) =>
+          progress.warn(
+            `could not set the Base image expiry (${error.message})`,
+          ),
+        ),
+      );
 
   // The Snapshot's image tag, pulled onto the host; undefined when the
   // Sandbox must start from the Base image instead.
@@ -256,7 +265,7 @@ export const makeLinuxHost = (deps: {
   ) {
     const tag = snapshotTag(tenant, fingerprint);
     const pulled = yield* progress
-      .step("pulling the Snapshot", pullSnapshot(link, tag))
+      .step("pulling the Snapshot", deps.dockerFor(link).pull(tag))
       .pipe(
         Effect.catchAll((error) =>
           progress
@@ -391,8 +400,11 @@ export const makeLinuxHost = (deps: {
     fingerprint: string,
   ) {
     const progress = yield* Progress;
+    const docker = deps.dockerFor(link);
     const tag = snapshotTag(yield* readTenant(link), fingerprint);
-    yield* pushSnapshot(link, containerOf(ref), tag);
+    // The Setup script has ended by now, so nothing is mid-write.
+    yield* docker.commit(containerOf(ref), tag);
+    yield* docker.push(tag);
     yield* keepSnapshot(link, tag, progress);
   });
 

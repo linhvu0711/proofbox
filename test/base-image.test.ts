@@ -3,29 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Fiber, Layer, Ref, Stream, TestClock } from "effect";
+import { Chunk, Effect, Fiber, Layer, Ref, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { baseImageVersion, ensureBaseImage } from "../src/docker/base-image.ts";
 import type { DockerClient, DockerError } from "../src/docker/docker-client.ts";
+import { ProviderError } from "../src/errors.ts";
 import { Progress } from "../src/progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { unusedDockerClient } from "./support/docker-clients.ts";
 import { CapturedOutput, testOutput } from "./support/output.ts";
 
 const stubClient = (
   imageExists: boolean,
   build: Effect.Effect<void, DockerError>,
 ): DockerClient => ({
-  serverArch: Effect.die("unused"),
+  ...unusedDockerClient,
   imageExists: () => Effect.succeed(imageExists),
-  pull: () => Effect.succeed(false),
+  pull: () => Effect.succeed("missing" as const),
   push: () => Effect.void,
   build: () => build,
-  run: () => Effect.die("unused"),
-  execText: () => Effect.die("unused"),
-  execStream: () => Stream.die("unused"),
-  inspect: () => Effect.die("unused"),
-  listNames: Effect.die("unused"),
-  remove: () => Effect.die("unused"),
 });
 
 describe("Base image", () => {
@@ -119,7 +115,8 @@ describe("Base image", () => {
       // Given: no cached image and a registry pull that takes 20 seconds
       const client: DockerClient = {
         ...stubClient(false, Effect.void),
-        pull: () => Effect.sleep("20 seconds").pipe(Effect.as(true)),
+        pull: () =>
+          Effect.sleep("20 seconds").pipe(Effect.as("pulled" as const)),
       };
       const fiber = yield* Effect.fork(
         ensureBaseImage(
@@ -137,6 +134,48 @@ describe("Base image", () => {
       expect(err).toBe(
         "proofbox: pulling the Base image\nproofbox: still pulling the Base image (15 s)\n",
       );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          testOutput,
+          Progress.Default.pipe(Layer.provide(testOutput)),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("a failed Base image pull from the registry warns and builds", () =>
+    Effect.gen(function* () {
+      // Given: no cached image, and a registry pull that fails
+      const builds: Array<string> = [];
+      const client: DockerClient = {
+        ...stubClient(
+          false,
+          Effect.sync(() => {
+            builds.push("proofbox-base-linux:test");
+          }),
+        ),
+        pull: () =>
+          Effect.fail(
+            new ProviderError({
+              provider: "namespace",
+              reason: "docker pull failed: dial tcp: i/o timeout",
+            }),
+          ),
+      };
+      // When
+      yield* ensureBaseImage(
+        client,
+        { dir: "/unused", tag: "proofbox-base-linux:test", buildArgs: {} },
+        { registry: true },
+      );
+      // Then
+      const output = yield* CapturedOutput;
+      const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
+      expect({ err, builds: builds.length }).toEqual({
+        err: "proofbox: pulling the Base image\nproofbox: could not pull the Base image (Provider namespace failed: docker pull failed: dial tcp: i/o timeout); building it\nproofbox: building the Base image\n",
+        builds: 1,
+      });
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

@@ -1,5 +1,5 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import {
   captureCommand,
   collectEvents,
@@ -51,8 +51,21 @@ export interface DockerClient<E = never> {
   readonly imageExists: (
     tag: string,
   ) => Effect.Effect<boolean, DockerError | E>;
-  readonly pull: (tag: string) => Effect.Effect<boolean, DockerError | E>;
+  readonly pull: (
+    tag: string,
+  ) => Effect.Effect<"pulled" | "missing", DockerError | E>;
   readonly push: (tag: string) => Effect.Effect<void, DockerError | E>;
+  readonly commit: (
+    container: string,
+    tag: string,
+  ) => Effect.Effect<void, DockerError | E>;
+  // The image's first repo digest, as `<registry>/<repo>@sha256:<digest>`.
+  readonly repoDigest: (tag: string) => Effect.Effect<string, DockerError | E>;
+  // Every digest the registry holds for the tag, without a pull: the index
+  // first, then each child manifest.
+  readonly registryDigests: (
+    tag: string,
+  ) => Effect.Effect<ReadonlyArray<string> | "missing", DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
     readonly tag: string;
@@ -95,6 +108,19 @@ const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
   DOCKER_DOWN.some(
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
   );
+
+const Manifest = Schema.Struct({
+  digest: Schema.String,
+  manifests: Schema.optional(
+    Schema.Array(Schema.Struct({ digest: Schema.String })),
+  ),
+});
+
+// The registry holds no such tag.
+const isMissing = (result: { readonly stderr: string }) => {
+  const stderr = result.stderr.toLowerCase();
+  return stderr.includes("manifest unknown") || stderr.includes("not found");
+};
 
 // The `docker` on this machine.
 export const localDockerHost = (
@@ -215,19 +241,95 @@ export const makeDockerClient = <E = never>(
   const pull = Effect.fn("DockerClient.pull")(function* (tag: string) {
     const result = yield* capture(["pull", tag]);
     if (result.exitCode === 0) {
-      return true;
+      return "pulled" as const;
     }
     if (isDown(result)) {
       return yield* unavailable();
     }
-    return false;
+    if (isMissing(result)) {
+      return "missing" as const;
+    }
+    // stdout holds only the layer progress.
+    return yield* fail(`docker pull failed: ${tail(result.stderr, 20)}`);
   });
 
   const push = Effect.fn("DockerClient.push")(function* (tag: string) {
     const result = yield* capture(["push", tag]);
     if (result.exitCode !== 0) {
-      return yield* refuse("docker push failed", result);
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      // stdout holds only the layer progress.
+      return yield* fail(`docker push failed: ${tail(result.stderr, 20)}`);
     }
+  });
+
+  const commit = Effect.fn("DockerClient.commit")(function* (
+    container: string,
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "commit",
+      // No pause: a paused container fails every `docker exec`, and the
+      // Keeper reads that as a broken Sandbox and closes the link the
+      // commit runs on.
+      "--pause=false",
+      container,
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      return yield* fail(`docker commit failed: ${tail(result.stderr, 20)}`);
+    }
+  });
+
+  const repoDigest = Effect.fn("DockerClient.repoDigest")(function* (
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "image",
+      "inspect",
+      "--format",
+      "{{index .RepoDigests 0}}",
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      return yield* refuse("docker image inspect failed", result);
+    }
+    return result.stdout.trim();
+  });
+
+  const registryDigests = Effect.fn("DockerClient.registryDigests")(function* (
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "buildx",
+      "imagetools",
+      "inspect",
+      "--format",
+      "{{json .Manifest}}",
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      if (isMissing(result)) {
+        return "missing" as const;
+      }
+      return yield* refuse("docker buildx imagetools inspect failed", result);
+    }
+    const manifest = yield* Schema.decodeUnknown(Schema.parseJson(Manifest))(
+      result.stdout,
+    ).pipe(
+      Effect.mapError(() => fail(`could not read the image digests of ${tag}`)),
+    );
+    return [
+      manifest.digest,
+      ...(manifest.manifests ?? []).map((child) => child.digest),
+    ];
   });
 
   const build = Effect.fn("DockerClient.build")(function* (image: {
@@ -353,6 +455,9 @@ export const makeDockerClient = <E = never>(
     imageExists,
     pull,
     push,
+    commit,
+    repoDigest,
+    registryDigests,
     build,
     run,
     execText,
