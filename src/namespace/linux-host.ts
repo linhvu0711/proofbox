@@ -235,20 +235,25 @@ export const makeLinuxHost = (deps: {
   // not hold is skipped. Every digest gets its call even when one fails,
   // so a child never expires before its index.
   const keepBase = (link: Link, tag: string, progress: Progress) =>
-    registryRefs(link, tag).pipe(
-      Effect.flatMap((refs) =>
-        refs === "missing"
-          ? Effect.void
-          : Effect.validateAll(
-              refs,
-              (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
-              { discard: true },
-            ).pipe(Effect.mapError((errors) => errors[0])),
-      ),
-      Effect.catchAll((error) =>
-        progress.warn(`could not set the Base image expiry (${error.message})`),
-      ),
-    );
+    deps
+      .dockerFor(link)
+      .registryDigests(tag)
+      .pipe(
+        Effect.flatMap((digests) =>
+          digests === "missing"
+            ? Effect.void
+            : Effect.validateAll(
+                registryRefs(tag, digests),
+                (ref) => deps.api.ensureImageExpiry(ref, IMAGE_KEEP_HOURS),
+                { discard: true },
+              ).pipe(Effect.mapError((errors) => errors[0])),
+        ),
+        Effect.catchAll((error) =>
+          progress.warn(
+            `could not set the Base image expiry (${error.message})`,
+          ),
+        ),
+      );
 
   // The Snapshot's image tag, pulled onto the host; undefined when the
   // Sandbox must start from the Base image instead.

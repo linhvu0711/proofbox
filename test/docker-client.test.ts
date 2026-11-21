@@ -362,3 +362,76 @@ describe("Docker client pull", () => {
       }).pipe(Effect.provide(NodeContext.layer)),
   );
 });
+
+describe("Docker client registry digests", () => {
+  const Tag = "nscr.io/tenant_x/proofbox-base-linux:0123456789ab";
+
+  // The Base tag's digests as `docker buildx imagetools inspect` prints
+  // them: the index and its 2 children.
+  const BaseIndex = JSON.stringify({
+    digest: "sha256:ba5e",
+    manifests: [{ digest: "sha256:cd34" }, { digest: "sha256:ef56" }],
+  });
+
+  const answeringHost = (
+    result: DockerExecResult,
+    argvs: Array<ReadonlyArray<string>> = [],
+  ): DockerHost => ({
+    provider: "namespace",
+    run: (argv) =>
+      Effect.sync(() => {
+        argvs.push(argv);
+        return result;
+      }),
+    stream: () => Stream.die("not used"),
+    unavailable: new ProviderUnavailableError({
+      provider: "namespace",
+      reason: "not used",
+    }),
+  });
+
+  it.live("registry digests list the index and each child manifest", () =>
+    Effect.gen(function* () {
+      // Given: the registry holds the index and its 2 children
+      const argvs: Array<ReadonlyArray<string>> = [];
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        answeringHost({ exitCode: 0, stdout: BaseIndex, stderr: "" }, argvs),
+      );
+      // When
+      const digests = yield* docker.registryDigests(Tag);
+      // Then
+      expect({ digests, argvs }).toEqual({
+        digests: ["sha256:ba5e", "sha256:cd34", "sha256:ef56"],
+        argvs: [
+          [
+            "buildx",
+            "imagetools",
+            "inspect",
+            "--format",
+            "{{json .Manifest}}",
+            Tag,
+          ],
+        ],
+      });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("registry digests answer missing for a tag the registry lacks", () =>
+    Effect.gen(function* () {
+      // Given: the registry says the tag is not found
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        answeringHost({
+          exitCode: 1,
+          stdout: "",
+          stderr: `ERROR: ${Tag}: not found\n`,
+        }),
+      );
+      // When
+      const digests = yield* docker.registryDigests(Tag);
+      // Then
+      expect(digests).toBe("missing");
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+});

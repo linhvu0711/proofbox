@@ -1,5 +1,5 @@
 import { Command, CommandExecutor } from "@effect/platform";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import {
   captureCommand,
   collectEvents,
@@ -61,6 +61,11 @@ export interface DockerClient<E = never> {
   ) => Effect.Effect<void, DockerError | E>;
   // The image's first repo digest, as `<registry>/<repo>@sha256:<digest>`.
   readonly repoDigest: (tag: string) => Effect.Effect<string, DockerError | E>;
+  // Every digest the registry holds for the tag, without a pull: the index
+  // first, then each child manifest.
+  readonly registryDigests: (
+    tag: string,
+  ) => Effect.Effect<ReadonlyArray<string> | "missing", DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
     readonly tag: string;
@@ -103,6 +108,13 @@ const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
   DOCKER_DOWN.some(
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
   );
+
+const Manifest = Schema.Struct({
+  digest: Schema.String,
+  manifests: Schema.optional(
+    Schema.Array(Schema.Struct({ digest: Schema.String })),
+  ),
+});
 
 // The registry holds no such tag.
 const isMissing = (result: { readonly stderr: string }) => {
@@ -289,6 +301,37 @@ export const makeDockerClient = <E = never>(
     return result.stdout.trim();
   });
 
+  const registryDigests = Effect.fn("DockerClient.registryDigests")(function* (
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "buildx",
+      "imagetools",
+      "inspect",
+      "--format",
+      "{{json .Manifest}}",
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      if (isMissing(result)) {
+        return "missing" as const;
+      }
+      return yield* refuse("docker buildx imagetools inspect failed", result);
+    }
+    const manifest = yield* Schema.decodeUnknown(Schema.parseJson(Manifest))(
+      result.stdout,
+    ).pipe(
+      Effect.mapError(() => fail(`could not read the image digests of ${tag}`)),
+    );
+    return [
+      manifest.digest,
+      ...(manifest.manifests ?? []).map((child) => child.digest),
+    ];
+  });
+
   const build = Effect.fn("DockerClient.build")(function* (image: {
     readonly dir: string;
     readonly tag: string;
@@ -414,6 +457,7 @@ export const makeDockerClient = <E = never>(
     push,
     commit,
     repoDigest,
+    registryDigests,
     build,
     run,
     execText,

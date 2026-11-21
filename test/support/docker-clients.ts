@@ -13,6 +13,7 @@ export const unusedDockerClient: DockerClient = {
   push: () => Effect.die(why),
   commit: () => Effect.die(why),
   repoDigest: () => Effect.die(why),
+  registryDigests: () => Effect.die(why),
   build: () => Effect.die(why),
   run: () => Effect.die(why),
   execText: () => Effect.die(why),

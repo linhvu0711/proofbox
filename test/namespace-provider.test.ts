@@ -166,6 +166,8 @@ const fakeDocker = (options: {
   readonly tokenService?: number;
   // Collects the image of every `docker run`, its last argument.
   readonly images?: Array<string>;
+  // What the registry holds for the Base tag: its index and child digests.
+  readonly registryDigests?: ReadonlyArray<string> | "missing";
   // Whether the host already has the image, and what a pull answers.
   readonly exists?: boolean;
   readonly pull?: (
@@ -199,6 +201,14 @@ const fakeDocker = (options: {
     commit: () => Effect.void,
     repoDigest: () =>
       Effect.succeed("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12"),
+    registryDigests: () =>
+      Effect.succeed(
+        options.registryDigests ?? [
+          "sha256:ba5e",
+          "sha256:cd34",
+          "sha256:ef56",
+        ],
+      ),
     build: () => Effect.void,
     run: (args) =>
       Effect.sync(() => {
@@ -298,13 +308,6 @@ interface RunResult {
 
 const done = (stdout = ""): RunResult => ({ exitCode: 0, stdout, stderr: "" });
 
-// The Base tag's digests as `docker buildx imagetools inspect` prints
-// them: the index and its 2 children.
-const BASE_INDEX = JSON.stringify({
-  digest: "sha256:ba5e",
-  manifests: [{ digest: "sha256:cd34" }, { digest: "sha256:ef56" }],
-});
-
 const BASE_EXPIRY = [
   "ensureImageExpiry proofbox-base-linux@sha256:ba5e 336",
   "ensureImageExpiry proofbox-base-linux@sha256:cd34 336",
@@ -317,9 +320,6 @@ const SSHD_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeSshdHostKey\n";
 const tenantRun = (commandLine: string) => {
   if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
     return Effect.succeed(done(SSHD_HOST_KEY));
-  }
-  if (commandLine.startsWith("docker buildx imagetools inspect")) {
-    return Effect.succeed(done(BASE_INDEX));
   }
   return Effect.succeed(
     done(commandLine.includes("metadata.json") ? "tenant_x\n" : ""),
@@ -357,7 +357,6 @@ const snapshotRun =
     answers: {
       readonly commit?: RunResult;
       readonly push?: RunResult;
-      readonly base?: RunResult;
     },
     ran?: Array<string>,
   ) =>
@@ -375,9 +374,6 @@ const snapshotRun =
       }
       if (commandLine.startsWith("'docker' 'image' 'inspect'")) {
         return done("nscr.io/tenant_x/proofbox-snapshot-linux@sha256:ab12\n");
-      }
-      if (commandLine.startsWith("docker buildx imagetools inspect")) {
-        return answers.base ?? done(BASE_INDEX);
       }
       return done(commandLine.includes("metadata.json") ? "tenant_x\n" : "");
     });
@@ -1101,15 +1097,8 @@ describe("Namespace Provider", () => {
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const provider = makeProvider(
           calls,
-          fakeDocker({}),
-          snapshotRun({
-            base: {
-              exitCode: 1,
-              stdout: "",
-              stderr:
-                "ERROR: nscr.io/tenant_x/proofbox-base-linux:0123456789ab: not found\n",
-            },
-          }),
+          fakeDocker({ registryDigests: "missing" }),
+          snapshotRun({}),
         );
         // When
         yield* provider.create({
