@@ -1,6 +1,5 @@
 import { FileSystem } from "@effect/platform";
 import { Chunk, Duration, Effect, Option, Schedule, Stream } from "effect";
-import { parseDeadline } from "../deadline.ts";
 import {
   BASE_IMAGE_DIR,
   baseImageTag,
@@ -8,9 +7,9 @@ import {
 } from "../docker/base-image.ts";
 import type { DockerClient } from "../docker/docker-client.ts";
 import {
+  createDockerSandbox,
   LINUX_CHECKS,
-  makeDockerProvider,
-  sandboxInfoFromLabels,
+  readDockerSandbox,
 } from "../docker/docker-provider.ts";
 import {
   causeText,
@@ -87,74 +86,24 @@ export interface LinuxHost extends NamespaceHost {
 export const makeLinuxHost = (deps: {
   readonly api: NamespaceApi;
   readonly fs: FileSystem.FileSystem;
-  readonly dockerFor: (link: Link) => DockerClient;
+  readonly dockerFor: (link: Link) => DockerClient<SandboxGoneError>;
 }): LinuxHost => {
   const read = Effect.fn("linuxHost.read")(function* (
     link: Link,
     ref: SandboxRef,
   ) {
-    const container = containerOf(ref);
-    const result = yield* link.run(
-      `docker inspect --format '{{json .Config.Labels}}|{{.State.Running}}' ${container} && docker exec -u root ${container} cat /run/proofbox/deadline`,
-    );
-    const stderr = result.stderr.toLowerCase();
-    // The container can stop or be removed between inspect and the deadline
-    // read; either way the Sandbox is gone rather than malformed.
-    const removed =
-      stderr.includes("no such object") || stderr.includes("no such container");
-    const missing = removed || stderr.includes("is not running");
-    if (result.exitCode !== 0 || missing) {
-      if (removed) {
-        // No container and no mark: create never made the Sandbox.
-        const marked = yield* link.run(`test -e ${MADE_MARK}`);
-        return yield* marked.exitCode === 0 ? gone(ref) : gone(ref, true);
-      }
-      if (missing) {
-        return yield* gone(ref);
-      }
-      return yield* fail(
-        `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    const first = result.stdout.split("\n", 1)[0] ?? "";
-    const separator = first.lastIndexOf("|");
-    if (separator === -1) {
-      return yield* fail(
-        `could not read the Sandbox: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    if (first.slice(separator + 1).trim() !== "true") {
-      return yield* gone(ref);
-    }
-    const deadline = parseDeadline(
-      result.stdout.trim().split("\n").pop() ?? "",
-    );
-    if (Option.isNone(deadline)) {
-      return yield* fail(
-        `could not read the Deadline: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
-    const labels = yield* Effect.try({
-      try: () => JSON.parse(first.slice(0, separator)) as unknown,
-      catch: (cause) => fail(causeText(cause)),
-    });
-    const info = yield* sandboxInfoFromLabels(
+    const found = yield* readDockerSandbox(
+      deps.dockerFor(link),
       brandFor(ref),
       ref.name.slice(0, 6),
-      labels,
-      deadline.value,
+      ref.region,
     );
-    return new SandboxInfo({
-      name: ref.name,
-      region: ref.region,
-      os: info.os,
-      createdAt: info.createdAt,
-      idleSeconds: info.idleSeconds,
-      deadline: info.deadline,
-      maxLifeAt: info.maxLifeAt,
-      base: info.base,
-      size: info.size,
-    });
+    if (Option.isNone(found)) {
+      // No container and no mark: create never made the Sandbox.
+      const marked = yield* link.run(`test -e ${MADE_MARK}`);
+      return yield* marked.exitCode === 0 ? gone(ref) : gone(ref, true);
+    }
+    return new SandboxInfo({ ...found.value, name: ref.name });
   });
 
   // The container's Deadline file, `seconds` from the host's own clock.
@@ -163,9 +112,15 @@ export const makeLinuxHost = (deps: {
     ref: SandboxRef,
     seconds: number,
   ) {
-    return yield* link.run(
-      `docker exec -u root ${containerOf(ref)} sh -c 'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline' sh ${seconds}`,
-    );
+    return yield* deps
+      .dockerFor(link)
+      .execText(containerOf(ref), "root", [
+        "sh",
+        "-c",
+        'tmp=/run/proofbox/.deadline.$$; printf "%s\\n" "$(( $(date +%s) + $1 ))" > "$tmp" && mv "$tmp" /run/proofbox/deadline',
+        "sh",
+        String(seconds),
+      ]);
   });
 
   // The VNC password one Live view uses; its finalizer stops x11vnc once
@@ -342,31 +297,35 @@ export const makeLinuxHost = (deps: {
       req.snapshot === undefined
         ? undefined
         : yield* pullStart(link, registry, req.snapshot, progress);
-    const inner = makeDockerProvider({
-      client: deps.dockerFor(link),
-      fs: deps.fs,
-      imageTag: snapshotImage ?? baseTag,
-      registry: true,
-      memoryReserveGb: MEMORY_RESERVE_GB,
-      // Publish the VNC port for the Live view; the host has only a
-      // private address, and the SSH gateway forwards onto that
-      // address, so the publish must cover it — loopback binds are
-      // unreachable.
-      runArgs: [
-        "-p",
-        "5900:5900",
-        ...(snapshotImage === undefined
-          ? []
-          : ["--label", `proofbox.snapshot=${req.snapshot}`]),
-      ],
-      brand: brandFor(ref),
-    });
-    const info = yield* inner.create({
-      ...req,
-      size,
-      name: ref.name.slice(0, 6),
-      maxLifeAt: made.maxLifeAt,
-    });
+    const info = yield* createDockerSandbox(
+      {
+        client: deps.dockerFor(link),
+        fs: deps.fs,
+        brand: brandFor(ref),
+        imageTag: snapshotImage ?? baseTag,
+        registry: true,
+        memoryReserveGb: MEMORY_RESERVE_GB,
+        // Publish the VNC port for the Live view; the host has only a
+        // private address, and the SSH gateway forwards onto that
+        // address, so the publish must cover it — loopback binds are
+        // unreachable.
+        runArgs: [
+          "-p",
+          "5900:5900",
+          ...(snapshotImage === undefined
+            ? []
+            : ["--label", `proofbox.snapshot=${req.snapshot}`]),
+        ],
+      },
+      {
+        os: req.os,
+        idle: req.idle,
+        maxLife: req.maxLife,
+        size,
+        name: ref.name.slice(0, 6),
+        maxLifeAt: made.maxLifeAt,
+      },
+    );
     // A Snapshot's Fingerprint holds the Base version, so this is its
     // Base too.
     yield* progress.step(

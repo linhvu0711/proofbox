@@ -40,6 +40,7 @@ case " $* " in
     exec sleep 600 ;;
 esac
 if [ -e "$d/cut" ]; then exit 255; fi
+cat > "$d/stdin"
 echo ok
 `,
     { mode: 0o755 },

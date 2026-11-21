@@ -1,6 +1,10 @@
 import { Command, CommandExecutor } from "@effect/platform";
 import { Effect, Option, Stream } from "effect";
-import { commandEvents, toText } from "../command-events.ts";
+import {
+  captureCommand,
+  collectEvents,
+  commandEvents,
+} from "../command-events.ts";
 import {
   causeText,
   type LinkDroppedError,
@@ -8,11 +12,9 @@ import {
   ProviderUnavailableError,
   type SandboxGoneError,
 } from "../errors.ts";
-import type { Link } from "../namespace/ssh-link.ts";
 import type { ExecEvent, ExecOptions } from "../provider.ts";
-import { shellJoin } from "../shell.ts";
 
-interface DockerExecResult {
+export interface DockerExecResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
@@ -25,24 +27,45 @@ interface DockerInspection {
 
 export type DockerError = ProviderError | ProviderUnavailableError;
 
-export interface DockerClient {
-  readonly serverArch: Effect.Effect<string, DockerError>;
-  readonly imageExists: (tag: string) => Effect.Effect<boolean, DockerError>;
-  readonly pull: (tag: string) => Effect.Effect<boolean, DockerError>;
-  readonly push: (tag: string) => Effect.Effect<void, DockerError>;
+// Where docker commands run: this machine, or a host over a link. `E` is
+// what the host itself can fail a text call with.
+export interface DockerHost<E = never> {
+  // The Provider its errors name.
+  readonly provider: string;
+  readonly run: (
+    argv: ReadonlyArray<string>,
+  ) => Effect.Effect<DockerExecResult, DockerError | E>;
+  readonly stream: (
+    argv: ReadonlyArray<string>,
+    options?: ExecOptions,
+  ) => Stream.Stream<
+    ExecEvent,
+    DockerError | SandboxGoneError | LinkDroppedError
+  >;
+  // What a call fails with when Docker does not answer.
+  readonly unavailable: ProviderUnavailableError;
+}
+
+export interface DockerClient<E = never> {
+  readonly serverArch: Effect.Effect<string, DockerError | E>;
+  readonly imageExists: (
+    tag: string,
+  ) => Effect.Effect<boolean, DockerError | E>;
+  readonly pull: (tag: string) => Effect.Effect<boolean, DockerError | E>;
+  readonly push: (tag: string) => Effect.Effect<void, DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
     readonly tag: string;
     readonly buildArgs: Readonly<Record<string, string>>;
-  }) => Effect.Effect<void, DockerError>;
+  }) => Effect.Effect<void, DockerError | E>;
   readonly run: (
     args: ReadonlyArray<string>,
-  ) => Effect.Effect<DockerExecResult, DockerError>;
+  ) => Effect.Effect<DockerExecResult, DockerError | E>;
   readonly execText: (
     container: string,
     user: string,
     argv: ReadonlyArray<string>,
-  ) => Effect.Effect<DockerExecResult, DockerError>;
+  ) => Effect.Effect<DockerExecResult, DockerError | E>;
   // `user` is `app` unless a caller drops to it itself.
   readonly execStream: (
     container: string,
@@ -55,9 +78,9 @@ export interface DockerClient {
   >;
   readonly inspect: (
     container: string,
-  ) => Effect.Effect<Option.Option<DockerInspection>, DockerError>;
-  readonly listNames: Effect.Effect<ReadonlyArray<string>, DockerError>;
-  readonly remove: (container: string) => Effect.Effect<void, DockerError>;
+  ) => Effect.Effect<Option.Option<DockerInspection>, DockerError | E>;
+  readonly listNames: Effect.Effect<ReadonlyArray<string>, DockerError | E>;
+  readonly remove: (container: string) => Effect.Effect<void, DockerError | E>;
 }
 
 const DOCKER_DOWN = [
@@ -73,27 +96,16 @@ const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
   );
 
-export const makeDockerClient = (
+// The `docker` on this machine.
+export const localDockerHost = (
   executor: CommandExecutor.CommandExecutor,
-  // A Namespace host's link: every docker line but a build goes through
-  // its `run` and `stream`, which open the link again when it dropped.
-  remote?: Link,
-): DockerClient => {
-  const provider = remote === undefined ? "docker" : "namespace";
-  const linkLost = (detail: string) =>
-    new ProviderUnavailableError({
-      provider: "namespace",
-      reason: `lost the link to the Namespace host: ${detail}`,
-    });
-  const unavailable = () =>
-    remote === undefined
-      ? new ProviderUnavailableError({
-          provider: "docker",
-          reason: "Docker is not running; start Docker and try again",
-        })
-      : linkLost("the link was already gone");
-  const fail = (reason: string) => new ProviderError({ provider, reason });
-
+): DockerHost => {
+  const unavailable = new ProviderUnavailableError({
+    provider: "docker",
+    reason: "Docker is not running; start Docker and try again",
+  });
+  const fail = (reason: string) =>
+    new ProviderError({ provider: "docker", reason });
   // A missing `docker` binary is a spawn ENOENT (SystemError "NotFound"); a
   // stopped daemon answers every call with DOCKER_DOWN.
   const spawnError = (error: {
@@ -102,8 +114,33 @@ export const makeDockerClient = (
     readonly message: string;
   }) =>
     error._tag === "SystemError" && error.reason === "NotFound"
-      ? unavailable()
+      ? unavailable
       : fail(error.message);
+  return {
+    provider: "docker",
+    run: (argv) =>
+      captureCommand(Command.make("docker", ...argv)).pipe(
+        Effect.provideService(CommandExecutor.CommandExecutor, executor),
+        Effect.mapError((error) => spawnError(error)),
+      ),
+    stream: (argv, options) =>
+      commandEvents<DockerError>(
+        executor,
+        Command.make("docker", ...argv),
+        options,
+        { spawn: spawnError, fail },
+      ),
+    unavailable,
+  };
+};
+
+export const makeDockerClient = <E = never>(
+  executor: CommandExecutor.CommandExecutor,
+  host: DockerHost<E>,
+): DockerClient<E> => {
+  const unavailable = () => host.unavailable;
+  const fail = (reason: string) =>
+    new ProviderError({ provider: host.provider, reason });
 
   const refuse = (what: string, result: DockerExecResult) =>
     isDown(result)
@@ -112,43 +149,45 @@ export const makeDockerClient = (
           fail(`${what}: ${tail(result.stderr + result.stdout, 20)}`),
         );
 
-  const capture = (
-    argv: ReadonlyArray<string>,
-  ): Effect.Effect<DockerExecResult, DockerError> =>
-    remote !== undefined
-      ? remote
-          .run(shellJoin(["docker", ...argv]))
-          .pipe(
-            Effect.catchTag("SandboxGoneError", (error) =>
-              Effect.fail(fail(error.message)),
-            ),
-          )
-      : captureLocal(argv);
+  const capture = host.run;
 
-  const captureLocal = (
-    argv: ReadonlyArray<string>,
-  ): Effect.Effect<DockerExecResult, DockerError> =>
-    Effect.scoped(
+  // The build folder as a tar on this machine. A tar that fails still ends
+  // its stdout cleanly, so its exit code is checked here.
+  const packed = (dir: string): Stream.Stream<Uint8Array, ProviderError> =>
+    Stream.unwrapScoped(
       Effect.gen(function* () {
         const process = yield* Command.start(
-          Command.make("docker", ...argv),
+          Command.make("tar", "-C", dir, "-c", "-f", "-", "."),
         ).pipe(
           Effect.provideService(CommandExecutor.CommandExecutor, executor),
-          Effect.mapError((error) => spawnError(error)),
+          Effect.mapError((error) => fail(error.message)),
         );
-        const [outBytes, errBytes, exitCode] = yield* Effect.all(
-          [
-            Stream.runCollect(process.stdout),
-            Stream.runCollect(process.stderr),
-            process.exitCode,
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.mapError((error) => fail(causeText(error))));
-        return {
-          exitCode,
-          stdout: toText(outBytes),
-          stderr: toText(errBytes),
-        } satisfies DockerExecResult;
+        const exited = Stream.fromEffect(process.exitCode).pipe(
+          Stream.mapError((error) => fail(causeText(error))),
+          Stream.flatMap((code) =>
+            code === 0
+              ? Stream.empty
+              : Stream.fail(
+                  fail(
+                    `could not pack the build folder ${dir}: tar exited ${code}`,
+                  ),
+                ),
+          ),
+        );
+        // tar blocks once its stderr pipe is full, so stderr is read too.
+        const drained = process.stderr.pipe(
+          Stream.mapError((error) => fail(causeText(error))),
+          Stream.drain,
+        );
+        return Stream.concat(
+          Stream.merge(
+            process.stdout.pipe(
+              Stream.mapError((error) => fail(causeText(error))),
+            ),
+            drained,
+          ),
+          exited,
+        );
       }),
     );
 
@@ -200,49 +239,21 @@ export const makeDockerClient = (
     for (const [key, value] of Object.entries(image.buildArgs)) {
       args.push("--build-arg", `${key}=${value}`);
     }
-    if (remote !== undefined) {
-      // The remote host cannot see the local context directory; stream a
-      // tar of it over the ssh link into `docker build -`.
-      return yield* Effect.scoped(
-        Effect.gen(function* () {
-          const process = yield* Command.start(
-            Command.pipeTo(
-              Command.make("tar", "-C", image.dir, "-c", "."),
-              Command.make(
-                "ssh",
-                ...remote.ssh,
-                shellJoin(["docker", ...args, "-"]),
-              ),
-            ),
-          ).pipe(
-            Effect.provideService(CommandExecutor.CommandExecutor, executor),
-            Effect.mapError((error) => spawnError(error)),
-          );
-          const [, errBytes, exitCode] = yield* Effect.all(
-            [
-              // The build log goes to stdout; drain it so the remote
-              // process never blocks on a full pipe.
-              Stream.runDrain(process.stdout),
-              Stream.runCollect(process.stderr),
-              process.exitCode,
-            ],
-            { concurrency: "unbounded" },
-          ).pipe(Effect.mapError((error) => fail(causeText(error))));
-          const stderr = toText(errBytes);
-          if (exitCode === 255) {
-            return yield* linkLost(tail(stderr, 3));
-          }
-          if (exitCode !== 0) {
-            return yield* refuse("docker build failed", {
-              exitCode,
-              stdout: "",
-              stderr,
-            });
-          }
-        }),
-      );
-    }
-    const result = yield* capture([...args, image.dir]);
+    const result = yield* collectEvents(
+      host.stream([...args, "-"], { stdin: packed(image.dir) }),
+    ).pipe(
+      Effect.catchTag("LinkDroppedError", (error) =>
+        Effect.fail(
+          new ProviderUnavailableError({
+            provider: host.provider,
+            reason: error.reason,
+          }),
+        ),
+      ),
+      Effect.catchTag("SandboxGoneError", (error) =>
+        Effect.fail(fail(error.message)),
+      ),
+    );
     if (result.exitCode !== 0) {
       return yield* refuse("docker build failed", result);
     }
@@ -275,15 +286,7 @@ export const makeDockerClient = (
       container,
       ...argv,
     ];
-    if (remote !== undefined) {
-      return remote.stream(shellJoin(["docker", ...dockerExec]), options);
-    }
-    return commandEvents<DockerError>(
-      executor,
-      Command.make("docker", ...dockerExec),
-      options,
-      { spawn: spawnError, fail },
-    );
+    return host.stream(dockerExec, options);
   };
 
   const inspect = Effect.fn("DockerClient.inspect")(function* (

@@ -90,8 +90,8 @@ export const toolBundleArgs = (
   );
 
 export const ensureBaseImage = Effect.fn("baseImage.ensureBaseImage")(
-  function* (
-    client: DockerClient,
+  function* <E>(
+    client: DockerClient<E>,
     image: {
       readonly dir: string;
       readonly tag: string;

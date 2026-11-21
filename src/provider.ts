@@ -224,12 +224,7 @@ export interface Provider {
     readonly os: Os;
     readonly idle: Duration.Duration;
     readonly maxLife: Duration.Duration;
-    // Providers whose Max life clock starts before the Sandbox exists (the
-    // host is created first) pass the absolute Max life here; the default
-    // is the Sandbox's own create time plus `maxLife`.
-    readonly maxLifeAt?: Date | undefined;
     readonly size?: Size | undefined;
-    readonly name?: string | undefined;
     // The Fingerprint of a Snapshot to start from, when the Provider has one.
     readonly snapshot?: string | undefined;
   }) => Effect.Effect<

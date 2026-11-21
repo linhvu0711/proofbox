@@ -19,7 +19,10 @@ import {
   baseImageTag,
   baseImageVersion,
 } from "../src/docker/base-image.ts";
-import { makeDockerClient } from "../src/docker/docker-client.ts";
+import {
+  localDockerHost,
+  makeDockerClient,
+} from "../src/docker/docker-client.ts";
 import { makeDockerProvider } from "../src/docker/docker-provider.ts";
 import { ToolBundleHashError } from "../src/errors.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
@@ -328,7 +331,7 @@ describe("Docker Provider", () => {
               "docker",
               providerEntry(
                 makeDockerProvider({
-                  client: makeDockerClient(executor),
+                  client: makeDockerClient(executor, localDockerHost(executor)),
                   fs: nodeFs,
                   imageTag: tamperedTag,
                 }),
