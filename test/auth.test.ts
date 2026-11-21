@@ -315,10 +315,10 @@ describe("auth", () => {
       unset: ["PROOFBOX_FAKE_ROOT"],
     });
     // Then
-    expect(result.stderr).toBe(
-      "Expected one of the following cases: docker, namespace\n\n",
-    );
-    expect(result.exitCode).toBe(125);
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr: 'Unknown Provider "foo": use one of: docker, namespace\n',
+    });
   });
 
   it("auth login docker says no login is needed", async () => {

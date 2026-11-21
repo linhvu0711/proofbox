@@ -1,5 +1,5 @@
-import { Duration, Effect } from "effect";
-import { resolvePace, runPixel } from "../pixel.ts";
+import { Effect } from "effect";
+import { runAction } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 
 const BUTTONS = { left: "1", middle: "2", right: "3" } as const;
@@ -14,12 +14,10 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
   readonly glide?: string | undefined;
   readonly settle?: string | undefined;
 }) {
-  const pace = yield* resolvePace(options);
-  const shot = options.screenshot === undefined ? "0" : "1";
-  yield* runPixel(
-    options.id,
-    [
-      "click",
+  yield* runAction(options, {
+    name: "click",
+    points: [[options.x, options.y]],
+    args: (pace, shot) => [
       String(options.x),
       String(options.y),
       BUTTONS[options.button],
@@ -27,16 +25,8 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    {
-      screenshot: options.screenshot,
-      points: [[options.x, options.y]],
-      limit: {
-        _tag: "Act",
-        name: "click",
-        extra: Duration.millis(pace.glideMs + pace.settleMs),
-      },
-    },
-  );
+    extraMs: (pace) => pace.glideMs + pace.settleMs,
+  });
   const progress = yield* Progress;
   yield* progress.done(`clicked ${options.x},${options.y}`);
 }, Effect.scoped);

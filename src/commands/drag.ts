@@ -1,5 +1,5 @@
-import { Duration, Effect } from "effect";
-import { resolvePace, runPixel } from "../pixel.ts";
+import { Effect } from "effect";
+import { runAction } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 
 export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
@@ -13,12 +13,13 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
   readonly glide?: string | undefined;
   readonly settle?: string | undefined;
 }) {
-  const pace = yield* resolvePace(options);
-  const shot = options.screenshot === undefined ? "0" : "1";
-  yield* runPixel(
-    options.id,
-    [
-      "drag",
+  yield* runAction(options, {
+    name: "drag",
+    points: [
+      [options.x1, options.y1],
+      [options.x2, options.y2],
+    ],
+    args: (pace, shot) => [
       String(options.x1),
       String(options.y1),
       String(options.x2),
@@ -27,20 +28,9 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
       String(pace.settleMs),
       shot,
     ],
-    {
-      screenshot: options.screenshot,
-      points: [
-        [options.x1, options.y1],
-        [options.x2, options.y2],
-      ],
-      // The pointer glides twice: to the start, then to the end.
-      limit: {
-        _tag: "Act",
-        name: "drag",
-        extra: Duration.millis(2 * pace.glideMs + pace.settleMs),
-      },
-    },
-  );
+    // The pointer glides twice: to the start, then to the end.
+    extraMs: (pace) => 2 * pace.glideMs + pace.settleMs,
+  });
   const progress = yield* Progress;
   yield* progress.done(
     `dragged ${options.x1},${options.y1} to ${options.x2},${options.y2}`,

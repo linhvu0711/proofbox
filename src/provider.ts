@@ -2,7 +2,7 @@ import type { CommandExecutor } from "@effect/platform";
 import {
   Context,
   type Duration,
-  type Effect,
+  Effect,
   type Option,
   type Redacted,
   Schema,
@@ -26,6 +26,7 @@ import {
   type TokenPermissionError,
   type TokenRejectedError,
   type ToolBundleHashError,
+  UnknownProviderError,
   type UnknownRegionError,
 } from "./errors.ts";
 import type { Progress } from "./progress.ts";
@@ -340,6 +341,22 @@ export class Providers extends Context.Tag("proofbox/Providers")<
   Providers,
   ReadonlyMap<string, ProviderEntry>
 >() {}
+
+// The Provider a command names, from the flag, the argument, or the config
+// file. A wrong name gets the same message on every path.
+export const loadProvider = Effect.fn("provider.loadProvider")(function* (
+  name: string,
+) {
+  const providers = yield* Providers;
+  const entry = providers.get(name);
+  if (entry === undefined) {
+    return yield* new UnknownProviderError({
+      provider: name,
+      known: [...providers.keys()],
+    });
+  }
+  return yield* entry.load;
+});
 
 // The Provider's Live view on this OS, when it offers one there.
 export const liveViewOn = (provider: Provider, os: Os) =>

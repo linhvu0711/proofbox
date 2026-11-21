@@ -280,10 +280,16 @@ const layers = (
           }),
         note: () => Effect.void,
         done: () => Effect.void,
+        // A hint can be work that makes its text; run it, as Progress does
+        // with the look on.
         hint: (text) =>
-          Effect.sync(() => {
-            options.hints?.push(text);
-          }),
+          (typeof text === "string" ? Effect.succeed(text) : text).pipe(
+            Effect.flatMap((line) =>
+              Effect.sync(() => {
+                options.hints?.push(line);
+              }),
+            ),
+          ),
       }),
     ),
     Style.Default.pipe(Layer.provide(output)),

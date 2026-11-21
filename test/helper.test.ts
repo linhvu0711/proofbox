@@ -447,6 +447,109 @@ describe("Helper call time limits", () => {
     }),
   );
 
+  it.effect("a drag gets 2 min plus two glides and its settle", () =>
+    Effect.gen(function* () {
+      // Given: human pace, glide 10 s and settle 5 s
+      const sandbox = yield* macSandbox(() => Stream.never);
+      // When
+      const error = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            Effect.flip(
+              dragFrom({
+                id: sandbox.id,
+                x1: 1,
+                y1: 1,
+                x2: 2,
+                y2: 2,
+                pace: "human",
+                glide: "10s",
+                settle: "5s",
+              }),
+            ),
+          );
+          yield* sleepsNear(145_000);
+          yield* TestClock.adjust("146 seconds");
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      // Then
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Sandbox ${sandbox.id} did not answer the drag in 2 min 25 s\\.`,
+        ),
+      );
+    }),
+  );
+
+  it.effect("a key gets 2 min plus its settle", () =>
+    Effect.gen(function* () {
+      // Given: human pace, settle 5 s
+      const sandbox = yield* macSandbox(() => Stream.never);
+      // When
+      const error = yield* sandbox.provide(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.fork(
+            Effect.flip(
+              pressKey({
+                id: sandbox.id,
+                keys: "Return",
+                pace: "human",
+                settle: "5s",
+              }),
+            ),
+          );
+          yield* sleepsNear(125_000);
+          yield* TestClock.adjust("126 seconds");
+          return yield* Fiber.join(fiber);
+        }),
+      );
+      // Then
+      expect(error.message).toMatch(
+        new RegExp(
+          `^Sandbox ${sandbox.id} did not answer the key in 2 min 5 s\\.`,
+        ),
+      );
+    }),
+  );
+
+  it.effect(
+    "a scroll gets 2 min plus its glide, 50 ms a step, and its settle",
+    () =>
+      Effect.gen(function* () {
+        // Given: human pace, glide 10 s, settle 5 s, 100 steps
+        const sandbox = yield* macSandbox(() => Stream.never);
+        // When
+        const error = yield* sandbox.provide(
+          Effect.gen(function* () {
+            const fiber = yield* Effect.fork(
+              Effect.flip(
+                scrollAt({
+                  id: sandbox.id,
+                  x: 1,
+                  y: 1,
+                  direction: "down",
+                  steps: 100,
+                  pace: "human",
+                  glide: "10s",
+                  settle: "5s",
+                }),
+              ),
+            );
+            yield* sleepsNear(140_000);
+            yield* TestClock.adjust("141 seconds");
+            return yield* Fiber.join(fiber);
+          }),
+        );
+        // Then
+        expect(error.message).toMatch(
+          new RegExp(
+            `^Sandbox ${sandbox.id} did not answer the scroll in 2 min 20 s\\.`,
+          ),
+        );
+      }),
+  );
+
   it.effect(
     "a type of 59 letters at human pace gets 2 min plus its letters and settle",
     () =>

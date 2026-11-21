@@ -553,6 +553,34 @@ describe("upload", () => {
     expect(readdirSync(join(env.root, name, "home"))).toEqual([]);
   });
 
+  it("upload refuses a bad --max-size before anything is sent", async () => {
+    // Given: a Sandbox and a git folder with one file
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    const folder = makeGitFolder({ committed: { "a.txt": "a" } });
+    // When
+    const result = await runCli(env, [
+      "upload",
+      id,
+      folder,
+      "--max-size",
+      "5XB",
+    ]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad --max-size "5XB": use a whole number with MB or GB, for example 800MB\n',
+    });
+  });
+
   it("upload of a folder that is not a git repo exits 125 and says so", async () => {
     // Given: a Sandbox and a folder with a file but no git repo
     const env = makeEnv();

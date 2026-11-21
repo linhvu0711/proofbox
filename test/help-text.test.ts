@@ -202,6 +202,51 @@ describe("Help text", () => {
     }
   });
 
+  it("each --help names the defaults the code uses", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const [create, login, click, type, scroll] = await Promise.all(
+      [["create"], ["auth", "login"], ["click"], ["type"], ["scroll"]].map(
+        (words) => runCli(env, [...words, "--help"]),
+      ),
+    );
+    // Then
+    expect({
+      create: [
+        "with s, m, or h, for example 2h; default 3h",
+        "default 4x8 on Linux, 4x7 on macOS on namespace, no limit on docker",
+        "; default from ~/.config/proofbox/config, else namespace",
+      ].filter((text) => !create?.stdout.includes(text)),
+      login: ["where new Sandboxes go; default us"].filter(
+        (text) => !login?.stdout.includes(text),
+      ),
+      click: [
+        "fast at once; default human",
+        "default 400ms with --pace human, 0ms with fast",
+        "default 700ms with --pace human, 0ms with fast",
+        "the mouse button; default left",
+      ].filter((text) => !click?.stdout.includes(text)),
+      type: ["default 100ms with --pace human, 12ms with fast"].filter(
+        (text) => !type?.stdout.includes(text),
+      ),
+      scroll: ["for example 5; default 3"].filter(
+        (text) => !scroll?.stdout.includes(text),
+      ),
+    }).toEqual({ create: [], login: [], click: [], type: [], scroll: [] });
+  });
+
+  it("type --help gives the --type-max defaults in the units it reads", async () => {
+    // Given
+    const env = makeEnv();
+    // When
+    const result = await runCli(env, ["type", "--help"]);
+    // Then
+    expect(result.stdout).toContain(
+      "the most time all the typing may take, ms or s, for example 5s; default 10s with --pace human, 3s with fast",
+    );
+  });
+
   it("record stop --help says --max-size limits the Proof video", async () => {
     // Given
     const env = makeEnv();
@@ -254,7 +299,7 @@ describe("Help text", () => {
     }
   });
 
-  it("create --help lists docker | namespace without the fake Provider", async () => {
+  it("create --help names docker and namespace without the fake Provider", async () => {
     // Given
     const env = makeEnv();
     // When
@@ -262,17 +307,19 @@ describe("Help text", () => {
       unset: ["PROOFBOX_FAKE_ROOT"],
     });
     // Then
-    expect(result.stdout).toContain("--provider docker | namespace");
-    expect(result.stdout).not.toContain("| fake");
+    expect(result.stdout).toContain(
+      "the Provider that makes the Sandbox, one of: docker, namespace;",
+    );
+    expect(result.stdout).not.toContain("fake");
   });
 
-  it("with PROOFBOX_FAKE_ROOT set, --provider also lists fake", async () => {
+  it("with PROOFBOX_FAKE_ROOT set, --provider also names fake", async () => {
     // Given
     const env = makeEnv();
     // When
     const result = await runCli(env, ["create", "--help"]);
     // Then
-    expect(result.stdout).toContain("--provider docker | namespace | fake");
+    expect(result.stdout).toContain("one of: docker, namespace, fake;");
   });
 
   it("auth login, logout, and token list the Providers", async () => {
@@ -286,9 +333,7 @@ describe("Help text", () => {
     );
     // Then
     for (const result of results) {
-      expect(result.stdout).toContain(
-        "One of the following: docker, namespace",
-      );
+      expect(result.stdout).toContain("one of: docker, namespace");
     }
   });
 

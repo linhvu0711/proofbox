@@ -8,6 +8,7 @@ import {
   RecordingRunningError,
   StopFlagsError,
 } from "../errors.ts";
+import { formatMb } from "../format-bytes.ts";
 import {
   fetchHelper,
   type HelperLimit,
@@ -30,8 +31,6 @@ import {
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
-import { Style } from "../style.ts";
-import { formatMb } from "../upload/max-size.ts";
 
 export const RECORD_HELPER: HelperTable = {
   feature: "recording",
@@ -304,7 +303,6 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     });
     const limit = options.maxSize ?? PROOF_SIZE_DEFAULT;
     const progress = yield* Progress;
-    const style = yield* Style;
     const bytes = yield* progress.step("building the Proof video", buildProof);
     const video = yield* fetchHelper(
       options.id,
@@ -348,26 +346,23 @@ export const stopRecording = Effect.fn("record.stopRecording")(
     }
     const lines = [out, ...screenshots.map((shot) => shot.path)];
     yield* output.out(`${lines.join("\n")}\n`);
-    // The hints are for a person only, and each label costs a fetch, so a
-    // program pays for none of it.
-    if (!style.look) {
-      return;
-    }
     yield* progress.hint(
       `Proof video ${out}, ${formatMb(bytes)} MB of the ${formatMb(limit)} MB Size limit`,
     );
     // The files are saved by now; a label that cannot be read only leaves
     // its line without one.
     for (const shot of screenshots) {
-      const label = yield* readStepLabel(options.id, info.dir, shot.step).pipe(
-        Effect.option,
-      );
       yield* progress.hint(
-        Option.match(label, {
-          onNone: () => `Proof screenshot ${shot.path}, Step ${shot.step}`,
-          onSome: (text) =>
-            `Proof screenshot ${shot.path}, Step ${shot.step} "${text}"`,
-        }),
+        readStepLabel(options.id, info.dir, shot.step).pipe(
+          Effect.option,
+          Effect.map((label) =>
+            Option.match(label, {
+              onNone: () => `Proof screenshot ${shot.path}, Step ${shot.step}`,
+              onSome: (text) =>
+                `Proof screenshot ${shot.path}, Step ${shot.step} "${text}"`,
+            }),
+          ),
+        ),
       );
     }
   },

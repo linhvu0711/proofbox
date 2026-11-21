@@ -52,6 +52,21 @@ const UNIT_MILLIS: Record<SpanSpec["units"][number], number> = {
   y: 31_536_000_000,
 };
 
+// The inverse of parseSpan: the largest unit of the spec that divides the
+// span evenly, so `formatSpan(Duration.hours(3))` is "3h".
+export const formatSpan = (
+  span: Duration.Duration,
+  spec: SpanSpec = IDLE_SPAN,
+): string => {
+  const millis = Duration.toMillis(span);
+  const units = [...spec.units].sort((a, b) => UNIT_MILLIS[b] - UNIT_MILLIS[a]);
+  const unit =
+    units.find((each) => millis > 0 && millis % UNIT_MILLIS[each] === 0) ??
+    units[units.length - 1] ??
+    "ms";
+  return `${millis / UNIT_MILLIS[unit]}${unit}`;
+};
+
 const spanPattern = (spec: SpanSpec): RegExp => {
   // Longest unit first so "ms" wins over "s".
   const units = [...spec.units].sort((a, b) => b.length - a.length).join("|");

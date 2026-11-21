@@ -6,7 +6,7 @@ import {
   Options,
 } from "@effect/cli";
 import type { Span } from "@effect/cli/HelpDoc/Span";
-import { Effect, HashMap, Option, Schema } from "effect";
+import { Duration, Effect, HashMap, Option, Schema } from "effect";
 import {
   loginToProvider,
   logoutOfProvider,
@@ -28,8 +28,23 @@ import { scrollAt } from "./commands/scroll.ts";
 import { typeText } from "./commands/type.ts";
 import { updateProofbox } from "./commands/update.ts";
 import { uploadWorkFolder } from "./commands/upload.ts";
-import { KNOWN_REGIONS } from "./namespace/regions.ts";
-import { parseMaxSize } from "./upload/max-size.ts";
+import {
+  formatSpan,
+  idleDefault,
+  MAX_LIFE_DEFAULT,
+  PACE_SPAN,
+} from "./deadline.ts";
+import { DEFAULT_REGION, KNOWN_REGIONS } from "./namespace/regions.ts";
+import { DEFAULT_LINUX_SIZE, DEFAULT_MACOS_SIZE } from "./namespace/sizes.ts";
+import { PACE_FAST, PACE_HUMAN, type Pace } from "./pixel.ts";
+import { PROOF_SIZE_DEFAULT } from "./proof/size-limit.ts";
+import { DEFAULT_PROVIDER } from "./provider-config.ts";
+import { formatSize } from "./size.ts";
+import {
+  formatMaxSize,
+  MAX_SIZE_DEFAULT,
+  parseMaxSize,
+} from "./upload/max-size.ts";
 import { versionText } from "./version.ts";
 
 const sandboxId = Args.text({ name: "id" }).pipe(
@@ -37,16 +52,26 @@ const sandboxId = Args.text({ name: "id" }).pipe(
 );
 const workMaxSize = Options.text("max-size").pipe(
   Options.withDescription(
-    "the most the Work folder upload may send, MB or GB, for example 800MB; default 500MB",
+    `the most the Work folder upload may send, MB or GB, for example 800MB; default ${formatMaxSize(MAX_SIZE_DEFAULT)}`,
   ),
   Options.optional,
 );
 
+// --max-size on create, upload, and record stop: the bytes, or undefined
+// for the command's own default.
+const readMaxSize = Effect.fn("cli.readMaxSize")(
+  (value: Option.Option<string>) =>
+    Option.match(value, {
+      onNone: () => Effect.succeed(undefined),
+      onSome: (text) => parseMaxSize(text),
+    }),
+);
+
 const makeCommands = (providers: ReadonlyArray<string>) => {
-  const providerArg = Args.choice(
-    providers.map((name): [string, string] => [name, name]),
-    { name: "provider" },
-  );
+  // proofbox checks the name itself, so a wrong one gets the same message
+  // from the flag, the argument, and the config file.
+  const known = `one of: ${providers.join(", ")}`;
+  const providerArg = Args.text({ name: "provider" });
 
   const create = Command.make(
     "create",
@@ -54,21 +79,21 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       os: Options.choice("os", ["linux", "macos"]).pipe(
         Options.withDescription("the OS of the Sandbox"),
       ),
-      provider: Options.choice("provider", providers).pipe(
+      provider: Options.text("provider").pipe(
         Options.withDescription(
-          "the Provider that makes the Sandbox; default from ~/.config/proofbox/config, else namespace",
+          `the Provider that makes the Sandbox, ${known}; default from ~/.config/proofbox/config, else ${DEFAULT_PROVIDER}`,
         ),
         Options.optional,
       ),
       idle: Options.text("idle").pipe(
         Options.withDescription(
-          "delete the Sandbox after this long with no command, for example 15m; default 15m on Linux, 5m on macOS",
+          `delete the Sandbox after this long with no command, for example 15m; default ${formatSpan(idleDefault("linux"))} on Linux, ${formatSpan(idleDefault("macos"))} on macOS`,
         ),
         Options.optional,
       ),
       maxLife: Options.text("max-life").pipe(
         Options.withDescription(
-          "the Max life: delete the Sandbox this long after create, with s, m, or h, for example 2h; default 3h",
+          `the Max life: delete the Sandbox this long after create, with s, m, or h, for example 2h; default ${formatSpan(MAX_LIFE_DEFAULT)}`,
         ),
         Options.optional,
       ),
@@ -93,7 +118,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       maxSize: workMaxSize,
       size: Options.text("size").pipe(
         Options.withDescription(
-          "the Sandbox size as CPUxRAM_GB, for example 8x16; default 4x8 on Linux, 4x7 on macOS on namespace, no limit on docker",
+          `the Sandbox size as CPUxRAM_GB, for example 8x16; default ${formatSize(DEFAULT_LINUX_SIZE)} on Linux, ${formatSize(DEFAULT_MACOS_SIZE)} on macOS on namespace, no limit on docker`,
         ),
         Options.optional,
       ),
@@ -109,16 +134,18 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
       maxSize,
       size,
     }) =>
-      createSandbox({
-        os,
-        provider: Option.getOrUndefined(provider),
-        idle: Option.getOrUndefined(idle),
-        maxLife: Option.getOrUndefined(maxLife),
-        work: Option.getOrUndefined(work),
-        setup: Option.getOrUndefined(setup),
-        secretsFile: Option.getOrUndefined(secretsFile),
-        maxSize: Option.getOrUndefined(maxSize),
-        size: Option.getOrUndefined(size),
+      Effect.gen(function* () {
+        yield* createSandbox({
+          os,
+          provider: Option.getOrUndefined(provider),
+          idle: Option.getOrUndefined(idle),
+          maxLife: Option.getOrUndefined(maxLife),
+          work: Option.getOrUndefined(work),
+          setup: Option.getOrUndefined(setup),
+          secretsFile: Option.getOrUndefined(secretsFile),
+          maxSize: yield* readMaxSize(maxSize),
+          size: Option.getOrUndefined(size),
+        });
       }),
   ).pipe(Command.withDescription("create a Sandbox and print its Sandbox id"));
 
@@ -126,7 +153,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "login",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider to log in to"),
+        Args.withDescription(`the Provider to log in to, ${known}`),
       ),
       token: Options.boolean("token").pipe(
         Options.withDescription(
@@ -134,7 +161,9 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
         ),
       ),
       region: Options.choice("region", KNOWN_REGIONS).pipe(
-        Options.withDescription("where new Sandboxes go; default us"),
+        Options.withDescription(
+          `where new Sandboxes go; default ${DEFAULT_REGION}`,
+        ),
         Options.optional,
       ),
     },
@@ -146,7 +175,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "logout",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider to log out of"),
+        Args.withDescription(`the Provider to log out of, ${known}`),
       ),
     },
     ({ provider }) => logoutOfProvider(provider),
@@ -160,7 +189,7 @@ const makeCommands = (providers: ReadonlyArray<string>) => {
     "token",
     {
       provider: providerArg.pipe(
-        Args.withDescription("the Provider that makes the token"),
+        Args.withDescription(`the Provider that makes the token, ${known}`),
       ),
       name: Options.text("name").pipe(
         Options.withDescription("the token's name, for example ci; required"),
@@ -233,6 +262,16 @@ const exec = Command.make(
   ),
 );
 
+const PACE_DEFAULT = "human" as const;
+const BUTTON_DEFAULT = "left" as const;
+const SCROLL_STEPS_DEFAULT = 3;
+
+// The defaults of one Pace field, as the help text gives them.
+const paceDefaults = (field: keyof Pace) => {
+  const span = (ms: number) => formatSpan(Duration.millis(ms), PACE_SPAN);
+  return `default ${span(PACE_HUMAN[field])} with --pace human, ${span(PACE_FAST[field])} with fast`;
+};
+
 const actionOptions = {
   screenshot: Options.text("screenshot").pipe(
     Options.withDescription(
@@ -241,34 +280,34 @@ const actionOptions = {
     Options.optional,
   ),
   pace: Options.choice("pace", ["human", "fast"]).pipe(
-    Options.withDefault("human" as const),
+    Options.withDefault(PACE_DEFAULT),
     Options.withDescription(
-      "how fast the action moves: human like a person, fast at once; default human",
+      `how fast the action moves: human like a person, fast at once; default ${PACE_DEFAULT}`,
     ),
   ),
 };
 
 const glide = Options.text("glide").pipe(
   Options.withDescription(
-    "how long the pointer takes to move, ms or s, for example 200ms; default 400ms with --pace human, 0ms with fast",
+    `how long the pointer takes to move, ms or s, for example 200ms; ${paceDefaults("glideMs")}`,
   ),
   Options.optional,
 );
 const letter = Options.text("letter").pipe(
   Options.withDescription(
-    "the wait between letters, ms or s, for example 40ms; default 100ms with --pace human, 12ms with fast",
+    `the wait between letters, ms or s, for example 40ms; ${paceDefaults("letterMs")}`,
   ),
   Options.optional,
 );
 const typeMax = Options.text("type-max").pipe(
   Options.withDescription(
-    "the most time all the typing may take, ms or s, for example 5s; default 10s with --pace human, 3000ms with fast",
+    `the most time all the typing may take, ms or s, for example 5s; ${paceDefaults("typeMaxMs")}`,
   ),
   Options.optional,
 );
 const settle = Options.text("settle").pipe(
   Options.withDescription(
-    "the wait after the action, ms or s, for example 1s; default 700ms with --pace human, 0ms with fast",
+    `the wait after the action, ms or s, for example 1s; ${paceDefaults("settleMs")}`,
   ),
   Options.optional,
 );
@@ -277,7 +316,7 @@ const settle = Options.text("settle").pipe(
 // The schema is the one Args.integer uses.
 const scrollSteps = Args.text({ name: "steps" }).pipe(
   Args.withDescription(
-    "how many wheel steps, a whole number, for example 5; default 3",
+    `how many wheel steps, a whole number, for example 5; default ${SCROLL_STEPS_DEFAULT}`,
   ),
   Args.mapEffect((value) =>
     Schema.decodeUnknown(Schema.compose(Schema.NumberFromString, Schema.Int))(
@@ -287,12 +326,12 @@ const scrollSteps = Args.text({ name: "steps" }).pipe(
         HelpDoc.p(
           value.startsWith("-")
             ? `Received unknown argument: '${value}'`
-            : `'${value}' is not a integer`,
+            : `'${value}' is not an integer`,
         ),
       ),
     ),
   ),
-  Args.withDefault(3),
+  Args.withDefault(SCROLL_STEPS_DEFAULT),
 );
 
 const click = Command.make(
@@ -310,8 +349,8 @@ const click = Command.make(
       ),
     ),
     button: Options.choice("button", ["left", "middle", "right"]).pipe(
-      Options.withDefault("left"),
-      Options.withDescription("the mouse button; default left"),
+      Options.withDefault(BUTTON_DEFAULT),
+      Options.withDescription(`the mouse button; default ${BUTTON_DEFAULT}`),
     ),
     ...actionOptions,
     glide,
@@ -552,7 +591,7 @@ const recordStop = Command.make(
     ),
     maxSize: Options.text("max-size").pipe(
       Options.withDescription(
-        "the Size limit for the Proof video, MB or GB, for example 20MB; default 10MB",
+        `the Size limit for the Proof video, MB or GB, for example 20MB; default ${formatMaxSize(PROOF_SIZE_DEFAULT)}`,
       ),
       Options.optional,
     ),
@@ -560,15 +599,11 @@ const recordStop = Command.make(
   },
   ({ id, out, discard, maxSize, json }) =>
     Effect.gen(function* () {
-      const limit = yield* maxSize.pipe(
-        Option.map((value) => parseMaxSize(value)),
-        Option.getOrElse(() => Effect.succeed(undefined)),
-      );
       yield* stopRecording({
         id,
         out: Option.getOrUndefined(out),
         discard,
-        maxSize: limit,
+        maxSize: yield* readMaxSize(maxSize),
         json,
       });
     }),
@@ -600,11 +635,11 @@ const upload = Command.make(
   },
   ({ id, folder, maxSize }) =>
     Effect.gen(function* () {
-      const limit = yield* maxSize.pipe(
-        Option.map((value) => parseMaxSize(value)),
-        Option.getOrElse(() => Effect.succeed(undefined)),
-      );
-      yield* uploadWorkFolder({ id, folder, maxSize: limit });
+      yield* uploadWorkFolder({
+        id,
+        folder,
+        maxSize: yield* readMaxSize(maxSize),
+      });
     }),
 ).pipe(
   Command.withDescription(

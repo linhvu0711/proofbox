@@ -23,7 +23,6 @@ import {
 import { Progress } from "../progress.ts";
 import { SandboxInfo, type SandboxRef } from "../provider.ts";
 import { makeSandboxName } from "../sandbox-id.ts";
-import type { Size } from "../size.ts";
 import { LINUX_TOOL_BUNDLE } from "../tool-bundle.ts";
 import type { NamespaceApi } from "./namespace-api.ts";
 import {
@@ -36,6 +35,7 @@ import {
   turnOnSshd,
 } from "./namespace-host.ts";
 import { registryRefs } from "./registry-refs.ts";
+import { DEFAULT_LINUX_SIZE, LINUX_SIZES } from "./sizes.ts";
 import {
   pullSnapshot,
   pushSnapshot,
@@ -53,12 +53,6 @@ const MADE_MARK = '"$HOME/.proofbox-made"';
 // The container takes the first six characters of the instance id.
 const containerOf = (ref: SandboxRef) => `proofbox-${ref.name.slice(0, 6)}`;
 
-const LINUX_SIZES: ReadonlyArray<Size> = [
-  { cpu: 4, ramGb: 8 },
-  { cpu: 8, ramGb: 16 },
-  { cpu: 16, ramGb: 32 },
-];
-const DEFAULT_SIZE: Size = { cpu: 4, ramGb: 8 };
 // The host holds Docker itself plus the Sandbox container; keep 1 GB of the
 // Namespace size outside the container's limit so the host stays healthy.
 const MEMORY_RESERVE_GB = 1;
@@ -509,7 +503,7 @@ export const makeLinuxHost = (deps: {
         "snapshot",
       ]),
     },
-    defaultSize: DEFAULT_SIZE,
+    defaultSize: DEFAULT_LINUX_SIZE,
     machine: { arch: "amd64", selectors: [] },
     make,
     folders: { state: "/var/lib/proofbox", secrets: "/run/proofbox/secrets" },
