@@ -30,7 +30,10 @@ import { describe, expect } from "vitest";
 import { CliOutput } from "../src/cli-output.ts";
 import { CHECKS_START } from "../src/command-checks.ts";
 import { execInSandbox } from "../src/commands/exec.ts";
-import type { DockerClient } from "../src/docker/docker-client.ts";
+import {
+  type DockerClient,
+  makeDockerClient,
+} from "../src/docker/docker-client.ts";
 import {
   LinkDroppedError,
   NotLoggedInError,
@@ -40,6 +43,7 @@ import {
   TokenPermissionError,
 } from "../src/errors.ts";
 import { keeperPaths } from "../src/keeper/paths.ts";
+import { linkDockerHost } from "../src/namespace/link-docker.ts";
 import { type LinuxHost, makeLinuxHost } from "../src/namespace/linux-host.ts";
 import type {
   ApiError,
@@ -173,7 +177,7 @@ const fakeDocker = (options: {
   readonly liveError?: SandboxGoneError | LinkDroppedError;
   // Collects the argv of every `execText`, joined by spaces.
   readonly execs?: Array<string>;
-}): DockerClient => {
+}): DockerClient<SandboxGoneError> => {
   let labels: Record<string, string> = {};
   const ok = (stdout = "") =>
     Effect.succeed({ exitCode: 0, stdout, stderr: "" });
@@ -320,7 +324,10 @@ const tenantRun = (commandLine: string) => {
 // the container's labels name it by its six-letter host id, and the
 // Deadline file reads as far future.
 const listRun = (commandLine: string) => {
-  if (commandLine.includes("docker inspect")) {
+  if (commandLine.includes("/run/proofbox/deadline")) {
+    return Effect.succeed(done("9999999999\n"));
+  }
+  if (commandLine.includes("'docker' 'inspect'")) {
     const short = /proofbox-([a-z0-9]+)/.exec(commandLine)?.[1] ?? "";
     return Effect.succeed(
       done(
@@ -330,7 +337,7 @@ const listRun = (commandLine: string) => {
           "proofbox.created-at": "2026-01-01T00:00:00Z",
           "proofbox.idle-seconds": "300",
           "proofbox.max-life-at": "2099-01-01T00:00:00Z",
-        })}|true\n9999999999\n`,
+        })}|true\n`,
       ),
     );
   }
@@ -408,9 +415,11 @@ const withRuntime = (runtime: string) =>
 
 const BASE_IMAGE = /^nscr\.io\/tenant_x\/proofbox-base-linux:[0-9a-f]{12}$/;
 
+// With no `docker`, the host's reads go through the real Docker client
+// over the fake link, so `run` answers its docker commands.
 const makeProvider = (
   calls: Ref.Ref<ReadonlyArray<string>>,
-  docker: DockerClient,
+  docker: DockerClient<SandboxGoneError> | undefined,
   run: Link["run"] = tenantRun,
   options?: {
     readonly instances?: ReadonlyArray<
@@ -454,7 +463,8 @@ const makeProvider = (
       linux: makeLinuxHost({
         api,
         fs: nodeFs,
-        dockerFor: () => docker,
+        dockerFor: (link) =>
+          docker ?? makeDockerClient(nodeExecutor, linkDockerHost(link)),
       }),
       macos: options?.macos ?? unusedHost("macos"),
     },
@@ -597,7 +607,7 @@ describe("Namespace Provider", () => {
     Effect.gen(function* () {
       // Given: another host is a Mac; the requested host has no OS label.
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+      const provider = makeProvider(calls, undefined, listRun, {
         instances: [
           { id: "other00000001", labels: { "proofbox.os": "macos" } },
           { id: "abc123def4567", labels: {} },
@@ -615,7 +625,7 @@ describe("Namespace Provider", () => {
     Effect.gen(function* () {
       // Given: the local OS file takes precedence over the API label.
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), listRun, {
+      const provider = makeProvider(calls, undefined, listRun, {
         instances: [
           { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
         ],
@@ -690,9 +700,8 @@ describe("Namespace Provider", () => {
           ReadonlyArray<readonly [string, string, ReadonlyArray<string>]>
         >([]);
         const api = fakeApi(yield* Ref.make<ReadonlyArray<string>>([]));
-        const dockerFor = () => {
-          throw new Error("unused");
-        };
+        const dockerFor = (sandbox: Link) =>
+          makeDockerClient(nodeExecutor, linkDockerHost(sandbox));
         const openLink = () => Effect.succeed(link);
         const provider = makeNamespaceProvider({
           executor: nodeExecutor,
@@ -720,7 +729,9 @@ describe("Namespace Provider", () => {
         // Then
         const seen = yield* Ref.get(commands);
         expect(seen).toHaveLength(1);
-        expect(seen[0]).toContain("docker exec -u root proofbox-abc123");
+        expect(seen[0]).toContain(
+          "'docker' 'exec' '-u' 'root' 'proofbox-abc123'",
+        );
         expect(seen[0]).toContain("900");
         expect(yield* Ref.get(spawned)).toEqual([
           [
@@ -2040,7 +2051,7 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: one Linux Sandbox in us and one in eu
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        const provider = makeProvider(calls, undefined, listRun, {
           instances: [
             {
               id: "abc123def4567",
@@ -2085,7 +2096,7 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: eu cannot be reached
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        const provider = makeProvider(calls, undefined, listRun, {
           instances: [
             {
               id: "abc123def4567",
@@ -2167,7 +2178,7 @@ describe("Namespace Provider", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
-        fakeDocker({}),
+        undefined,
         () =>
           Effect.succeed({
             exitCode: 1,
@@ -2199,7 +2210,7 @@ describe("Namespace Provider", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
-        fakeDocker({}),
+        undefined,
         () =>
           Effect.succeed(
             done(`${JSON.stringify({ "proofbox.name": "lin000" })}|false\n0\n`),
@@ -2216,6 +2227,48 @@ describe("Namespace Provider", () => {
     }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
 
+  it.effect("get on a Linux Sandbox gives its region and its Snapshot", () =>
+    Effect.gen(function* () {
+      // Given: a Linux Sandbox in us that started from a Snapshot
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(
+        calls,
+        undefined,
+        (commandLine) =>
+          commandLine.includes("'docker' 'inspect'")
+            ? Effect.succeed(
+                done(
+                  `${JSON.stringify({
+                    "proofbox.name": "abc123",
+                    "proofbox.os": "linux",
+                    "proofbox.created-at": "2026-01-01T00:00:00Z",
+                    "proofbox.idle-seconds": "300",
+                    "proofbox.max-life-at": "2099-01-01T00:00:00Z",
+                    "proofbox.snapshot": "5ea1f00d",
+                  })}|true\n`,
+                ),
+              )
+            : listRun(commandLine),
+        {
+          instances: [
+            {
+              id: "abc123def4567",
+              labels: { "proofbox.os": "linux" },
+              region: "us",
+            },
+          ],
+        },
+      );
+      // When
+      const info = yield* provider.get({ name: "abc123def4567", region: "us" });
+      // Then
+      expect({ region: info.region, snapshot: info.snapshot }).toEqual({
+        region: "us",
+        snapshot: "5ea1f00d",
+      });
+    }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
+  );
+
   it.effect("list drops a Linux host whose Sandbox expired", () =>
     Effect.gen(function* () {
       // Given: Docker removed the container at its Deadline; the host
@@ -2223,7 +2276,7 @@ describe("Namespace Provider", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
-        fakeDocker({}),
+        undefined,
         (commandLine) =>
           Effect.succeed(
             commandLine.includes(".proofbox-made")
@@ -2284,17 +2337,19 @@ const warmNamespace = (
     const spawned: Array<string> = [];
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
     const api = fakeApi(calls);
-    const base = fakeDocker({});
-    const docker: DockerClient = {
-      ...base,
-      execStream: () => {
-        counts.execStream += 1;
-        return answer(calls);
-      },
-      execText: (container, user, argv) => {
-        counts.execText += 1;
-        return base.execText(container, user, argv);
-      },
+    const dockerFor = (link: Link): DockerClient<SandboxGoneError> => {
+      const real = makeDockerClient(nodeExecutor, linkDockerHost(link));
+      return {
+        ...real,
+        execStream: () => {
+          counts.execStream += 1;
+          return answer(calls);
+        },
+        execText: (container, user, argv) => {
+          counts.execText += 1;
+          return real.execText(container, user, argv);
+        },
+      };
     };
     const openLink = () =>
       Effect.succeed<Link>({
@@ -2306,7 +2361,10 @@ const warmNamespace = (
         run: (commandLine) => {
           counts.run += 1;
           runs.push(commandLine);
-          return commandLine.includes("docker inspect")
+          if (commandLine.includes("/run/proofbox/deadline")) {
+            return Effect.succeed(done("900\n"));
+          }
+          return commandLine.includes("'docker' 'inspect'")
             ? Effect.succeed(
                 done(
                   `${JSON.stringify({
@@ -2315,7 +2373,7 @@ const warmNamespace = (
                     "proofbox.created-at": "1970-01-01T00:00:00Z",
                     "proofbox.idle-seconds": "900",
                     "proofbox.max-life-at": "2099-01-01T00:00:00Z",
-                  })}|true\n900\n`,
+                  })}|true\n`,
                 ),
               )
             : Effect.succeed(done());
@@ -2346,7 +2404,7 @@ const warmNamespace = (
         linux: makeLinuxHost({
           api,
           fs: nodeFs,
-          dockerFor: () => docker,
+          dockerFor,
         }),
         macos: unusedHost("macos"),
       },
@@ -2442,8 +2500,9 @@ describe("Namespace Provider through the Keeper", () => {
       // Then
       expect(ns.spawned).toEqual([]);
       const watched = ns.runs.slice(before);
-      expect(watched).toHaveLength(1);
-      expect(watched[0]).toContain("docker inspect");
+      expect(watched).toHaveLength(2);
+      expect(watched[0]).toContain("'docker' 'inspect'");
+      expect(watched[1]).toContain("/run/proofbox/deadline");
     }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
