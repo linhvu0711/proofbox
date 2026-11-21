@@ -37,7 +37,7 @@ import {
 import {
   LinkDroppedError,
   NotLoggedInError,
-  type ProviderError,
+  ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
@@ -352,7 +352,6 @@ const listRun = (commandLine: string) => {
 const snapshotRun =
   (
     answers: {
-      readonly pull?: RunResult;
       readonly push?: RunResult;
       readonly base?: RunResult;
     },
@@ -363,9 +362,6 @@ const snapshotRun =
       ran?.push(commandLine);
       if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
         return done(SSHD_HOST_KEY);
-      }
-      if (commandLine.startsWith("docker pull")) {
-        return answers.pull ?? done();
       }
       if (commandLine.startsWith("docker commit")) {
         return answers.push ?? done();
@@ -492,11 +488,8 @@ const prepConfig = (prepTimeout?: string, createTimeout?: string) => {
   );
 };
 
-// A link whose `docker pull` never ends, as a stalled registry pull would.
-const stalledPullRun: Link["run"] = (commandLine) =>
-  commandLine.startsWith("docker pull")
-    ? Effect.never
-    : snapshotRun({})(commandLine);
+// A Docker client whose pull never ends, as a stalled registry pull would.
+const stalledPull = () => fakeDocker({ pull: () => Effect.never });
 
 // A short real pause, so the create's file and ssh-keygen work can finish
 // between two TestClock moves.
@@ -996,7 +989,7 @@ describe("Namespace Provider", () => {
             "ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336",
             ...BASE_EXPIRY,
           ],
-          pulls: [],
+          pulls: ["nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e"],
         });
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
   );
@@ -1009,14 +1002,8 @@ describe("Namespace Provider", () => {
       const images: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ images }),
-        snapshotRun({
-          pull: {
-            exitCode: 1,
-            stdout: "",
-            stderr: "Error response from daemon: manifest unknown\n",
-          },
-        }),
+        fakeDocker({ images, pull: () => Effect.succeed("missing" as const) }),
+        snapshotRun({}),
       );
       // When
       const info = yield* provider.create({
@@ -1216,10 +1203,17 @@ describe("Namespace Provider", () => {
       const images: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ images }),
-        snapshotRun({
-          pull: { exitCode: 1, stdout: "", stderr: "dial tcp: i/o timeout\n" },
+        fakeDocker({
+          images,
+          pull: () =>
+            Effect.fail(
+              new ProviderError({
+                provider: "namespace",
+                reason: "docker pull failed: dial tcp: i/o timeout",
+              }),
+            ),
         }),
+        snapshotRun({}),
       );
       // When
       yield* provider.create({
@@ -1325,9 +1319,9 @@ describe("Namespace Provider", () => {
     "a Linux create whose docker pull never ends stops at the prep limit and deletes the host",
     () =>
       Effect.gen(function* () {
-        // Given: a link whose `docker pull` never ends; the prep limit is 1s
+        // Given: a Docker pull that never ends; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
         // When
         const fiber = yield* Effect.fork(
           provider.create({
@@ -1457,7 +1451,7 @@ describe("Namespace Provider", () => {
       Effect.gen(function* () {
         // Given: a stalled `docker pull`, and a first delete that never ends
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}), {
           destroyStalls: (n) => n === 1,
         });
         const fiber = yield* Effect.fork(
@@ -1487,9 +1481,9 @@ describe("Namespace Provider", () => {
 
   it.effect("a create stopped by the prep limit extends the host no more", () =>
     Effect.gen(function* () {
-      // Given: a link whose `docker pull` never ends; the prep limit is 1s
+      // Given: a Docker pull that never ends; the prep limit is 1s
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
       const fiber = yield* Effect.fork(
         provider.create({
           os: "linux",
@@ -1513,9 +1507,9 @@ describe("Namespace Provider", () => {
 
   it.effect("with no prep setting a stalled create stops at 15 minutes", () =>
     Effect.gen(function* () {
-      // Given: a link whose `docker pull` never ends; no prep setting
+      // Given: a Docker pull that never ends; no prep setting
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-      const provider = makeProvider(calls, fakeDocker({}), stalledPullRun);
+      const provider = makeProvider(calls, stalledPull(), snapshotRun({}));
       // When
       const fiber = yield* Effect.fork(
         provider.create({
@@ -1545,7 +1539,7 @@ describe("Namespace Provider", () => {
       return Effect.gen(function* () {
         // Given: a stalled `docker pull`, and every delete fails as unreachable
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), stalledPullRun, {
+        const provider = makeProvider(calls, stalledPull(), snapshotRun({}), {
           destroyError: new ProviderUnavailableError({
             provider: "namespace",
             reason:

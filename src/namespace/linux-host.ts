@@ -33,12 +33,7 @@ import {
 } from "./namespace-host.ts";
 import { registryRefs } from "./registry-refs.ts";
 import { DEFAULT_LINUX_SIZE, LINUX_SIZES } from "./sizes.ts";
-import {
-  pullSnapshot,
-  pushSnapshot,
-  snapshotRef,
-  snapshotTag,
-} from "./snapshot-image.ts";
+import { pushSnapshot, snapshotRef, snapshotTag } from "./snapshot-image.ts";
 import type { Link } from "./ssh-link.ts";
 
 // Left on a Linux host once its Sandbox is made. Docker removes the
@@ -256,7 +251,7 @@ export const makeLinuxHost = (deps: {
   ) {
     const tag = snapshotTag(tenant, fingerprint);
     const pulled = yield* progress
-      .step("pulling the Snapshot", pullSnapshot(link, tag))
+      .step("pulling the Snapshot", deps.dockerFor(link).pull(tag))
       .pipe(
         Effect.catchAll((error) =>
           progress

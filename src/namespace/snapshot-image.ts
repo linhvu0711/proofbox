@@ -12,22 +12,6 @@ const fail = (reason: string) =>
 export const snapshotTag = (tenant: string, fingerprint: string) =>
   `nscr.io/${tenant}/proofbox-snapshot-linux:${fingerprint}`;
 
-// "missing" is the normal miss: no Snapshot has this Fingerprint yet.
-export const pullSnapshot = Effect.fn("snapshotImage.pullSnapshot")(function* (
-  link: Link,
-  tag: string,
-) {
-  const result = yield* link.run(`docker pull ${tag}`);
-  if (result.exitCode === 0) {
-    return "pulled" as const;
-  }
-  const stderr = result.stderr.toLowerCase();
-  if (stderr.includes("manifest unknown") || stderr.includes("not found")) {
-    return "missing" as const;
-  }
-  return yield* fail(`docker pull failed: ${result.stderr.trim()}`);
-});
-
 // No pause: a paused container fails every `docker exec`, and the Keeper
 // reads that as a broken Sandbox and closes the link this push runs on.
 // The Setup script has ended by now, so nothing is mid-write.
