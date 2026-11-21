@@ -168,18 +168,17 @@ export const readDockerSandbox = Effect.fn("dockerProvider.readDockerSandbox")(
   },
 );
 
-const readOrGone = <E>(
+const readOrGone = Effect.fn("dockerProvider.readOrGone")(function* <E>(
   client: DockerClient<E>,
   brand: ProviderBrand,
   name: string,
-) =>
-  readDockerSandbox(client, brand, name).pipe(
-    Effect.flatMap((found) =>
-      Option.isNone(found)
-        ? Effect.fail(new SandboxGoneError({ id: brand.id(name) }))
-        : Effect.succeed(found.value),
-    ),
-  );
+) {
+  const found = yield* readDockerSandbox(client, brand, name);
+  if (Option.isNone(found)) {
+    return yield* new SandboxGoneError({ id: brand.id(name) });
+  }
+  return found.value;
+});
 
 const writeDeadline = Effect.fn("dockerProvider.writeDeadline")(function* <E>(
   client: DockerClient<E>,
