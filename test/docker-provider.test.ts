@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect, Option, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
@@ -172,5 +173,27 @@ describe("Docker Deadline file", () => {
           reason: "could not read the Deadline: ",
         });
       }),
+  );
+
+  it.effect("connect to a removed Docker container fails as gone", () =>
+    Effect.gen(function* () {
+      // Given: Docker has no container for the Sandbox
+      const provider = makeDockerProvider({
+        client: {
+          ...fakeClient("9999999999\n"),
+          inspect: () => Effect.succeed(Option.none()),
+        },
+        fs: nodeFs,
+      });
+      // When
+      const error = yield* Effect.flip(
+        provider.connect({ name: "abc123", region: undefined }),
+      );
+      // Then
+      expect({ _tag: error._tag, message: error.message }).toEqual({
+        _tag: "SandboxGoneError",
+        message: "Sandbox docker:abc123 is gone",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeContext.layer)),
   );
 });
