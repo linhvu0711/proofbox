@@ -109,7 +109,12 @@ export const ensureBaseImage = Effect.fn("baseImage.ensureBaseImage")(
         .pipe(
           Effect.catchIf(
             (error): error is ProviderError => error instanceof ProviderError,
-            () => Effect.succeed("failed" as const),
+            (error) =>
+              progress
+                .warn(
+                  `could not pull the Base image (${error.message}); building it`,
+                )
+                .pipe(Effect.as("failed" as const)),
           ),
         );
       if (pulled === "pulled") {
