@@ -1607,6 +1607,41 @@ describe("Namespace Provider", () => {
       }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
   );
 
+  it.effect(
+    "a save whose Snapshot expiry call fails warns and still saves",
+    () => {
+      const warnings: Array<string> = [];
+      return Effect.gen(function* () {
+        // Given: the registry does not answer the Snapshot's expiry call
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, undefined, snapshotRun({}), {
+          expiryError: (image) =>
+            image === "proofbox-snapshot-linux@sha256:ab12"
+              ? new ProviderUnavailableError({
+                  provider: "namespace",
+                  reason: "the Registry did not answer",
+                })
+              : undefined,
+        });
+        const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
+          Effect.orDie,
+        );
+        // When
+        yield* snapshots.save(
+          { name: "abc123def4567", region: "us" },
+          "22d0cf15eb8e",
+        );
+        // Then
+        expect(warnings).toEqual([
+          "could not set the Snapshot expiry (the Registry did not answer)",
+        ]);
+      }).pipe(
+        runtimeConfig("us:abc123def4567"),
+        Effect.provide(liveLayers(warnings)),
+      );
+    },
+  );
+
   it.effect("a failed push fails save with the docker error", () =>
     Effect.gen(function* () {
       // Given: the registry refuses the push
