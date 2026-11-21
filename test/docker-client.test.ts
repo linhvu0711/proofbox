@@ -14,6 +14,7 @@ import { it } from "@effect/vitest";
 import { Chunk, ConfigProvider, Effect, Stream } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import {
+  type DockerExecResult,
   type DockerHost,
   makeDockerClient,
 } from "../src/docker/docker-client.ts";
@@ -259,4 +260,105 @@ describe("Docker client build", () => {
       }).toEqual({ _tag: "ProviderError", packs: true });
     }).pipe(Effect.provide(NodeContext.layer));
   });
+});
+
+describe("Docker client pull", () => {
+  const Tag = "nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e";
+
+  // A host that answers every text call with `result`, and keeps the argv
+  // of each call in `argvs`.
+  const answeringHost = (
+    result: DockerExecResult,
+    argvs: Array<ReadonlyArray<string>> = [],
+  ): DockerHost => ({
+    provider: "namespace",
+    run: (argv) =>
+      Effect.sync(() => {
+        argvs.push(argv);
+        return result;
+      }),
+    stream: () => Stream.die("not used"),
+    unavailable: new ProviderUnavailableError({
+      provider: "namespace",
+      reason: "not used",
+    }),
+  });
+
+  it.live("a pull of a tag the registry holds answers pulled", () =>
+    Effect.gen(function* () {
+      // Given: Docker pulls the tag
+      const argvs: Array<ReadonlyArray<string>> = [];
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        answeringHost({ exitCode: 0, stdout: "", stderr: "" }, argvs),
+      );
+      // When
+      const answer = yield* docker.pull(Tag);
+      // Then
+      expect({ answer, argvs }).toEqual({
+        answer: "pulled",
+        argvs: [["pull", Tag]],
+      });
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("a pull of a tag the registry lacks answers missing", () =>
+    Effect.gen(function* () {
+      // Given: the registry has no manifest for the tag
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        answeringHost({
+          exitCode: 1,
+          stdout: "",
+          stderr: "Error response from daemon: manifest unknown\n",
+        }),
+      );
+      // When
+      const answer = yield* docker.pull(Tag);
+      // Then
+      expect(answer).toBe("missing");
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live("a pull of a tag that is not found answers missing", () =>
+    Effect.gen(function* () {
+      // Given: the registry says the tag is not found
+      const docker = makeDockerClient(
+        yield* CommandExecutor.CommandExecutor,
+        answeringHost({
+          exitCode: 1,
+          stdout: "",
+          stderr: `Error response from daemon: ${Tag}: not found\n`,
+        }),
+      );
+      // When
+      const answer = yield* docker.pull(Tag);
+      // Then
+      expect(answer).toBe("missing");
+    }).pipe(Effect.provide(NodeContext.layer)),
+  );
+
+  it.live(
+    "a pull that fails for another reason fails with the docker error",
+    () =>
+      Effect.gen(function* () {
+        // Given: the registry does not answer, after one layer line
+        const docker = makeDockerClient(
+          yield* CommandExecutor.CommandExecutor,
+          answeringHost({
+            exitCode: 1,
+            stdout: "22d0cf15eb8e: Pulling fs layer\n",
+            stderr: "dial tcp: i/o timeout\n",
+          }),
+        );
+        // When
+        const error = yield* Effect.flip(docker.pull(Tag));
+        // Then
+        expect({ _tag: error._tag, message: error.message }).toEqual({
+          _tag: "ProviderError",
+          message:
+            "Provider namespace failed: docker pull failed: dial tcp: i/o timeout",
+        });
+      }).pipe(Effect.provide(NodeContext.layer)),
+  );
 });

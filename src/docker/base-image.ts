@@ -103,11 +103,18 @@ export const ensureBaseImage = Effect.fn("baseImage.ensureBaseImage")(
       return;
     }
     const progress = yield* Progress;
-    if (
-      options?.registry === true &&
-      (yield* progress.step("pulling the Base image", client.pull(image.tag)))
-    ) {
-      return;
+    if (options?.registry === true) {
+      const pulled = yield* progress
+        .step("pulling the Base image", client.pull(image.tag))
+        .pipe(
+          Effect.catchIf(
+            (error): error is ProviderError => error instanceof ProviderError,
+            () => Effect.succeed("failed" as const),
+          ),
+        );
+      if (pulled === "pulled") {
+        return;
+      }
     }
     yield* progress.step("building the Base image", client.build(image));
     if (options?.registry === true) {

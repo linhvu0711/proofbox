@@ -17,7 +17,7 @@ const stubClient = (
 ): DockerClient => ({
   serverArch: Effect.die("unused"),
   imageExists: () => Effect.succeed(imageExists),
-  pull: () => Effect.succeed(false),
+  pull: () => Effect.succeed("missing" as const),
   push: () => Effect.void,
   build: () => build,
   run: () => Effect.die("unused"),
@@ -119,7 +119,8 @@ describe("Base image", () => {
       // Given: no cached image and a registry pull that takes 20 seconds
       const client: DockerClient = {
         ...stubClient(false, Effect.void),
-        pull: () => Effect.sleep("20 seconds").pipe(Effect.as(true)),
+        pull: () =>
+          Effect.sleep("20 seconds").pipe(Effect.as("pulled" as const)),
       };
       const fiber = yield* Effect.fork(
         ensureBaseImage(

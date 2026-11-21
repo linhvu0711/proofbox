@@ -51,7 +51,9 @@ export interface DockerClient<E = never> {
   readonly imageExists: (
     tag: string,
   ) => Effect.Effect<boolean, DockerError | E>;
-  readonly pull: (tag: string) => Effect.Effect<boolean, DockerError | E>;
+  readonly pull: (
+    tag: string,
+  ) => Effect.Effect<"pulled" | "missing", DockerError | E>;
   readonly push: (tag: string) => Effect.Effect<void, DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
@@ -95,6 +97,12 @@ const isDown = (result: { readonly stdout: string; readonly stderr: string }) =>
   DOCKER_DOWN.some(
     (hint) => result.stderr.includes(hint) || result.stdout.includes(hint),
   );
+
+// The registry holds no such tag.
+const isMissing = (result: { readonly stderr: string }) => {
+  const stderr = result.stderr.toLowerCase();
+  return stderr.includes("manifest unknown") || stderr.includes("not found");
+};
 
 // The `docker` on this machine.
 export const localDockerHost = (
@@ -215,12 +223,16 @@ export const makeDockerClient = <E = never>(
   const pull = Effect.fn("DockerClient.pull")(function* (tag: string) {
     const result = yield* capture(["pull", tag]);
     if (result.exitCode === 0) {
-      return true;
+      return "pulled" as const;
     }
     if (isDown(result)) {
       return yield* unavailable();
     }
-    return false;
+    if (isMissing(result)) {
+      return "missing" as const;
+    }
+    // stdout holds only the layer progress.
+    return yield* fail(`docker pull failed: ${tail(result.stderr, 20)}`);
   });
 
   const push = Effect.fn("DockerClient.push")(function* (tag: string) {

@@ -37,6 +37,7 @@ import {
 import {
   LinkDroppedError,
   NotLoggedInError,
+  type ProviderError,
   ProviderLimitError,
   ProviderUnavailableError,
   SandboxGoneError,
@@ -165,9 +166,11 @@ const fakeDocker = (options: {
   readonly tokenService?: number;
   // Collects the image of every `docker run`, its last argument.
   readonly images?: Array<string>;
-  // Whether the host already has the image, and whether a pull finds it.
+  // Whether the host already has the image, and what a pull answers.
   readonly exists?: boolean;
-  readonly pulled?: boolean;
+  readonly pull?: (
+    tag: string,
+  ) => Effect.Effect<"pulled" | "missing", ProviderError>;
   // Collect the tag of every pull and every push.
   readonly pulls?: Array<string>;
   readonly pushed?: Array<string>;
@@ -185,9 +188,9 @@ const fakeDocker = (options: {
     serverArch: Effect.succeed("amd64"),
     imageExists: () => Effect.succeed(options.exists ?? true),
     pull: (tag) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         options.pulls?.push(tag);
-        return options.pulled ?? true;
+        return options.pull?.(tag) ?? Effect.succeed("pulled" as const);
       }),
     push: (tag) =>
       Effect.sync(() => {
@@ -1046,7 +1049,11 @@ describe("Namespace Provider", () => {
       const pushed: Array<string> = [];
       const provider = makeProvider(
         calls,
-        fakeDocker({ exists: false, pulled: false, pushed }),
+        fakeDocker({
+          exists: false,
+          pull: () => Effect.succeed("missing" as const),
+          pushed,
+        }),
       );
       // When
       yield* provider.create({
