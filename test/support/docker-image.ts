@@ -10,7 +10,10 @@ import {
   toolBundleArgs,
   toolBundleForArch,
 } from "../../src/docker/base-image.ts";
-import { makeDockerClient } from "../../src/docker/docker-client.ts";
+import {
+  localDockerHost,
+  makeDockerClient,
+} from "../../src/docker/docker-client.ts";
 import { Progress } from "../../src/progress.ts";
 import { TOOL_BUNDLE } from "../../src/tool-bundle.ts";
 
@@ -18,7 +21,7 @@ export default async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const executor = yield* CommandExecutor.CommandExecutor;
-      const client = makeDockerClient(executor);
+      const client = makeDockerClient(executor, localDockerHost(executor));
       const version = yield* baseImageVersion(BASE_IMAGE_DIR, TOOL_BUNDLE);
       const arch = yield* client.serverArch;
       yield* ensureBaseImage(client, {

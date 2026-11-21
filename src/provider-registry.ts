@@ -30,7 +30,10 @@ export const ProvidersLive = Layer.effect(
       ).pipe(
         Effect.map(([client, provider]) =>
           provider.makeDockerProvider({
-            client: client.makeDockerClient(executor),
+            client: client.makeDockerClient(
+              executor,
+              client.localDockerHost(executor),
+            ),
             fs,
           }),
         ),
@@ -46,17 +49,30 @@ export const ProvidersLive = Layer.effect(
           import("./namespace/ssh-link.ts"),
           import("./namespace/linux-host.ts"),
           import("./namespace/mac-host.ts"),
+          import("./namespace/link-docker.ts"),
         ]),
       ).pipe(
         Effect.map(
-          ([client, api, login, provider, link, linuxHost, macHost]) => {
+          ([
+            client,
+            api,
+            login,
+            provider,
+            link,
+            linuxHost,
+            macHost,
+            linkDocker,
+          ]) => {
             const namespaceLogin = login.makeNamespaceLogin(fs);
             const namespaceApi = api.makeNamespaceApi({
               login: namespaceLogin,
             });
             const openLink = link.makeOpenLink(namespaceApi, executor, fs);
             const dockerFor = (sandbox: Link) =>
-              client.makeDockerClient(executor, sandbox);
+              client.makeDockerClient(
+                executor,
+                linkDocker.linkDockerHost(sandbox),
+              );
             return provider.makeNamespaceProvider({
               api: namespaceApi,
               executor,

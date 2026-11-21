@@ -77,6 +77,31 @@ export const toText = (chunks: Chunk.Chunk<Uint8Array>) =>
     "utf8",
   );
 
+// One event stream to its end: its exit code, and stdout and stderr as
+// text, as captureCommand gives for a process.
+export const collectEvents = Effect.fn("commandEvents.collectEvents")(
+  function* <E>(events: Stream.Stream<ExecEvent, E>) {
+    const collected = yield* Stream.runCollect(events);
+    let exitCode = 1;
+    const out: Array<Uint8Array> = [];
+    const err: Array<Uint8Array> = [];
+    for (const event of Chunk.toReadonlyArray(collected)) {
+      if (event._tag === "Exit") {
+        exitCode = event.code;
+      } else if (event._tag === "Stdout") {
+        out.push(event.bytes);
+      } else {
+        err.push(event.bytes);
+      }
+    }
+    return {
+      exitCode,
+      stdout: toText(Chunk.fromIterable(out)),
+      stderr: toText(Chunk.fromIterable(err)),
+    };
+  },
+);
+
 // Runs one short process to its end: its exit code, and stdout and stderr
 // as text. Both pipes are read at once, so a full stderr cannot block it.
 export const captureCommand = Effect.fn("commandEvents.captureCommand")(
