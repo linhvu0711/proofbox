@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandExecutor } from "@effect/platform";
+import { Command, CommandExecutor } from "@effect/platform";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Chunk, ConfigProvider, Effect, Stream } from "effect";
@@ -160,12 +160,13 @@ describe("Docker client build", () => {
     const archive = join(parent, "work.tar");
     writeFileSync(archive, "keep");
     const received = { bytes: 0 };
-    const tape = process.env.TAPE;
     return Effect.gen(function* () {
-      // Given: TAPE names an archive file
-      process.env.TAPE = archive;
+      // Given: every command the client starts has TAPE set to an archive
+      const executor = yield* CommandExecutor.CommandExecutor;
       const docker = makeDockerClient(
-        yield* CommandExecutor.CommandExecutor,
+        CommandExecutor.makeExecutor((command) =>
+          executor.start(Command.env(command, { TAPE: archive })),
+        ),
         readingHost(received),
       );
       // When
@@ -179,21 +180,11 @@ describe("Docker client build", () => {
         sent: received.bytes > 0,
         archive: readFileSync(archive, "utf8"),
       }).toEqual({ sent: true, archive: "keep" });
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (tape === undefined) {
-            delete process.env.TAPE;
-          } else {
-            process.env.TAPE = tape;
-          }
-        }),
-      ),
-      Effect.provide(NodeContext.layer),
-    );
+    }).pipe(Effect.provide(NodeContext.layer));
   });
 
-  it.live(
+  // Root reads a mode 000 folder, so tar writes no errors there.
+  it.live.skipIf(process.getuid?.() === 0)(
     "a build whose folder tar writes many errors reports the tar",
     () => {
       const parent = mkdtempSync(join(tmpdir(), "proofbox-build-"));
