@@ -203,7 +203,7 @@ const makeMac = (
         Ref.update(detached, (all) => [...all, [rel, args] as const]),
       hosts: {
         linux: unusedHost("linux"),
-        macos: makeMacHost({ openLink, fs: nodeFs }),
+        macos: makeMacHost({ fs: nodeFs }),
       },
     });
     return { provider, calls, requests, commands, detached, links, routed };
@@ -338,7 +338,7 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
-    "a Mac whose sshd cannot be turned on fails create and deletes the Mac",
+    "a Mac whose sshd cannot be started fails create and deletes the Sandbox",
     () =>
       Effect.gen(function* () {
         // Given
@@ -354,7 +354,7 @@ describe("Namespace macOS Provider", () => {
         const error = yield* Effect.flip(mac.provider.create(createMac()));
         // Then
         expect(error.message).toBe(
-          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (sshd cannot be turned on); deleted the Mac",
+          "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be started); deleted the Sandbox",
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
         expect(yield* Ref.get(mac.links)).toEqual(["cli gateway"]);
@@ -362,7 +362,7 @@ describe("Namespace macOS Provider", () => {
   );
 
   it.effect(
-    "a Mac whose sshd cannot be reached fails create and deletes the Mac",
+    "a Mac whose sshd cannot be reached fails create and deletes the Sandbox",
     () => {
       const runtime = runtimeDir();
       return Effect.gen(function* () {
@@ -372,7 +372,7 @@ describe("Namespace macOS Provider", () => {
         const error = yield* Effect.flip(mac.provider.create(createMac()));
         // Then
         expect(error.message).toBe(
-          "Sandbox ns:us:abc123def4567 failed the macOS prepare check (sshd cannot be reached); deleted the Mac",
+          "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be reached); deleted the Sandbox",
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
         expect(
@@ -938,7 +938,7 @@ describe("Namespace macOS Provider", () => {
       const output = yield* CapturedOutput;
       const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
       expect(err).toBe(
-        "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
+        "proofbox: starting sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\nproofbox: making the Secrets RAM disk\nproofbox: checking the login password\nproofbox: keeping the screen awake\nproofbox: taking a test screenshot and capture\n",
       );
     }).pipe(withRuntime(runtimeDir())),
   );
@@ -1145,7 +1145,7 @@ describe("Namespace macOS Provider", () => {
         const output = yield* CapturedOutput;
         const err = Chunk.toReadonlyArray(yield* Ref.get(output.err)).join("");
         expect(err).toBe(
-          "proofbox: turning on sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
+          "proofbox: starting sshd\nproofbox: installing the Tool bundle\nproofbox: checking the Namespace token is out of reach\nproofbox: setting up screen access\n",
         );
         expect(yield* Ref.get(mac.calls)).toContain("destroy us abc123def4567");
       }).pipe(withRuntime(runtimeDir())),

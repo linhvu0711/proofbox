@@ -26,10 +26,9 @@ import {
   type MakeRequest,
   type NamespaceHost,
   sandboxId,
-  turnOnSshd,
 } from "./namespace-host.ts";
 import { DEFAULT_MACOS_SIZE, MACOS_SIZES } from "./sizes.ts";
-import type { Link, OpenLink } from "./ssh-link.ts";
+import type { Link } from "./ssh-link.ts";
 
 // proofbox's own Mac files: the input helper and the Pixel script.
 export const MACOS_DIR = packagePath("images/macos/");
@@ -570,10 +569,13 @@ const writeMacDeadline = Effect.fn("macHost.writeDeadline")(function* (
 // Namespace gives 15.
 const MACOS_SELECTORS = { "macos.version": "26.x" } as const;
 
+// Turns on the Mac's built-in sshd and prints its ed25519 host key.
+const START_SSHD =
+  "sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub";
+
 // A Mac host is the Sandbox itself: no container, and every command runs
 // over the Mac's own sshd.
 export const makeMacHost = (deps: {
-  readonly openLink: OpenLink;
   // File access, handed in when the host is built.
   readonly fs: FileSystem.FileSystem;
 }): NamespaceHost => {
@@ -634,44 +636,12 @@ export const makeMacHost = (deps: {
     return password;
   });
 
-  // Turns on the Mac's own sshd over the gateway, then prepares the Mac
-  // over sshd (ADR 0022).
-  const make = Effect.fn("macHost.make")(function* (
-    link: Link,
+  // Prepares the Mac over its own sshd (ADR 0024).
+  const prepare = Effect.fn("macHost.prepare")(function* (
+    sshd: Link,
     made: MakeRequest,
   ) {
     const { ref } = made;
-    const progress = yield* Progress;
-    yield* progress.step(
-      "turning on sshd",
-      turnOnSshd(
-        link,
-        made.paths,
-        deps.fs,
-        "sudo -n launchctl enable system/com.openssh.sshd && sudo -n launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist && sudo -n ssh-keygen -A >/dev/null && cat /etc/ssh/ssh_host_ed25519_key.pub",
-      ).pipe(
-        Effect.filterOrFail(
-          (on) => on,
-          () =>
-            new MacPrepareError({
-              id: sandboxId(ref),
-              what: "sshd cannot be turned on",
-            }),
-        ),
-      ),
-    );
-    const sshd = yield* deps
-      .openLink(ref, made.paths, "cli", { to: "sshd", user: "runner" })
-      .pipe(
-        Effect.catchTag("ProviderUnavailableError", () =>
-          Effect.fail(
-            new MacPrepareError({
-              id: sandboxId(ref),
-              what: "sshd cannot be reached",
-            }),
-          ),
-        ),
-      );
     return yield* prepareMac(sshd, {
       ref,
       idle: made.req.idle,
@@ -682,7 +652,7 @@ export const makeMacHost = (deps: {
 
   return {
     os: "macos",
-    sshdUser: "runner",
+    sshd: { start: START_SSHD, user: "runner" },
     read: readMac,
     writeDeadline: writeMacDeadline,
     checks: macChecks(),
@@ -701,7 +671,7 @@ export const makeMacHost = (deps: {
         value,
       })),
     },
-    make,
+    prepare,
     folders: { state: MAC_STATE_DIR, secrets: MAC_SECRETS_DIR },
   };
 };

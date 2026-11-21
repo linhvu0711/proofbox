@@ -12,7 +12,6 @@ import {
 import type { Transport } from "./command-checks.ts";
 import {
   type BadLoginsFileError,
-  type LinuxSshdError,
   type LoginExpiredError,
   type MacPrepareError,
   MissingCapabilityError,
@@ -21,6 +20,7 @@ import {
   type ProviderLimitError,
   type ProviderUnavailableError,
   type SandboxGoneError,
+  type SshdStepError,
   type TokenDeniedError,
   type TokenExposedError,
   type TokenPermissionError,
@@ -240,7 +240,7 @@ export interface Provider {
     | ToolBundleHashError
     | TokenExposedError
     | MacPrepareError
-    | LinuxSshdError
+    | SshdStepError
     | NotLoggedInError
     | LoginExpiredError
     | BadLoginsFileError

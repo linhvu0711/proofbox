@@ -5,7 +5,6 @@ import {
   type LinkDroppedError,
   ProviderError,
   type ProviderUnavailableError,
-  platformReason,
   SandboxGoneError,
 } from "../errors.ts";
 import type { KeeperPaths } from "../keeper/paths.ts";
@@ -20,17 +19,24 @@ import type {
   SandboxRef,
 } from "../provider.ts";
 import { formatSandboxId } from "../sandbox-id.ts";
-import { shellJoin } from "../shell.ts";
 import type { Size } from "../size.ts";
 import type { HostResult, Link } from "./ssh-link.ts";
 
 // What the Namespace Provider asks of one host's OS. The Provider keeps the
-// Namespace API calls, list, and the create flow once; a Linux host and a
-// Mac host each do the steps that differ by OS.
+// Namespace API calls and list, and create (`namespace-create.ts`) runs the
+// create flow once; a Linux host and a Mac host each do the steps that
+// differ by OS.
 export interface NamespaceHost {
   readonly os: Os;
-  // The user the host's own sshd logs in as (ADR 0024).
-  readonly sshdUser: string;
+  // How create turns on the host's own sshd (ADR 0024).
+  readonly sshd: {
+    // Installs sshd on a host that lacks it.
+    readonly install?: string | undefined;
+    // Starts sshd and prints its ed25519 host key.
+    readonly start: string;
+    // The user sshd logs in as.
+    readonly user: string;
+  };
   // Reads the Sandbox over the host's link.
   readonly read: (
     link: Link,
@@ -73,15 +79,15 @@ export interface NamespaceHost {
       readonly value: string;
     }>;
   };
-  // Makes the Sandbox once Namespace has made the host and its gateway
-  // link is open.
-  readonly make: (
-    link: Link,
+  // Prepares the Sandbox once create has turned on the host's sshd and
+  // opened its link.
+  readonly prepare: (
+    sshd: Link,
     made: MakeRequest,
   ) => Effect.Effect<
     SandboxInfo,
     CreateError | SandboxGoneError | LinkDroppedError,
-    Progress | Scope.Scope
+    Progress
   >;
   // Where proofbox keeps its own files in the Sandbox.
   readonly folders: SandboxFolders;
@@ -91,7 +97,6 @@ export interface NamespaceHost {
 export interface MakeRequest {
   readonly req: Parameters<Provider["create"]>[0];
   readonly ref: SandboxRef;
-  readonly paths: KeeperPaths;
   readonly size: Size;
   readonly maxLifeAt: Date;
 }
@@ -114,30 +119,34 @@ export const brandFor = (ref: SandboxRef) => ({
   id: () => sandboxId(ref),
 });
 
-// Adds this Sandbox's key to the login's authorized_keys over the gateway
-// link, runs the OS's line that starts sshd and prints its ed25519 host key,
-// and pins that key (ADR 0024). False when the host gives no key.
-export const turnOnSshd = Effect.fn("namespaceHost.turnOnSshd")(function* (
-  link: Link,
-  paths: KeeperPaths,
-  fs: FileSystem.FileSystem,
-  start: string,
-) {
-  const pub = yield* fs.readFileString(`${paths.key}.pub`).pipe(
-    Effect.map((text) => text.trim()),
-    Effect.mapError((error) => fail(platformReason(error))),
-  );
-  const result = yield* link.run(
-    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF ${shellJoin([pub])} ~/.ssh/authorized_keys 2>/dev/null || printf '%s\\n' ${shellJoin([pub])} >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && ${start}`,
-  );
-  if (result.exitCode !== 0 || !/^ssh-ed25519 \S+/.test(result.stdout)) {
-    return false;
-  }
-  const [type, key] = result.stdout.trim().split(/\s+/);
-  yield* fs
-    .writeFileString(paths.sshdKnownHosts, `127.0.0.1 ${type} ${key}\n`, {
-      mode: 0o600,
-    })
-    .pipe(Effect.mapError((error) => fail(platformReason(error))));
-  return true;
-});
+// The gateway key and the stored gateway target sit next to a link's
+// control socket.
+export const linkFiles = (control: string) => {
+  const stem = control.replace(/\.ctl$/, "");
+  return { key: `${stem}.sshkey`, target: `${stem}.sshtarget` };
+};
+
+// Create's cleanup, delete, and the list prune all remove a host's local
+// files, so they share one list.
+export const removeHostFiles = Effect.fn("namespaceHost.removeHostFiles")(
+  function* (paths: KeeperPaths, fs: FileSystem.FileSystem) {
+    const link = linkFiles(paths.control);
+    yield* Effect.forEach(
+      [
+        paths.key,
+        `${paths.key}.pub`,
+        paths.maxLife,
+        paths.deadline,
+        paths.os,
+        paths.control,
+        paths.socket,
+        link.key,
+        link.target,
+        paths.knownHosts,
+        paths.sshdKnownHosts,
+      ],
+      (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
+      { concurrency: "unbounded", discard: true },
+    );
+  },
+);

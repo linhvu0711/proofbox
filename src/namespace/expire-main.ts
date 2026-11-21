@@ -1,6 +1,6 @@
 import { FileSystem } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { Duration, Effect, Option, Schedule } from "effect";
+import { Clock, Duration, Effect, Option, Schedule } from "effect";
 import { deadlineSeconds, parseDeadline } from "../deadline.ts";
 import { SandboxGoneError } from "../errors.ts";
 import { keeperPaths } from "../keeper/paths.ts";
@@ -51,7 +51,9 @@ hostJob(({ region, instanceId, value: at, api }) =>
               : Number.POSITIVE_INFINITY,
             at,
           );
-          const left = Math.floor(destroyAt - Date.now() / 1000);
+          const left = Math.floor(
+            destroyAt - (yield* Clock.currentTimeMillis) / 1000,
+          );
           if (left > 0) {
             yield* Effect.sleep(Duration.seconds(Math.min(left, 60)));
             return true;

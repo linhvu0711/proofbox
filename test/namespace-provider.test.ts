@@ -14,6 +14,7 @@ import {
   Cause,
   Chunk,
   ConfigProvider,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -85,6 +86,8 @@ const fakeApi = (
     readonly destroyError?: ApiError;
     // Whether the nth `destroy` (1-based) never ends, after it is recorded.
     readonly destroyStalls?: (n: number) => boolean;
+    // How long `wait` takes on the Clock, after it is recorded.
+    readonly waitTakes?: Duration.DurationInput;
   },
 ): NamespaceApi => {
   const note = (line: string) => Ref.update(calls, (all) => [...all, line]);
@@ -101,7 +104,14 @@ const fakeApi = (
         }
         return "abc123def4567";
       }),
-    wait: (region, instanceId) => note(`wait ${region} ${instanceId}`),
+    wait: (region, instanceId) =>
+      note(`wait ${region} ${instanceId}`).pipe(
+        Effect.zipRight(
+          options?.waitTakes === undefined
+            ? Effect.void
+            : Effect.sleep(options.waitTakes),
+        ),
+      ),
     destroy: (region, instanceId) =>
       Effect.suspend(() => {
         destroyed += 1;
@@ -413,6 +423,7 @@ const makeProvider = (
     readonly expiryError?: (image: string) => ApiError | undefined;
     readonly destroyError?: ApiError;
     readonly destroyStalls?: (n: number) => boolean;
+    readonly waitTakes?: Duration.DurationInput;
     readonly region?: string;
     readonly forward?: SshForward;
     readonly openLink?: OpenLink;
@@ -444,7 +455,6 @@ const makeProvider = (
         api,
         fs: nodeFs,
         dockerFor: () => docker,
-        openLink,
       }),
       macos: options?.macos ?? unusedHost("macos"),
     },
@@ -452,7 +462,7 @@ const makeProvider = (
 };
 
 // A fresh runtime folder, with the prep limit set when one is given.
-const prepConfig = (prepTimeout?: string) => {
+const prepConfig = (prepTimeout?: string, createTimeout?: string) => {
   const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
   return Effect.withConfigProvider(
     ConfigProvider.fromMap(
@@ -461,6 +471,9 @@ const prepConfig = (prepTimeout?: string) => {
         ...(prepTimeout === undefined
           ? []
           : [["PROOFBOX_NS_PREPARE_TIMEOUT", prepTimeout] as const]),
+        ...(createTimeout === undefined
+          ? []
+          : [["PROOFBOX_NS_CREATE_TIMEOUT", createTimeout] as const]),
       ]),
     ),
   );
@@ -621,12 +634,18 @@ describe("Namespace Provider", () => {
   );
 
   it.effect(
-    "an unreadable local OS file reads as Linux with no API lookup",
+    "an unreadable local OS file fails with a Provider error that names the file",
     () =>
       Effect.gen(function* () {
-        // Given: the local OS file takes precedence over the API label.
+        // Given: an OS file that is a folder, so reading it fails
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const provider = makeProvider(calls, fakeDocker({}), listRun, {
+        const ran: Array<string> = [];
+        const recordingRun: Link["run"] = (commandLine) =>
+          Effect.suspend(() => {
+            ran.push(commandLine);
+            return listRun(commandLine);
+          });
+        const provider = makeProvider(calls, fakeDocker({}), recordingRun, {
           instances: [
             { id: "abc123def4567", labels: { "proofbox.os": "macos" } },
           ],
@@ -637,13 +656,19 @@ describe("Namespace Provider", () => {
         }).pipe(Effect.provide(NodeContext.layer));
         mkdirSync(paths.os);
         // When
-        const info = yield* provider.get({
-          name: "abc123def4567",
-          region: "us",
-        });
+        const error = yield* Effect.flip(
+          provider.get({ name: "abc123def4567", region: "us" }),
+        );
         // Then
-        expect(info.os).toBe("linux");
-        expect(yield* Ref.get(calls)).toEqual([]);
+        expect({
+          message: error.message,
+          calls: yield* Ref.get(calls),
+          ran,
+        }).toEqual({
+          message: `Provider namespace failed: could not read the OS file ${paths.os}: EISDIR: illegal operation on a directory, read`,
+          calls: [],
+          ran: [],
+        });
       }).pipe(runtimeConfig("us:abc123def4567")),
   );
 
@@ -682,7 +707,7 @@ describe("Namespace Provider", () => {
               [provider, rel, args] as const,
             ]),
           hosts: {
-            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor, openLink }),
+            linux: makeLinuxHost({ api, fs: nodeFs, dockerFor }),
             macos: unusedHost("macos"),
           },
         });
@@ -1224,6 +1249,61 @@ describe("Namespace Provider", () => {
   );
 
   it.effect(
+    "a create whose host takes longer than the Max life fails and deletes the host",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace takes 40 s to make the host; the Max life is 30 s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          waitTakes: "40 seconds",
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(10),
+            maxLife: Duration.seconds(30),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "10 seconds", 10);
+        // Then
+        expect({
+          message: failureMessage(exit),
+          destroys: destroys(yield* Ref.get(calls)),
+        }).toEqual({
+          message:
+            "Provider namespace failed: making the host took the whole Max life; try a larger --max-life",
+          destroys: ["destroy us abc123def4567"],
+        });
+      }).pipe(prepConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
+    "a create whose host is not made in time names the wait in minutes and seconds",
+    () =>
+      Effect.gen(function* () {
+        // Given: Namespace takes 5 min to make the host; the create limit is 90s
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          waitTakes: "5 minutes",
+        });
+        // When
+        const fiber = yield* Effect.fork(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(10),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        const exit = yield* driveClock(fiber, "10 seconds", 12);
+        // Then
+        expect(failureMessage(exit)).toBe(
+          "Namespace did not make the host in 1 min 30 s; deleted any half-made host. Try again",
+        );
+      }).pipe(prepConfig(undefined, "90s"), Effect.provide(liveLayers())),
+  );
+
+  it.effect(
     "a Linux create whose docker pull never ends stops at the prep limit and deletes the host",
     () =>
       Effect.gen(function* () {
@@ -1256,14 +1336,24 @@ describe("Namespace Provider", () => {
     "a macOS create whose prep never ends stops at the prep limit and deletes the host",
     () =>
       Effect.gen(function* () {
-        // Given: a Mac host whose sshd step never ends; the prep limit is 1s
+        // Given: a Mac host whose prepare never ends; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const stuck = yield* Deferred.make<void>();
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
-            make: () =>
+            sshd: {
+              start: "cat /etc/ssh/ssh_host_ed25519_key.pub",
+              user: "runner",
+            },
+            prepare: () =>
               Effect.flatMap(Progress, (progress) =>
-                progress.step("turning on sshd", Effect.never),
+                progress.step(
+                  "installing the Tool bundle",
+                  Deferred.succeed(stuck, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                  ),
+                ),
               ),
           },
         });
@@ -1275,6 +1365,9 @@ describe("Namespace Provider", () => {
             maxLife: Duration.hours(3),
           }),
         );
+        // The clock moves only once prepare is stuck: the sshd step before
+        // it reads and writes real files, which can outlast a 1 s step.
+        yield* Deferred.await(stuck);
         const exit = yield* driveClock(fiber, "1 second", 40);
         // Then
         expect({
@@ -1282,7 +1375,7 @@ describe("Namespace Provider", () => {
           destroys: destroys(yield* Ref.get(calls)),
         }).toEqual({
           message:
-            "Namespace did not prepare the host in 1 s (stuck at: turning on sshd); deleted the host. Try again",
+            "Namespace did not prepare the host in 1 s (stuck at: installing the Tool bundle); deleted the host. Try again",
           destroys: ["destroy us abc123def4567"],
         });
       }).pipe(prepConfig("1s"), Effect.provide(liveLayers())),
@@ -1296,14 +1389,22 @@ describe("Namespace Provider", () => {
         // interrupt never ends either, as a `docker rm -f` on a stuck
         // Docker would; the prep limit is 1s
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const stuck = yield* Deferred.make<void>();
         const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
           macos: {
             ...unusedHost("macos"),
-            make: () =>
+            sshd: {
+              start: "cat /etc/ssh/ssh_host_ed25519_key.pub",
+              user: "runner",
+            },
+            prepare: () =>
               Effect.flatMap(Progress, (progress) =>
                 progress.step(
                   "creating docker Sandbox",
-                  Effect.never.pipe(Effect.onInterrupt(() => Effect.never)),
+                  Deferred.succeed(stuck, undefined).pipe(
+                    Effect.zipRight(Effect.never),
+                    Effect.onInterrupt(() => Effect.never),
+                  ),
                 ),
               ),
           },
@@ -1316,6 +1417,9 @@ describe("Namespace Provider", () => {
             maxLife: Duration.hours(3),
           }),
         );
+        // The clock moves only once prepare is stuck: the sshd step before
+        // it reads and writes real files, which can outlast a 1 s step.
+        yield* Deferred.await(stuck);
         const exit = yield* driveClock(fiber, "1 second", 40);
         // Then
         expect({
@@ -1661,7 +1765,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be installed); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be installed); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway"],
         });
@@ -1706,7 +1810,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be started); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be started); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway"],
         });
@@ -1740,7 +1844,7 @@ describe("Namespace Provider", () => {
           links: route.links,
         }).toEqual({
           message:
-            "Sandbox ns:us:abc123def4567 failed the Linux sshd step (sshd cannot be reached); deleted the Sandbox",
+            "Sandbox ns:us:abc123def4567 failed the sshd step (sshd cannot be reached); deleted the Sandbox",
           destroyed: true,
           links: ["cli gateway", "cli sshd root"],
         });
@@ -1828,6 +1932,70 @@ describe("Namespace Provider", () => {
           "destroy us abc123def4567",
         ]);
       }).pipe(runtimeConfig(), Effect.provide(liveLayers())),
+  );
+
+  it.effect("delete removes every local file of the host", () => {
+    const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+    for (const suffix of [
+      ".key",
+      ".key.pub",
+      ".max-life",
+      ".deadline",
+      ".os",
+      ".ctl",
+      ".sock",
+      ".sshkey",
+      ".sshtarget",
+      ".known-hosts",
+      ".sshd-known-hosts",
+    ]) {
+      writeFileSync(join(runtime, `ns-us:abc123def4567${suffix}`), "");
+    }
+    return Effect.gen(function* () {
+      // Given: every local file a host can have
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+        instances: [
+          { id: "abc123def4567", labels: { "proofbox.os": "linux" } },
+        ],
+      });
+      // When: deleted twice, so the second finds the files gone
+      yield* provider.delete({ name: "abc123def4567", region: "us" });
+      yield* provider.delete({ name: "abc123def4567", region: "us" });
+      // Then
+      expect(
+        readdirSync(runtime).filter((name) =>
+          name.startsWith("ns-us:abc123def4567"),
+        ),
+      ).toEqual([]);
+    }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+  });
+
+  it.effect(
+    "a create that fails after the host is stored leaves no local file of the host",
+    () => {
+      const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
+      return Effect.gen(function* () {
+        // Given: an sshd that does not answer, after the host files are written
+        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+        const route = routedLinks(tenantRun, true);
+        const provider = makeProvider(calls, fakeDocker({}), tenantRun, {
+          openLink: route.openLink,
+        });
+        // When
+        yield* Effect.flip(
+          provider.create({
+            os: "linux",
+            idle: Duration.minutes(15),
+            maxLife: Duration.hours(3),
+          }),
+        );
+        // Then
+        expect(
+          readdirSync(runtime).filter((name) => name.startsWith("ns-")),
+        ).toEqual([]);
+      }).pipe(withRuntime(runtime), Effect.provide(liveLayers()));
+    },
   );
 
   // Live clock: the retry's 5 s pace has to actually elapse.
@@ -2179,7 +2347,6 @@ const warmNamespace = (
           api,
           fs: nodeFs,
           dockerFor: () => docker,
-          openLink,
         }),
         macos: unusedHost("macos"),
       },
