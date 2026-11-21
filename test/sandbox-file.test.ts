@@ -1,6 +1,5 @@
-import { Effect, Stream } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import type { DockerClient } from "../src/docker/docker-client.ts";
 import { makeDockerProvider } from "../src/docker/docker-provider.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { makeLinuxHost } from "../src/namespace/linux-host.ts";
@@ -8,23 +7,12 @@ import { makeMacHost } from "../src/namespace/mac-host.ts";
 import type { NamespaceApi } from "../src/namespace/namespace-api.ts";
 import { makeNamespaceProvider } from "../src/namespace/namespace-provider.ts";
 import { sandboxFiles } from "../src/sandbox-file.ts";
+import { unusedDockerClient } from "./support/docker-clients.ts";
 import { nodeExecutor } from "./support/executor.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
-// Building a Provider calls none of these; only its folders are asked.
-const client: DockerClient = {
-  serverArch: Effect.die("unused"),
-  imageExists: () => Effect.die("unused"),
-  pull: () => Effect.die("unused"),
-  push: () => Effect.die("unused"),
-  build: () => Effect.die("unused"),
-  run: () => Effect.die("unused"),
-  execText: () => Effect.die("unused"),
-  execStream: () => Stream.die("unused"),
-  inspect: () => Effect.die("unused"),
-  listNames: Effect.die("unused"),
-  remove: () => Effect.die("unused"),
-};
+// Building a Provider calls none of the client; only its folders are asked.
+const client = unusedDockerClient;
 
 const api: NamespaceApi = {
   create: () => Effect.die("unused"),

@@ -55,6 +55,10 @@ export interface DockerClient<E = never> {
     tag: string,
   ) => Effect.Effect<"pulled" | "missing", DockerError | E>;
   readonly push: (tag: string) => Effect.Effect<void, DockerError | E>;
+  readonly commit: (
+    container: string,
+    tag: string,
+  ) => Effect.Effect<void, DockerError | E>;
   readonly build: (image: {
     readonly dir: string;
     readonly tag: string;
@@ -238,7 +242,32 @@ export const makeDockerClient = <E = never>(
   const push = Effect.fn("DockerClient.push")(function* (tag: string) {
     const result = yield* capture(["push", tag]);
     if (result.exitCode !== 0) {
-      return yield* refuse("docker push failed", result);
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      // stdout holds only the layer progress.
+      return yield* fail(`docker push failed: ${tail(result.stderr, 20)}`);
+    }
+  });
+
+  const commit = Effect.fn("DockerClient.commit")(function* (
+    container: string,
+    tag: string,
+  ) {
+    const result = yield* capture([
+      "commit",
+      // No pause: a paused container fails every `docker exec`, and the
+      // Keeper reads that as a broken Sandbox and closes the link the
+      // commit runs on.
+      "--pause=false",
+      container,
+      tag,
+    ]);
+    if (result.exitCode !== 0) {
+      if (isDown(result)) {
+        return yield* unavailable();
+      }
+      return yield* fail(`docker commit failed: ${tail(result.stderr, 20)}`);
     }
   });
 
@@ -365,6 +394,7 @@ export const makeDockerClient = <E = never>(
     imageExists,
     pull,
     push,
+    commit,
     build,
     run,
     execText,

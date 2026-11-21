@@ -3,30 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Chunk, Effect, Fiber, Layer, Ref, Stream, TestClock } from "effect";
+import { Chunk, Effect, Fiber, Layer, Ref, TestClock } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import { baseImageVersion, ensureBaseImage } from "../src/docker/base-image.ts";
 import type { DockerClient, DockerError } from "../src/docker/docker-client.ts";
 import { ProviderError } from "../src/errors.ts";
 import { Progress } from "../src/progress.ts";
 import { LINUX_TOOL_BUNDLE } from "../src/tool-bundle.ts";
+import { unusedDockerClient } from "./support/docker-clients.ts";
 import { CapturedOutput, testOutput } from "./support/output.ts";
 
 const stubClient = (
   imageExists: boolean,
   build: Effect.Effect<void, DockerError>,
 ): DockerClient => ({
-  serverArch: Effect.die("unused"),
+  ...unusedDockerClient,
   imageExists: () => Effect.succeed(imageExists),
   pull: () => Effect.succeed("missing" as const),
   push: () => Effect.void,
   build: () => build,
-  run: () => Effect.die("unused"),
-  execText: () => Effect.die("unused"),
-  execStream: () => Stream.die("unused"),
-  inspect: () => Effect.die("unused"),
-  listNames: Effect.die("unused"),
-  remove: () => Effect.die("unused"),
 });
 
 describe("Base image", () => {

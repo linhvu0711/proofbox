@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { NodeContext } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, Option, Stream } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, describe, expect } from "vitest";
 import type { DockerClient } from "../src/docker/docker-client.ts";
 import {
@@ -10,6 +10,7 @@ import {
   sandboxInfoFromLabels,
 } from "../src/docker/docker-provider.ts";
 import { cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
+import { unusedDockerClient } from "./support/docker-clients.ts";
 import { nodeFs } from "./support/node-fs.ts";
 
 const NOT_RUNNING = "Docker is not running; start Docker and try again\n";
@@ -127,15 +128,9 @@ describe("Docker Deadline file", () => {
   // A container that runs and holds these labels, whose Deadline file
   // reads as `deadline`.
   const fakeClient = (deadline: string): DockerClient => ({
-    serverArch: Effect.die("not used"),
-    imageExists: () => Effect.die("not used"),
-    pull: () => Effect.die("not used"),
-    push: () => Effect.die("not used"),
-    build: () => Effect.die("not used"),
-    run: () => Effect.die("not used"),
+    ...unusedDockerClient,
     execText: () =>
       Effect.succeed({ exitCode: 0, stdout: deadline, stderr: "" }),
-    execStream: () => Stream.die("not used"),
     inspect: () =>
       Effect.succeed(
         Option.some({
@@ -149,8 +144,6 @@ describe("Docker Deadline file", () => {
           running: true,
         }),
       ),
-    listNames: Effect.die("not used"),
-    remove: () => Effect.die("not used"),
   });
 
   it.effect(

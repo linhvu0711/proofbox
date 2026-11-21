@@ -196,6 +196,7 @@ const fakeDocker = (options: {
       Effect.sync(() => {
         options.pushed?.push(tag);
       }),
+    commit: () => Effect.void,
     build: () => Effect.void,
     run: (args) =>
       Effect.sync(() => {
@@ -352,6 +353,7 @@ const listRun = (commandLine: string) => {
 const snapshotRun =
   (
     answers: {
+      readonly commit?: RunResult;
       readonly push?: RunResult;
       readonly base?: RunResult;
     },
@@ -363,7 +365,10 @@ const snapshotRun =
       if (commandLine.includes("cat /etc/ssh/ssh_host_ed25519_key.pub")) {
         return done(SSHD_HOST_KEY);
       }
-      if (commandLine.startsWith("docker commit")) {
+      if (commandLine.startsWith("'docker' 'commit'")) {
+        return answers.commit ?? done();
+      }
+      if (commandLine.startsWith("'docker' 'push'")) {
         return answers.push ?? done();
       }
       if (commandLine.startsWith("docker image inspect")) {
@@ -1580,11 +1585,7 @@ describe("Namespace Provider", () => {
         // Given: every command on the link succeeds
         const calls = yield* Ref.make<ReadonlyArray<string>>([]);
         const ran: Array<string> = [];
-        const provider = makeProvider(
-          calls,
-          fakeDocker({}),
-          snapshotRun({}, ran),
-        );
+        const provider = makeProvider(calls, undefined, snapshotRun({}, ran));
         const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
           Effect.orDie,
         );
@@ -1595,13 +1596,18 @@ describe("Namespace Provider", () => {
         );
         // Then
         expect({
-          pushed: ran.filter((line) => line.startsWith("docker commit")),
+          pushed: ran.filter(
+            (line) =>
+              line.startsWith("'docker' 'commit'") ||
+              line.startsWith("'docker' 'push'"),
+          ),
           expiry: (yield* Ref.get(calls)).filter((call) =>
             call.startsWith("ensureImageExpiry"),
           ),
         }).toEqual({
           pushed: [
-            "docker commit --pause=false proofbox-abc123 nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e && docker push nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e",
+            "'docker' 'commit' '--pause=false' 'proofbox-abc123' 'nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e'",
+            "'docker' 'push' 'nscr.io/tenant_x/proofbox-snapshot-linux:22d0cf15eb8e'",
           ],
           expiry: ["ensureImageExpiry proofbox-snapshot-linux@sha256:ab12 336"],
         });
@@ -1649,7 +1655,7 @@ describe("Namespace Provider", () => {
       const calls = yield* Ref.make<ReadonlyArray<string>>([]);
       const provider = makeProvider(
         calls,
-        fakeDocker({}),
+        undefined,
         snapshotRun({
           push: {
             exitCode: 1,
@@ -1674,6 +1680,49 @@ describe("Namespace Provider", () => {
       }).toEqual({
         message:
           "Provider namespace failed: docker push failed: denied: requested access to the resource is denied",
+        expiry: [],
+      });
+    }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
+  );
+
+  it.effect("a failed commit fails save with the docker commit error", () =>
+    Effect.gen(function* () {
+      // Given: Docker cannot commit the container
+      const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+      const ran: Array<string> = [];
+      const provider = makeProvider(
+        calls,
+        undefined,
+        snapshotRun(
+          {
+            commit: {
+              exitCode: 1,
+              stdout: "",
+              stderr:
+                "Error response from daemon: No such container: proofbox-abc123\n",
+            },
+          },
+          ran,
+        ),
+      );
+      const snapshots = yield* Effect.fromNullable(provider.snapshots).pipe(
+        Effect.orDie,
+      );
+      // When
+      const error = yield* Effect.flip(
+        snapshots.save({ name: "abc123def4567", region: "us" }, "22d0cf15eb8e"),
+      );
+      // Then
+      expect({
+        message: error.message,
+        pushed: ran.filter((line) => line.startsWith("'docker' 'push'")),
+        expiry: (yield* Ref.get(calls)).filter((call) =>
+          call.startsWith("ensureImageExpiry"),
+        ),
+      }).toEqual({
+        message:
+          "Provider namespace failed: docker commit failed: Error response from daemon: No such container: proofbox-abc123",
+        pushed: [],
         expiry: [],
       });
     }).pipe(runtimeConfig("us:abc123def4567"), Effect.provide(liveLayers())),
