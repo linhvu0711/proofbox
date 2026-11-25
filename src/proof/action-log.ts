@@ -53,8 +53,8 @@ export const readActionLog = Effect.fn("actionLog.readActionLog")(function* (
   },
 ) {
   const marks: number[] = [];
-  const clicks: { t: number; x: number; y: number }[] = [];
-  const actions: number[] = [];
+  const clicks: { t: number; x: number; y: number; step: number }[] = [];
+  const actions: { t: number; step: number }[] = [];
   const waits: { t: number; reason: string }[] = [];
   const acting: { kind: ActionKind; t: number }[] = [];
   // Typing that began before the Recording and ended in it.
@@ -87,15 +87,18 @@ export const readActionLog = Effect.fn("actionLog.readActionLog")(function* (
     if (entry.kind !== "type" && entry.kind !== "typed") {
       acting.push({ kind: entry.kind, t });
     }
+    // A line's step comes from the line order, not its time: `record act`
+    // can log a Step mark and its action in the same 10 ms tick.
+    const step = marks.length;
     if (entry.kind === "mark") {
       marks.push(t);
     } else if (entry.kind === "click") {
-      clicks.push({ t, x: entry.x, y: entry.y });
+      clicks.push({ t, x: entry.x, y: entry.y, step });
     } else if (entry.kind === "wait") {
       waits.push({ t, reason: entry.reason });
     }
     if (POINT_ACTIONS.has(entry.kind) || entry.kind === "type") {
-      actions.push(t);
+      actions.push({ t, step });
     }
   }
   return {
