@@ -230,7 +230,13 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         stop: info.stop,
         duration: probe.duration,
       });
-      if (!events.acted && nothingChanged(check)) {
+      // A Step mark or Wait mark says the still screen is the point (ADR 0006).
+      if (
+        !events.acted &&
+        events.marks.length === 0 &&
+        events.waits.length === 0 &&
+        nothingChanged(check)
+      ) {
         return yield* new NothingChangedError({
           id: options.id,
           raw: rawRecording(info.dir),
