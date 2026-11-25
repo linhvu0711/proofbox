@@ -67,6 +67,33 @@ describe("Capability", () => {
     );
   });
 
+  it("click --mark on a Provider with no desktop is refused", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "click",
+      id,
+      "10",
+      "10",
+      "--mark",
+      "step 1",
+    ]);
+    // Then
+    expect(result.exitCode).toBe(125);
+    expect(result.stderr).toBe(
+      "Provider fake lacks the Capability desktop; no action was taken\n",
+    );
+  });
+
   it("with FORCE_COLOR=1 a refused click prints ✘ and no ✔", async () => {
     // Given
     const env = makeEnv();
