@@ -820,7 +820,7 @@ describe("Recording and the Proof video", () => {
 
   it("click --mark puts the caption and the click ring in the Proof video", async () => {
     // Given: as "a click that changes few pixels rings in the Proof video",
-    // with each Step mark set by the click that starts its step
+    // with each Step mark set by the fast click that starts its step
     const env = makeEnv({ docker: true });
     const created = await create(env);
     const id = created.stdout.trim();
@@ -846,6 +846,8 @@ describe("Recording and the Proof video", () => {
       id,
       "100",
       "100",
+      "--pace",
+      "fast",
       "--mark",
       "step 2: click the bare desktop",
     ]);
@@ -867,12 +869,25 @@ describe("Recording and the Proof video", () => {
       "cat",
       "/run/proofbox/recordings/1/edit.txt",
     ]);
-    expect({
-      caption: edit.stdout.includes(
-        "textfile=/run/proofbox/recordings/1/caption-2.txt",
-      ),
-      ring: edit.stdout.includes("overlay=x=76:y=148"),
-    }).toEqual({ caption: true, ring: true });
+    const window = (pattern: RegExp) => {
+      const match = pattern.exec(edit.stdout);
+      return match === null ? undefined : [Number(match[1]), Number(match[2])];
+    };
+    const caption = window(
+      /caption-2\.txt[^,]*:enable='between\(t,([\d.]+),([\d.]+)\)'/,
+    );
+    const ring = window(
+      /overlay=x=76:y=148:enable='between\(t,([\d.]+),([\d.]+)\)'/,
+    );
+    // The fast click can share its Step mark's 10 ms tick, so the ring must
+    // still play while step 2's caption shows.
+    expect(
+      caption !== undefined &&
+        ring !== undefined &&
+        (caption[0] ?? 0) <= (ring[0] ?? 0) &&
+        (ring[1] ?? 0) <= (caption[1] ?? 0),
+      edit.stdout,
+    ).toBe(true);
   });
 
   it("click --mark off the screen keeps the Step mark and is refused as click is", async () => {
