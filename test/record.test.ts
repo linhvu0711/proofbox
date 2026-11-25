@@ -16,8 +16,12 @@ import {
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { clickAt } from "../src/commands/click.ts";
+import { dragFrom } from "../src/commands/drag.ts";
+import { pressKey } from "../src/commands/key.ts";
 import { setMark } from "../src/commands/mark.ts";
 import { stopRecording } from "../src/commands/record.ts";
+import { scrollAt } from "../src/commands/scroll.ts";
+import { typeText } from "../src/commands/type.ts";
 import {
   CaptureBlockedError,
   NothingChangedError,
@@ -484,6 +488,79 @@ describe("Recording and the Proof video", () => {
           ],
         });
       }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  effectIt.effect(
+    "type, key, scroll, and drag --mark each send one record act call",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        const common = { id, pace: "fast", mark: "step 1" } as const;
+        // When
+        yield* typeText({ ...common, text: "hi" });
+        yield* pressKey({ ...common, keys: "Return" });
+        yield* scrollAt({
+          ...common,
+          x: 640,
+          y: 360,
+          direction: "down",
+          steps: 3,
+        });
+        yield* dragFrom({ ...common, x1: 100, y1: 100, x2: 300, y2: 300 });
+        // Then
+        expect(
+          calls.filter((argv) => argv[0]?.startsWith("/opt/proofbox/")),
+        ).toEqual([
+          [
+            "/opt/proofbox/record",
+            "act",
+            "step 1",
+            "type",
+            "12",
+            "0",
+            "0",
+            "hi",
+          ],
+          ["/opt/proofbox/record", "act", "step 1", "key", "Return", "0", "0"],
+          [
+            "/opt/proofbox/record",
+            "act",
+            "step 1",
+            "scroll",
+            "640",
+            "360",
+            "5",
+            "3",
+            "0",
+            "0",
+            "0",
+          ],
+          [
+            "/opt/proofbox/record",
+            "act",
+            "step 1",
+            "drag",
+            "100",
+            "100",
+            "300",
+            "300",
+            "0",
+            "0",
+            "0",
+          ],
+        ]);
+      }).pipe(Effect.provide(layers(mac)));
     },
   );
 

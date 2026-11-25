@@ -319,7 +319,7 @@ describe("Capability", () => {
     // Then
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain(
-      "$ key [--screenshot text] [--pace human | fast] [--settle text] <id> <keys>",
+      "$ key [--screenshot text] [--pace human | fast] [--mark text] [--settle text] <id> <keys>",
     );
     expect(result.stdout).not.toContain("--glide");
   });

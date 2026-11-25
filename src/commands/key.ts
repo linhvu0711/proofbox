@@ -7,6 +7,7 @@ export const pressKey = Effect.fn("key.pressKey")(function* (options: {
   readonly keys: string;
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
+  readonly mark?: string | undefined;
   readonly settle?: string | undefined;
 }) {
   yield* runAction(options, {
