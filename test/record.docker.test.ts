@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ActionLogLine } from "../src/pixel.ts";
 import { type CliEnv, cleanupEnvs, makeEnv, runCli } from "./support/cli.ts";
 import { startFlicker, startNoise } from "./support/noise.ts";
+import { readXev, startXev } from "./support/xev.ts";
 
 const docker = (args: ReadonlyArray<string>): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -924,6 +925,34 @@ describe("Recording and the Proof video", () => {
         "Point 1440,100 is outside the screen (1440x900); use x 0 to 1439 and y 0 to 899\n",
       stopCode: 0,
       stdout: `{"video":"${dir}/proof.mp4","screenshots":[{"step":1,"label":"step 1: off the screen","path":"${dir}/proof-1.png"}]}\n`,
+    });
+  });
+
+  it("click --mark with no Recording is refused and does not click", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--mark",
+      "step 1",
+    ]);
+    // Then
+    const events = await readXev(env, id);
+    expect({
+      code: result.exitCode,
+      stderr: result.stderr,
+      presses: events.filter((event) => event.type === "ButtonPress").length,
+    }).toEqual({
+      code: 125,
+      stderr: `No Recording is running on ${id}; run record start first\n`,
+      presses: 0,
     });
   });
 

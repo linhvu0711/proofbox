@@ -2,6 +2,7 @@ import { FileSystem } from "@effect/platform";
 import { Duration, Effect, Schema } from "effect";
 import { PACE_SPAN, parseSpan } from "./deadline.ts";
 import {
+  NoRecordingError,
   OutFileError,
   OutsideScreenError,
   ProviderError,
@@ -9,6 +10,7 @@ import {
 } from "./errors.ts";
 import { type HelperLimit, type HelperTable, runHelper } from "./helper.ts";
 import type { Os } from "./provider.ts";
+import { checkMarkLabel, reportMark } from "./step-mark.ts";
 
 const PIXEL_HELPER: HelperTable = {
   feature: "desktop",
@@ -151,6 +153,9 @@ export const runPixel = Effect.fn("pixel.runPixel")(function* (
       : ["act", options.mark, ...helperArgv],
     { outcome: "no action was taken", limit: options.limit },
   );
+  if (options.mark !== undefined && collected.code === 5) {
+    return yield* new NoRecordingError({ id: rawId });
+  }
   if (collected.code === 3) {
     const [width, height] = collected.stdout
       .toString("utf8")
@@ -205,16 +210,23 @@ export const runAction = Effect.fn("pixel.runAction")(function* (
     readonly extraMs: (pace: Pace) => number;
   },
 ) {
+  const mark =
+    options.mark === undefined
+      ? undefined
+      : yield* checkMarkLabel(options.mark);
   const pace = yield* resolvePace(options, action.textLength ?? 0);
   const shot = options.screenshot === undefined ? "0" : "1";
   yield* runPixel(options.id, [action.name, ...action.args(pace, shot)], {
     screenshot: options.screenshot,
     points: action.points,
-    mark: options.mark,
+    mark,
     limit: {
       _tag: "Act",
       name: action.name,
       extra: Duration.millis(action.extraMs(pace)),
     },
   });
+  if (options.mark !== undefined && mark !== undefined) {
+    yield* reportMark({ label: mark, given: options.mark, wait: false });
+  }
 });

@@ -358,6 +358,136 @@ describe("Recording and the Proof video", () => {
   );
 
   effectIt.effect(
+    "click --mark refuses an empty label and sends nothing",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        const error = yield* Effect.flip(
+          clickAt({
+            id,
+            x: 640,
+            y: 360,
+            button: "left",
+            pace: "fast",
+            mark: "",
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          calls: calls.filter((argv) => argv[0]?.startsWith("/opt/proofbox/")),
+        }).toEqual({
+          message:
+            'Bad Step mark "": use one line of text, for example "step 3: save the post"',
+          calls: [],
+        });
+      }).pipe(Effect.provide(layers(mac)));
+    },
+  );
+
+  effectIt.effect(
+    "click --mark refuses a label with a line break and sends nothing",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        const error = yield* Effect.flip(
+          clickAt({
+            id,
+            x: 640,
+            y: 360,
+            button: "left",
+            pace: "fast",
+            mark: "step 1\nSave",
+          }),
+        );
+        // Then
+        expect({
+          message: error.message,
+          calls: calls.filter((argv) => argv[0]?.startsWith("/opt/proofbox/")),
+        }).toEqual({
+          message:
+            'Bad Step mark "step 1\nSave": use one line of text, for example "step 3: save the post"',
+          calls: [],
+        });
+      }).pipe(Effect.provide(layers(mac)));
+    },
+  );
+
+  effectIt.effect(
+    "click --mark cuts a label over 60 characters as mark does",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const warnings: string[] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* clickAt({
+          id,
+          x: 640,
+          y: 360,
+          button: "left",
+          pace: "fast",
+          mark: "a".repeat(61),
+        });
+        // Then
+        expect({
+          calls: calls.filter((argv) => argv[0]?.startsWith("/opt/proofbox/")),
+          warnings,
+        }).toEqual({
+          calls: [
+            [
+              "/opt/proofbox/record",
+              "act",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "click",
+              "640",
+              "360",
+              "1",
+              "0",
+              "0",
+              "0",
+            ],
+          ],
+          warnings: [
+            'Step mark cut to 60 characters: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+          ],
+        });
+      }).pipe(Effect.provide(layers(mac, { warnings })));
+    },
+  );
+
+  effectIt.effect(
     "mark cuts a label over 60 characters to 60 and warns",
     () => {
       const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
@@ -562,6 +692,55 @@ describe("Recording and the Proof video", () => {
       code: 125,
       stderr:
         'Bad Step mark "": use one line of text, for example "step 3: save the post"\n',
+    });
+  });
+
+  it("click --mark refuses an empty label", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, ["click", id, "640", "360", "--mark", ""]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "": use one line of text, for example "step 3: save the post"\n',
+    });
+  });
+
+  it("click --mark refuses a label with a line break", async () => {
+    // Given
+    const env = makeEnv();
+    const created = await runCli(env, [
+      "create",
+      "--os",
+      "linux",
+      "--provider",
+      "fake",
+    ]);
+    const id = created.stdout.trim();
+    // When
+    const result = await runCli(env, [
+      "click",
+      id,
+      "640",
+      "360",
+      "--mark",
+      "step 1\nstep 2",
+    ]);
+    // Then
+    expect({ code: result.exitCode, stderr: result.stderr }).toEqual({
+      code: 125,
+      stderr:
+        'Bad Step mark "step 1\nstep 2": use one line of text, for example "step 3: save the post"\n',
     });
   });
 
