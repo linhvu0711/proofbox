@@ -1163,6 +1163,77 @@ describe("Recording and the Proof video", () => {
     expect(result.exitCode, result.stderr).toBe(0);
   });
 
+  it("a still Recording with only a Step mark makes a video and its Proof screenshot", async () => {
+    // Given: nothing moves on screen, and one Step mark inside the Recording
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(1000);
+    await runCli(env, ["mark", id, "step 1: read the page"]);
+    await wait(5000);
+    const out = join(dir, "still.mp4");
+    // When
+    const result = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/run/proofbox/recordings/1/proof.mp4",
+    ]);
+    const shot = readFileSync(join(dir, "still-1.png"));
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      video: /Stream #0:0.*: Video: h264/.test(probe.stderr),
+      shot: [shot.readUInt32BE(16), shot.readUInt32BE(20)],
+    }).toEqual({
+      exitCode: 0,
+      stdout: `${out}\n${join(dir, "still-1.png")}\n`,
+      video: true,
+      shot: [1440, 900],
+    });
+  });
+
+  it("a still Recording with only a Wait mark makes a video", async () => {
+    // Given: nothing moves on screen, and one Wait mark inside the Recording
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await wait(1000);
+    await runCli(env, ["mark", id, "Wait for the page", "--wait"]);
+    await wait(5000);
+    const out = join(dir, "still.mp4");
+    // When
+    const result = await runCli(env, ["record", "stop", id, "--out", out]);
+    // Then
+    const probe = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/tools/ffmpeg",
+      "-hide_banner",
+      "-i",
+      "/run/proofbox/recordings/1/proof.mp4",
+    ]);
+    expect({
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      video: /Stream #0:0.*: Video: h264/.test(probe.stderr),
+    }).toEqual({
+      exitCode: 0,
+      stdout: `${out}\n`,
+      video: true,
+    });
+  });
+
   it("a Recording where nothing changed on screen makes no video", async () => {
     // Given
     const env = makeEnv({ docker: true });
@@ -1183,7 +1254,7 @@ describe("Recording and the Proof video", () => {
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
       "proofbox: building the Proof video\n" +
-        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.\n`,
     );
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -1208,7 +1279,7 @@ describe("Recording and the Proof video", () => {
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
       "proofbox: building the Proof video\n" +
-        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.\n`,
     );
     expect(readdirSync(dir)).toEqual([]);
   });

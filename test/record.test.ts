@@ -1228,7 +1228,7 @@ describe("record stop counts the Action log as change", () => {
             const error = yield* Effect.flip(stopRecording({ id, out }));
             // Then
             expect(error.message).toBe(
-              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.`,
             );
           }),
       ),
@@ -1264,31 +1264,80 @@ describe("record stop counts the Action log as change", () => {
             const error = yield* Effect.flip(stopRecording({ id, out }));
             // Then
             expect(error.message).toBe(
-              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.`,
             );
           }),
       ),
   );
 
   effectIt.effect(
-    "record stop refuses a Recording whose Action log holds only Step marks and no change was seen",
+    "record stop makes a Proof video when the Action log holds only a Wait mark and no change was seen",
     () =>
-      // Given: the click Recording with its click taken out
+      // Given: no seen change, and one Wait mark inside the Recording
       onStoppedMac(
         stillProbe,
-        '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n',
+        '{"t":1004,"kind":"wait","x":0,"y":0,"reason":"Wait for the heading \\"Privacy\\""}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop makes a Proof video when the Action log holds only a Step mark and no change was seen",
+    () =>
+      // Given: no seen change, and one Step mark inside the Recording
+      onStoppedMac(
+        stillProbe,
+        '{"t":1004,"kind":"mark","x":0,"y":0,"step":1}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect(yield* stdoutOf).toBe(`${out}\n`);
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop refuses a Recording whose only Step mark was set before it started",
+    () =>
+      // Given: the Step mark case, with the mark 5 s before the Recording
+      onStoppedMac(
+        stillProbe,
+        '{"t":995,"kind":"mark","x":0,"y":0,"step":1}\n',
         (id, out) =>
           Effect.gen(function* () {
             // When
             const error = yield* Effect.flip(stopRecording({ id, out }));
             // Then
-            expect({
-              error: error instanceof NothingChangedError,
-              message: error.message,
-              video: existsSync(out),
-            }).toEqual({
-              error: true,
-              message: `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+            expect({ error: error._tag, video: existsSync(out) }).toEqual({
+              error: "NothingChangedError",
+              video: false,
+            });
+          }),
+      ),
+  );
+
+  effectIt.effect(
+    "record stop refuses a Recording whose only Wait mark was set after it stopped",
+    () =>
+      // Given: the Wait mark case, with the mark 5 s after the Recording
+      onStoppedMac(
+        stillProbe,
+        '{"t":1305,"kind":"wait","x":0,"y":0,"reason":"Wait for the heading \\"Privacy\\""}\n',
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            const error = yield* Effect.flip(stopRecording({ id, out }));
+            // Then
+            expect({ error: error._tag, video: existsSync(out) }).toEqual({
+              error: "NothingChangedError",
               video: false,
             });
           }),
