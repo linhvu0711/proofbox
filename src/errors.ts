@@ -212,7 +212,7 @@ export class NothingChangedError extends Data.TaggedError(
   readonly raw: string;
 }> {
   get message() {
-    return `Recording on ${this.id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at ${this.raw}; check the app is on screen and record again.`;
+    return `Recording on ${this.id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at ${this.raw}; check the app is on screen, or set a mark if the screen should stay still, and record again.`;
   }
 }
 

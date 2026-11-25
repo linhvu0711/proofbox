@@ -1228,7 +1228,7 @@ describe("record stop counts the Action log as change", () => {
             const error = yield* Effect.flip(stopRecording({ id, out }));
             // Then
             expect(error.message).toBe(
-              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.`,
             );
           }),
       ),
@@ -1264,7 +1264,7 @@ describe("record stop counts the Action log as change", () => {
             const error = yield* Effect.flip(stopRecording({ id, out }));
             // Then
             expect(error.message).toBe(
-              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.`,
+              `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /var/lib/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.`,
             );
           }),
       ),

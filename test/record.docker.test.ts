@@ -1183,7 +1183,7 @@ describe("Recording and the Proof video", () => {
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
       "proofbox: building the Proof video\n" +
-        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.\n`,
     );
     expect(readdirSync(dir)).toEqual([]);
   });
@@ -1208,7 +1208,7 @@ describe("Recording and the Proof video", () => {
     expect(result.exitCode).toBe(125);
     expect(result.stderr).toBe(
       "proofbox: building the Proof video\n" +
-        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen and record again.\n`,
+        `Recording on ${id}: nothing changed on screen, so no Proof video was made. The raw Recording stays at /run/proofbox/recordings/1/raw.mkv; check the app is on screen, or set a mark if the screen should stay still, and record again.\n`,
     );
     expect(readdirSync(dir)).toEqual([]);
   });
