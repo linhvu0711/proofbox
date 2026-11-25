@@ -7,6 +7,7 @@ export const typeText = Effect.fn("type.typeText")(function* (options: {
   readonly text: string;
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
+  readonly mark?: string | undefined;
   readonly letter?: string | undefined;
   readonly typeMax?: string | undefined;
   readonly settle?: string | undefined;

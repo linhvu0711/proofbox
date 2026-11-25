@@ -20,11 +20,7 @@ import { clickAt } from "../src/commands/click.ts";
 import { dragFrom } from "../src/commands/drag.ts";
 import { pressKey } from "../src/commands/key.ts";
 import { setMark } from "../src/commands/mark.ts";
-import {
-  RECORD_HELPER,
-  startRecording,
-  stopRecording,
-} from "../src/commands/record.ts";
+import { startRecording, stopRecording } from "../src/commands/record.ts";
 import { takeScreenshot } from "../src/commands/screenshot.ts";
 import { scrollAt } from "../src/commands/scroll.ts";
 import { typeText } from "../src/commands/type.ts";
@@ -32,6 +28,7 @@ import { LinkDroppedError } from "../src/errors.ts";
 import { makeFakeProvider } from "../src/fake/fake-provider.ts";
 import { fetchHelper } from "../src/helper.ts";
 import { KeeperClient } from "../src/keeper/keeper-client.ts";
+import { RECORD_HELPER } from "../src/pixel.ts";
 import { Progress } from "../src/progress.ts";
 import {
   type ExecEvent,

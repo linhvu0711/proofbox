@@ -107,7 +107,7 @@ describe("render-edit", () => {
       duration: 20,
       freezes: [],
       marks: [0],
-      clicks: [{ t: 5, x: 640, y: 400 }],
+      clicks: [{ t: 5, x: 640, y: 400, step: 1 }],
     });
     const options = {
       width: 1440,
@@ -133,9 +133,9 @@ describe("render-edit", () => {
       ],
       marks: [1, 58, 115],
       clicks: [
-        { t: 1.5, x: 700, y: 400 },
-        { t: 3.5, x: 10, y: 20 },
-        { t: 30, x: 5, y: 5 },
+        { t: 1.5, x: 700, y: 400, step: 1 },
+        { t: 3.5, x: 10, y: 20, step: 1 },
+        { t: 30, x: 5, y: 5, step: 1 },
       ],
     });
     const options = { width: 1440, height: 900, dir: DIR, font: FONT };

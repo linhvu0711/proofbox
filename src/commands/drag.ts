@@ -10,6 +10,7 @@ export const dragFrom = Effect.fn("drag.dragFrom")(function* (options: {
   readonly y2: number;
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
+  readonly mark?: string | undefined;
   readonly glide?: string | undefined;
   readonly settle?: string | undefined;
 }) {

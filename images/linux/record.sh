@@ -35,6 +35,23 @@ log() {
   fi
 }
 
+# step_mark LABEL: save the closing shot of the step now ending, then start
+# a new numbered step with its caption text.
+step_mark() {
+  if [ ! -L "$CUR" ]; then
+    exit 5
+  fi
+  DIR=$(readlink "$CUR")
+  n=$(cat "$DIR/steps" 2>/dev/null || echo 0)
+  if [ "$n" -ge 1 ]; then
+    shot "$DIR/shot-$n.png"
+  fi
+  n=$((n + 1))
+  printf '%s' "$1" > "$DIR/caption-$n.txt"
+  echo "$n" > "$DIR/steps"
+  log mark "$n"
+}
+
 cmd=${1:-}
 [ $# -gt 0 ] && shift
 case "$cmd" in
@@ -95,20 +112,14 @@ case "$cmd" in
     printf '{"dir":"%s","start":%s,"stop":%s,"steps":%s,"width":%s,"height":%s}\n' "$DIR" "$(cat "$DIR/start")" "$(cat "$DIR/stop")" "$steps" "$W" "$H"
     ;;
   mark)
-    # mark LABEL: save the closing shot of the step now ending, then start
-    # a new numbered step with its caption text.
-    if [ ! -L "$CUR" ]; then
-      exit 5
-    fi
-    DIR=$(readlink "$CUR")
-    n=$(cat "$DIR/steps" 2>/dev/null || echo 0)
-    if [ "$n" -ge 1 ]; then
-      shot "$DIR/shot-$n.png"
-    fi
-    n=$((n + 1))
-    printf '%s' "$1" > "$DIR/caption-$n.txt"
-    echo "$n" > "$DIR/steps"
-    log mark "$n"
+    step_mark "$1"
+    ;;
+  act)
+    # act LABEL ACTION ARG...: set a Step mark, then run the Pixel action
+    # in this same call, so a filmed step costs one round trip.
+    step_mark "$1"
+    shift
+    exec /opt/proofbox/pixel "$@"
     ;;
   wait)
     # wait REASON: add a Wait mark to the Action log; REASON is a JSON string.

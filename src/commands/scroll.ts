@@ -13,6 +13,7 @@ export const scrollAt = Effect.fn("scroll.scrollAt")(function* (options: {
   readonly steps: number;
   readonly screenshot?: string | undefined;
   readonly pace: "human" | "fast";
+  readonly mark?: string | undefined;
   readonly glide?: string | undefined;
   readonly settle?: string | undefined;
 }) {

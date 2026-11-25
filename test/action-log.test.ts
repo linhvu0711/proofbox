@@ -125,4 +125,22 @@ describe("Action log", () => {
         ]);
       }),
   );
+
+  it.effect(
+    "an action logged in the same tick as its Step mark belongs to that step",
+    () =>
+      Effect.gen(function* () {
+        // Given: `record act` logs the mark, then the click, at one time
+        const text =
+          '{"t":1002,"kind":"mark","x":0,"y":0,"step":1}\n' +
+          '{"t":1002,"kind":"click","x":720,"y":450}\n';
+        // When
+        const events = yield* readActionLog(text, recording);
+        // Then
+        expect({ clicks: events.clicks, actions: events.actions }).toEqual({
+          clicks: [{ t: 2, x: 720, y: 450, step: 1 }],
+          actions: [{ t: 2, step: 1 }],
+        });
+      }),
+  );
 });

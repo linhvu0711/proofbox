@@ -13,6 +13,7 @@ export const clickAt = Effect.fn("click.clickAt")(function* (options: {
   readonly pace: "human" | "fast";
   readonly glide?: string | undefined;
   readonly settle?: string | undefined;
+  readonly mark?: string | undefined;
 }) {
   yield* runAction(options, {
     name: "click",

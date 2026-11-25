@@ -285,6 +285,12 @@ const actionOptions = {
       `how fast the action moves: human like a person, fast at once; default ${PACE_DEFAULT}`,
     ),
   ),
+  mark: Options.text("mark").pipe(
+    Options.withDescription(
+      "set a Step mark with this label in the same call, during a Recording; one line, over 60 characters is cut to 60, for example 'step 3: Click Save'; default none",
+    ),
+    Options.optional,
+  ),
 };
 
 const glide = Options.text("glide").pipe(
@@ -356,7 +362,7 @@ const click = Command.make(
     glide,
     settle,
   },
-  ({ id, x, y, button, screenshot, pace, glide, settle }) =>
+  ({ id, x, y, button, screenshot, pace, mark, glide, settle }) =>
     clickAt({
       id,
       x,
@@ -364,6 +370,7 @@ const click = Command.make(
       button,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),
@@ -381,12 +388,13 @@ const type = Command.make(
     typeMax,
     settle,
   },
-  ({ id, text, screenshot, pace, letter, typeMax, settle }) =>
+  ({ id, text, screenshot, pace, mark, letter, typeMax, settle }) =>
     typeText({
       id,
       text,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       letter: Option.getOrUndefined(letter),
       typeMax: Option.getOrUndefined(typeMax),
       settle: Option.getOrUndefined(settle),
@@ -405,12 +413,13 @@ const key = Command.make(
     ...actionOptions,
     settle,
   },
-  ({ id, keys, screenshot, pace, settle }) =>
+  ({ id, keys, screenshot, pace, mark, settle }) =>
     pressKey({
       id,
       keys,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       settle: Option.getOrUndefined(settle),
     }),
 ).pipe(Command.withDescription("press keys on the Sandbox screen"));
@@ -443,7 +452,7 @@ const scroll = Command.make(
     glide,
     settle,
   },
-  ({ id, x, y, direction, steps, screenshot, pace, glide, settle }) =>
+  ({ id, x, y, direction, steps, screenshot, pace, mark, glide, settle }) =>
     scrollAt({
       id,
       x,
@@ -452,6 +461,7 @@ const scroll = Command.make(
       steps,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),
@@ -485,7 +495,7 @@ const drag = Command.make(
     glide,
     settle,
   },
-  ({ id, x1, y1, x2, y2, screenshot, pace, glide, settle }) =>
+  ({ id, x1, y1, x2, y2, screenshot, pace, mark, glide, settle }) =>
     dragFrom({
       id,
       x1,
@@ -494,6 +504,7 @@ const drag = Command.make(
       y2,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),

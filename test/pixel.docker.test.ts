@@ -703,4 +703,65 @@ describe("Pixel actions", () => {
       { type: "ButtonPress", root: [700, 400], button: 1 },
     ]);
   });
+
+  it("click --mark --screenshot writes the screen after the click", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    await runCli(env, ["record", "start", id]);
+    const out = join(mkdtempSync(join(tmpdir(), "proofbox-shot-")), "shot.png");
+    // When
+    const result = await runCli(env, [
+      "click",
+      id,
+      "700",
+      "400",
+      "--mark",
+      "step 1: click",
+      "--screenshot",
+      out,
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    const bytes = readFileSync(out);
+    expect({
+      head: [...bytes.subarray(0, 8)],
+      width: bytes.readUInt32BE(16),
+      height: bytes.readUInt32BE(20),
+    }).toEqual({
+      head: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      width: 1440,
+      height: 900,
+    });
+  });
+
+  it("the Pixel helper run through exec still clicks with its own arguments", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    await startXev(env, id);
+    // When
+    const result = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "/opt/proofbox/pixel",
+      "click",
+      "700",
+      "400",
+      "1",
+      "0",
+      "0",
+      "0",
+    ]);
+    // Then
+    const events = await readXev(env, id);
+    expect({
+      code: result.exitCode,
+      presses: events.filter((event) => event.type === "ButtonPress").length,
+    }).toEqual({ code: 0, presses: 1 });
+  });
 });

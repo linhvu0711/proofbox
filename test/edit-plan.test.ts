@@ -140,7 +140,7 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [],
-      actions: [29.5],
+      actions: [{ t: 29.5, step: 1 }],
     };
     // When
     const plan = planEdit(input);
@@ -162,7 +162,7 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [],
-      actions: [10],
+      actions: [{ t: 10, step: 1 }],
     };
     // When
     const plan = planEdit(input);
@@ -185,7 +185,7 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [],
-      actions: [28.9],
+      actions: [{ t: 28.9, step: 1 }],
     };
     // When
     const plan = planEdit(input);
@@ -227,7 +227,7 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [],
-      actions: [29.5],
+      actions: [{ t: 29.5, step: 1 }],
       waits: [{ t: 6, reason: "waiting for the scheduler" }],
     };
     // When
@@ -251,7 +251,7 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [],
-      actions: [29.5],
+      actions: [{ t: 29.5, step: 1 }],
       waits: [{ t: 2, reason: "waiting for the scheduler" }],
     };
     // When
@@ -390,7 +390,7 @@ describe("edit-plan", () => {
       >,
       marks: [0, 15],
       clicks: [],
-      actions: [29.5],
+      actions: [{ t: 29.5, step: 2 }],
     };
     // When
     const plan = planEdit(input);
@@ -557,8 +557,8 @@ describe("edit-plan", () => {
       >,
       marks: [0],
       clicks: [
-        { t: 64.6, x: 100, y: 200 },
-        { t: 79.9, x: 5, y: 6 },
+        { t: 64.6, x: 100, y: 200, step: 1 },
+        { t: 79.9, x: 5, y: 6, step: 1 },
       ],
     };
     // When
@@ -597,9 +597,9 @@ describe("edit-plan", () => {
       ] as ReadonlyArray<readonly [number, number | undefined]>,
       marks: [1, 58, 115],
       clicks: [
-        { t: 1.5, x: 700, y: 400 },
-        { t: 3.5, x: 10, y: 20 },
-        { t: 30, x: 5, y: 5 },
+        { t: 1.5, x: 700, y: 400, step: 1 },
+        { t: 3.5, x: 10, y: 20, step: 1 },
+        { t: 30, x: 5, y: 5, step: 1 },
       ],
     };
     // When
@@ -614,7 +614,7 @@ describe("edit-plan", () => {
       duration: 8,
       freezes: [] as ReadonlyArray<readonly [number, number | undefined]>,
       marks: [] as ReadonlyArray<number>,
-      clicks: [{ t: 7.9, x: 720, y: 450 }],
+      clicks: [{ t: 7.9, x: 720, y: 450, step: 0 }],
     };
     // When
     const plan = planEdit(input);
@@ -774,8 +774,8 @@ describe("edit-plan", () => {
       duration: 40,
       freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
-      clicks: [{ t: 10, x: 1214, y: 24 }],
-      actions: [10],
+      clicks: [{ t: 10, x: 1214, y: 24, step: 1 }],
+      actions: [{ t: 10, step: 1 }],
     });
     // Then
     expect(plan.clips).toEqual([
@@ -796,8 +796,8 @@ describe("edit-plan", () => {
       duration: 40,
       freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
-      clicks: [{ t: 10, x: 1214, y: 24 }],
-      actions: [10],
+      clicks: [{ t: 10, x: 1214, y: 24, step: 1 }],
+      actions: [{ t: 10, step: 1 }],
     });
     // Then
     expect(
@@ -813,7 +813,7 @@ describe("edit-plan", () => {
       freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
       clicks: [],
-      actions: [10],
+      actions: [{ t: 10, step: 1 }],
     });
     // Then
     expect(plan.clips[3]).toEqual({ kind: "cut", from: 9, to: 11, step: 1 });
@@ -826,8 +826,8 @@ describe("edit-plan", () => {
       duration: 40,
       freezes: withoutSpans(iconFreezes, [[10, 10]]),
       marks: [1],
-      clicks: [{ t: 10, x: 1214, y: 24 }],
-      actions: [10],
+      clicks: [{ t: 10, x: 1214, y: 24, step: 1 }],
+      actions: [{ t: 10, step: 1 }],
       waits: [{ t: 12, reason: "the error popup" }],
     });
     // Then
@@ -854,10 +854,13 @@ describe("edit-plan", () => {
       ),
       marks: [1],
       clicks: [
-        { t: 10, x: 1214, y: 24 },
-        { t: 25, x: 700, y: 400 },
+        { t: 10, x: 1214, y: 24, step: 1 },
+        { t: 25, x: 700, y: 400, step: 1 },
       ],
-      actions: [10, 25],
+      actions: [
+        { t: 10, step: 1 },
+        { t: 25, step: 1 },
+      ],
     });
     // Then
     expect(plan.clips[4]).toEqual({
@@ -882,10 +885,13 @@ describe("edit-plan", () => {
       ),
       marks: [1, 20],
       clicks: [
-        { t: 10, x: 1214, y: 24 },
-        { t: 30, x: 700, y: 400 },
+        { t: 10, x: 1214, y: 24, step: 1 },
+        { t: 30, x: 700, y: 400, step: 2 },
       ],
-      actions: [10, 30],
+      actions: [
+        { t: 10, step: 1 },
+        { t: 30, step: 2 },
+      ],
     });
     // Then
     expect({
@@ -915,8 +921,8 @@ describe("edit-plan", () => {
       duration: 10,
       freezes: withoutSpans([[2, undefined]], [[10, 10]]),
       marks: [1],
-      clicks: [{ t: 10, x: 5, y: 5 }],
-      actions: [10],
+      clicks: [{ t: 10, x: 5, y: 5, step: 1 }],
+      actions: [{ t: 10, step: 1 }],
     });
     // Then
     expect(
@@ -931,8 +937,8 @@ describe("edit-plan", () => {
       duration: 10,
       freezes: withoutSpans([[2, undefined]], [[10, 10]]),
       marks: [1, 5],
-      clicks: [{ t: 10, x: 5, y: 5 }],
-      actions: [10],
+      clicks: [{ t: 10, x: 5, y: 5, step: 2 }],
+      actions: [{ t: 10, step: 2 }],
     });
     // Then
     expect(plan.clips).toEqual([
@@ -969,5 +975,43 @@ describe("edit-plan", () => {
       { kind: "cut", from: 24, to: 27, step: 1 },
       { kind: "still", at: 27, seconds: 3, step: 1 },
     ]);
+  });
+
+  it("a click logged in the same tick as its Step mark rings on a still screen", () => {
+    // Given: `record act` logged the Step mark and the click both at 2 s
+    const plan = planEdit({
+      duration: 10,
+      freezes: withoutSpans([[0, undefined]], [[2, 2]]),
+      marks: [2],
+      clicks: [{ t: 2, x: 5, y: 5, step: 1 }],
+      actions: [{ t: 2, step: 1 }],
+    });
+    // Then
+    expect({ clips: plan.clips, rings: plan.rings }).toEqual({
+      clips: [
+        { kind: "cut", from: 2, to: 3, step: 1 },
+        { kind: "still", at: 3, seconds: 3, step: 1 },
+      ],
+      rings: [{ x: 5, y: 5, from: 0, to: 0.8 }],
+    });
+  });
+
+  it("a click logged in the same tick as its Step mark rings under its own caption", () => {
+    // Given: step 1 ends at 2 s, where step 2's mark and its click were logged
+    const plan = planEdit({
+      duration: 10,
+      freezes: [],
+      marks: [1, 2],
+      clicks: [{ t: 2, x: 5, y: 5, step: 2 }],
+      actions: [{ t: 2, step: 2 }],
+    });
+    // Then
+    expect({ captions: plan.captions, rings: plan.rings }).toEqual({
+      captions: [
+        { step: 1, from: 1, to: 6 },
+        { step: 2, from: 6, to: 18 },
+      ],
+      rings: [{ x: 5, y: 5, from: 6, to: 6.8 }],
+    });
   });
 });

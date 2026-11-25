@@ -1272,6 +1272,40 @@ describe("Namespace macOS Recording", () => {
       /:text=» \d+ s later · waiting for the menu:expansion=none:/,
     );
   });
+
+  it("every action takes --mark on a Mac", async () => {
+    // Given: the Mac of this block
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-proof-"));
+    const started = await runCli(env, ["record", "start", id]);
+    expect(started.exitCode, started.stderr).toBe(0);
+    const steps = [
+      ["click", id, "640", "400", "--mark", "step 1: click"],
+      ["key", id, "Escape", "--mark", "step 2: key"],
+      ["type", id, "hi", "--mark", "step 3: type"],
+      ["scroll", id, "640", "400", "down", "--mark", "step 4: scroll"],
+      ["drag", id, "100", "100", "300", "300", "--mark", "step 5: drag"],
+    ];
+    const codes: number[] = [];
+    for (const step of steps) {
+      const done = await runCli(env, [...step, "--pace", "fast"]);
+      codes.push(done.exitCode);
+      await setTimeout(1000);
+    }
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect({ codes, stdout: result.stdout }).toEqual({
+      codes: [0, 0, 0, 0, 0],
+      stdout: `{"video":"${dir}/proof.mp4","screenshots":[{"step":1,"label":"step 1: click","path":"${dir}/proof-1.png"},{"step":2,"label":"step 2: key","path":"${dir}/proof-2.png"},{"step":3,"label":"step 3: type","path":"${dir}/proof-3.png"},{"step":4,"label":"step 4: scroll","path":"${dir}/proof-4.png"},{"step":5,"label":"step 5: drag","path":"${dir}/proof-5.png"}]}\n`,
+    });
+  });
 });
 
 describe("Namespace macOS Secrets", () => {

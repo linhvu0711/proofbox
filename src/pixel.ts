@@ -2,6 +2,7 @@ import { FileSystem } from "@effect/platform";
 import { Duration, Effect, Schema } from "effect";
 import { PACE_SPAN, parseSpan } from "./deadline.ts";
 import {
+  NoRecordingError,
   OutFileError,
   OutsideScreenError,
   ProviderError,
@@ -9,10 +10,16 @@ import {
 } from "./errors.ts";
 import { type HelperLimit, type HelperTable, runHelper } from "./helper.ts";
 import type { Os } from "./provider.ts";
+import { checkMarkLabel, reportMark } from "./step-mark.ts";
 
 const PIXEL_HELPER: HelperTable = {
   feature: "desktop",
   paths: { linux: "/opt/proofbox/pixel", macos: "/opt/proofbox/pixel" },
+};
+
+export const RECORD_HELPER: HelperTable = {
+  feature: "recording",
+  paths: { linux: "/opt/proofbox/record", macos: "/opt/proofbox/record" },
 };
 
 export const ACTION_LOG_PATHS: Readonly<Record<Os, string>> = {
@@ -134,13 +141,21 @@ export const runPixel = Effect.fn("pixel.runPixel")(function* (
   options: {
     readonly screenshot?: string | undefined;
     readonly points?: ReadonlyArray<readonly [number, number]> | undefined;
+    readonly mark?: string | undefined;
     readonly limit: HelperLimit;
   },
 ) {
-  const collected = yield* runHelper(rawId, PIXEL_HELPER, helperArgv, {
-    outcome: "no action was taken",
-    limit: options.limit,
-  });
+  const collected = yield* runHelper(
+    rawId,
+    options.mark === undefined ? PIXEL_HELPER : RECORD_HELPER,
+    options.mark === undefined
+      ? helperArgv
+      : ["act", options.mark, ...helperArgv],
+    { outcome: "no action was taken", limit: options.limit },
+  );
+  if (options.mark !== undefined && collected.code === 5) {
+    return yield* new NoRecordingError({ id: rawId });
+  }
   if (collected.code === 3) {
     const [width, height] = collected.stdout
       .toString("utf8")
@@ -185,6 +200,7 @@ export const runAction = Effect.fn("pixel.runAction")(function* (
     readonly letter?: string | undefined;
     readonly typeMax?: string | undefined;
     readonly settle?: string | undefined;
+    readonly mark?: string | undefined;
   },
   action: {
     readonly name: string;
@@ -194,15 +210,23 @@ export const runAction = Effect.fn("pixel.runAction")(function* (
     readonly extraMs: (pace: Pace) => number;
   },
 ) {
+  const mark =
+    options.mark === undefined
+      ? undefined
+      : yield* checkMarkLabel(options.mark);
   const pace = yield* resolvePace(options, action.textLength ?? 0);
   const shot = options.screenshot === undefined ? "0" : "1";
   yield* runPixel(options.id, [action.name, ...action.args(pace, shot)], {
     screenshot: options.screenshot,
     points: action.points,
+    mark,
     limit: {
       _tag: "Act",
       name: action.name,
       extra: Duration.millis(action.extraMs(pace)),
     },
   });
+  if (options.mark !== undefined && mark !== undefined) {
+    yield* reportMark({ label: mark, given: options.mark, wait: false });
+  }
 });

@@ -49,8 +49,12 @@ interface PlanInput {
     readonly t: number;
     readonly x: number;
     readonly y: number;
+    readonly step: number;
   }>;
-  readonly actions?: ReadonlyArray<number>;
+  readonly actions?: ReadonlyArray<{
+    readonly t: number;
+    readonly step: number;
+  }>;
   readonly waits?: ReadonlyArray<{
     readonly t: number;
     readonly reason: string;
@@ -161,7 +165,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
       return undefined;
     }
     const ended = (input.actions ?? []).some(
-      (t) => end - CALLER_WINDOW <= t && t <= end,
+      ({ t }) => end - CALLER_WINDOW <= t && t <= end,
     );
     return ended ? undefined : labelText(to - from);
   };
@@ -194,12 +198,17 @@ export const planEdit = (input: PlanInput): EditPlan => {
       .filter(
         ([a, b]) => b > a || (a === b && a === input.duration && a > start),
       );
+    // An action of this step at its very start is a change too, as one
+    // that `record act` logged in the same tick as its Step mark.
+    const actsAtStart =
+      step > 0 &&
+      (input.actions ?? []).some((a) => a.step === step && a.t === start);
     const changing: [number, number][] = [];
     let position = start;
     for (const [a, b] of stills) {
       if (a > position) {
         changing.push([position, a]);
-      } else if (a === position && position > start) {
+      } else if (a === position && (position > start || actsAtStart)) {
         changing.push([a, a]);
       }
       position = Math.max(position, b);
@@ -357,7 +366,8 @@ export const planEdit = (input: PlanInput): EditPlan => {
   }
   for (const click of input.clicks) {
     const span = cutSpans.find(
-      ({ from, to }) => click.t >= from && click.t <= to,
+      ({ from, to, step }) =>
+        step === click.step && click.t >= from && click.t <= to,
     );
     if (span === undefined) {
       continue;
