@@ -1,8 +1,8 @@
 import { Duration, Effect } from "effect";
 import { BadMarkError, NoRecordingError, ProviderError } from "../errors.ts";
 import { runHelper } from "../helper.ts";
+import { RECORD_HELPER } from "../pixel.ts";
 import { Progress } from "../progress.ts";
-import { RECORD_HELPER } from "./record.ts";
 
 // The most characters a mark keeps; a longer label is cut to this many.
 const MARK_MAX = 60;

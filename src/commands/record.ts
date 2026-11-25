@@ -9,13 +9,8 @@ import {
   StopFlagsError,
 } from "../errors.ts";
 import { formatMb } from "../format-bytes.ts";
-import {
-  fetchHelper,
-  type HelperLimit,
-  type HelperTable,
-  runHelper,
-} from "../helper.ts";
-import { ACTION_LOG_PATHS } from "../pixel.ts";
+import { fetchHelper, type HelperLimit, runHelper } from "../helper.ts";
+import { ACTION_LOG_PATHS, RECORD_HELPER } from "../pixel.ts";
 import { Progress } from "../progress.ts";
 import {
   captionFile,
@@ -31,11 +26,6 @@ import {
 import { renderEdit } from "../proof/render-edit.ts";
 import { encodeUnderLimit, PROOF_SIZE_DEFAULT } from "../proof/size-limit.ts";
 import type { Os } from "../provider.ts";
-
-export const RECORD_HELPER: HelperTable = {
-  feature: "recording",
-  paths: { linux: "/opt/proofbox/record", macos: "/opt/proofbox/record" },
-};
 
 const CAPTION_FONTS: Readonly<Record<Os, string>> = {
   linux: "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",

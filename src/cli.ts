@@ -353,10 +353,16 @@ const click = Command.make(
       Options.withDescription(`the mouse button; default ${BUTTON_DEFAULT}`),
     ),
     ...actionOptions,
+    mark: Options.text("mark").pipe(
+      Options.withDescription(
+        "set a Step mark with this label in the same call, during a Recording; one line, over 60 characters is cut to 60, for example 'step 3: Click Save'; default none",
+      ),
+      Options.optional,
+    ),
     glide,
     settle,
   },
-  ({ id, x, y, button, screenshot, pace, glide, settle }) =>
+  ({ id, x, y, button, screenshot, pace, mark, glide, settle }) =>
     clickAt({
       id,
       x,
@@ -364,6 +370,7 @@ const click = Command.make(
       button,
       screenshot: Option.getOrUndefined(screenshot),
       pace,
+      mark: Option.getOrUndefined(mark),
       glide: Option.getOrUndefined(glide),
       settle: Option.getOrUndefined(settle),
     }),

@@ -15,6 +15,7 @@ import {
   TestClock,
 } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { clickAt } from "../src/commands/click.ts";
 import { setMark } from "../src/commands/mark.ts";
 import { stopRecording } from "../src/commands/record.ts";
 import {
@@ -310,6 +311,51 @@ describe("Recording and the Proof video", () => {
       });
     }
   });
+
+  effectIt.effect(
+    "click --mark sets the Step mark and clicks in one call",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
+      tempRoots.push(root);
+      const calls: string[][] = [];
+      const mac = markingMac(root, calls);
+      return Effect.gen(function* () {
+        // Given: the stub Mac above
+        const info = yield* mac.create({
+          os: "macos",
+          idle: Duration.minutes(5),
+          maxLife: Duration.hours(1),
+        });
+        const id = `fake:${info.name}`;
+        // When
+        yield* clickAt({
+          id,
+          x: 640,
+          y: 360,
+          button: "left",
+          pace: "fast",
+          mark: "step 3: Click Save",
+        });
+        // Then
+        expect(
+          calls.filter((argv) => argv[0]?.startsWith("/opt/proofbox/")),
+        ).toEqual([
+          [
+            "/opt/proofbox/record",
+            "act",
+            "step 3: Click Save",
+            "click",
+            "640",
+            "360",
+            "1",
+            "0",
+            "0",
+            "0",
+          ],
+        ]);
+      }).pipe(Effect.provide(layers(mac)));
+    },
+  );
 
   effectIt.effect(
     "mark cuts a label over 60 characters to 60 and warns",

@@ -817,6 +817,116 @@ describe("Recording and the Proof video", () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 
+  it("click --mark puts the caption and the click ring in the Proof video", async () => {
+    // Given: as "a click that changes few pixels rings in the Proof video",
+    // with each Step mark set by the click that starts its step
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+      "--mark",
+      "step 1: open the menu",
+    ]);
+    await wait(1000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(6000);
+    await runCli(env, [
+      "click",
+      id,
+      "100",
+      "100",
+      "--mark",
+      "step 2: click the bare desktop",
+    ]);
+    await wait(6000);
+    // When
+    const result = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+    ]);
+    // Then
+    expect(result.exitCode, result.stderr).toBe(0);
+    const edit = await runCli(env, [
+      "exec",
+      id,
+      "--",
+      "cat",
+      "/run/proofbox/recordings/1/edit.txt",
+    ]);
+    expect({
+      caption: edit.stdout.includes(
+        "textfile=/run/proofbox/recordings/1/caption-2.txt",
+      ),
+      ring: edit.stdout.includes("overlay=x=76:y=148"),
+    }).toEqual({ caption: true, ring: true });
+  });
+
+  it("click --mark off the screen keeps the Step mark and is refused as click is", async () => {
+    // Given
+    const env = makeEnv({ docker: true });
+    const created = await create(env);
+    const id = created.stdout.trim();
+    const dir = mkdtempSync(join(tmpdir(), "proofbox-rec-"));
+    await runCli(env, ["record", "start", id]);
+    // When
+    const refused = await runCli(env, [
+      "click",
+      id,
+      "1440",
+      "100",
+      "--mark",
+      "step 1: off the screen",
+    ]);
+    // A Proof video needs the screen to change.
+    await runCli(env, [
+      "click",
+      id,
+      "720",
+      "450",
+      "--button",
+      "right",
+      "--pace",
+      "fast",
+    ]);
+    await wait(2000);
+    await runCli(env, ["key", id, "Escape", "--pace", "fast"]);
+    await wait(2000);
+    const stopped = await runCli(env, [
+      "record",
+      "stop",
+      id,
+      "--out",
+      join(dir, "proof.mp4"),
+      "--json",
+    ]);
+    // Then
+    expect({
+      code: refused.exitCode,
+      stderr: refused.stderr,
+      stopCode: stopped.exitCode,
+      stdout: stopped.stdout,
+    }).toEqual({
+      code: 125,
+      stderr:
+        "Point 1440,100 is outside the screen (1440x900); use x 0 to 1439 and y 0 to 899\n",
+      stopCode: 0,
+      stdout: `{"video":"${dir}/proof.mp4","screenshots":[{"step":1,"label":"step 1: off the screen","path":"${dir}/proof-1.png"}]}\n`,
+    });
+  });
+
   it("mark with no Recording is refused", async () => {
     // Given
     const env = makeEnv({ docker: true });
