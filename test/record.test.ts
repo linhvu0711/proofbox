@@ -32,6 +32,7 @@ import { KeeperClient } from "../src/keeper/keeper-client.ts";
 import { Progress } from "../src/progress.ts";
 import {
   type ExecEvent,
+  type ExecOptions,
   type Provider,
   type ProviderEntry,
   Providers,
@@ -101,17 +102,25 @@ const blockedMac = (root: string, blocked: string): Provider => {
 
 // A fake Mac whose Recording ran 300 s (start 1000, stop 1300), whose check
 // (`probe`) answers with `probe`, and whose Action log holds `actionLog`;
-// a `null` Action log cannot be fetched. The Proof video builds and
-// downloads.
+// a `null` Action log cannot be fetched. The short check, a probe with a
+// threshold, answers with `more.shortProbe`, else with `probe`. The Proof
+// video builds, and `more.scripts` gets each edit script, and downloads.
 const stoppingMac = (
   root: string,
   probe: Stream.Stream<ExecEvent>,
   actionLog: string | null = "",
+  more: {
+    readonly shortProbe?: Stream.Stream<ExecEvent>;
+    readonly scripts?: string[];
+  } = {},
 ): Provider => {
   const base = makeFakeProvider({ fs: nodeFs, root, watch: "none" });
   const dir = "/var/lib/proofbox/recordings/1";
-  const answer = (argv: ReadonlyArray<string>): Stream.Stream<ExecEvent> => {
-    const [, action, remote] = argv;
+  const answer = (
+    argv: ReadonlyArray<string>,
+    options?: ExecOptions,
+  ): Stream.Stream<ExecEvent, ProviderError> => {
+    const [, action, remote, threshold] = argv;
     if (action === "fetch" && remote === "/var/lib/proofbox/action-log.jsonl") {
       return actionLog === null
         ? Stream.make(
@@ -130,9 +139,28 @@ const stoppingMac = (
           );
     }
     if (action === "build") {
-      return Stream.make(
-        { _tag: "Stdout" as const, bytes: new TextEncoder().encode("1000") },
-        { _tag: "Exit" as const, code: 0 },
+      const chunks: Uint8Array[] = [];
+      return Stream.unwrap(
+        Effect.as(
+          options?.stdin === undefined
+            ? Effect.void
+            : Stream.runForEach(options.stdin, (chunk) =>
+                Effect.sync(() => {
+                  chunks.push(chunk);
+                }),
+              ).pipe(
+                Effect.andThen(() => {
+                  more.scripts?.push(Buffer.concat(chunks).toString("utf8"));
+                }),
+              ),
+          Stream.make(
+            {
+              _tag: "Stdout" as const,
+              bytes: new TextEncoder().encode("1000"),
+            },
+            { _tag: "Exit" as const, code: 0 },
+          ),
+        ),
       );
     }
     if (action === "fetch" && remote === `${dir}/proof.mp4`) {
@@ -153,7 +181,7 @@ const stoppingMac = (
       );
     }
     if (action === "probe") {
-      return probe;
+      return threshold === undefined ? probe : (more.shortProbe ?? probe);
     }
     return Stream.make({ _tag: "Exit" as const, code: 1 });
   };
@@ -168,7 +196,9 @@ const stoppingMac = (
     },
     connect: (sandbox) =>
       Effect.map(base.connect(sandbox), (connection) =>
-        withCall(connection, (argv) => answer(commandOf(argv))),
+        withCall(connection, (argv, options) =>
+          answer(commandOf(argv), options),
+        ),
       ),
   };
 };
@@ -1110,24 +1140,34 @@ describe("record stop counts the Action log as change", () => {
     '{"t":1006,"kind":"mark","x":0,"y":0,"step":2}\n';
 
   // Runs `body` on a macos fake Sandbox from `stoppingMac` whose check
-  // answers `probe` and whose Action log holds `actionLog`.
+  // answers `probe`, whose short check answers `more.shortProbe`, and whose
+  // Action log holds `actionLog`. `more.warnings` gets each warning, and
+  // `more.scripts` each edit script.
   const onStoppedMac = <A, E, R>(
     probe: string,
     actionLog: string | null,
     body: (id: string, out: string) => Effect.Effect<A, E, R>,
+    more: {
+      readonly shortProbe?: string;
+      readonly warnings?: string[];
+      readonly scripts?: string[];
+    } = {},
   ) => {
     const root = mkdtempSync(join(tmpdir(), "proofbox-fake-"));
     const runtime = mkdtempSync(join(tmpdir(), "proofbox-runtime-"));
     const dir = mkdtempSync(join(tmpdir(), "proofbox-out-"));
     tempRoots.push(root, runtime, dir);
-    const mac = stoppingMac(
-      root,
+    const answer = (text: string) =>
       Stream.make(
-        { _tag: "Stdout" as const, bytes: new TextEncoder().encode(probe) },
+        { _tag: "Stdout" as const, bytes: new TextEncoder().encode(text) },
         { _tag: "Exit" as const, code: 0 },
-      ),
-      actionLog,
-    );
+      );
+    const mac = stoppingMac(root, answer(probe), actionLog, {
+      ...(more.shortProbe === undefined
+        ? {}
+        : { shortProbe: answer(more.shortProbe) }),
+      ...(more.scripts === undefined ? {} : { scripts: more.scripts }),
+    });
     return Effect.gen(function* () {
       const info = yield* mac.create({
         os: "macos",
@@ -1136,7 +1176,12 @@ describe("record stop counts the Action log as change", () => {
       });
       return yield* body(`fake:${info.name}`, join(dir, "proof.mp4"));
     }).pipe(
-      Effect.provide(layers(mac)),
+      Effect.provide(
+        layers(
+          mac,
+          more.warnings === undefined ? {} : { warnings: more.warnings },
+        ),
+      ),
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["PROOFBOX_RUNTIME_DIR", runtime]])),
       ),
@@ -1285,6 +1330,82 @@ describe("record stop counts the Action log as change", () => {
             expect(yield* stdoutOf).toBe(`${out}\n`);
           }),
       ),
+  );
+
+  // Each hold label and each hold length in frames of an edit script.
+  const holdsOf = (script: string | undefined) => ({
+    labels: [...(script ?? "").matchAll(/:text=(.*?):expansion=none/g)].map(
+      (match) => match[1],
+    ),
+    holds: [...(script ?? "").matchAll(/loop=loop=(\d+)/g)].map(
+      (match) => match[1],
+    ),
+  });
+  const shortWait =
+    '{"t":1001.25,"kind":"wait","x":0,"y":0,"reason":"page settles"}\n';
+
+  effectIt.effect(
+    "record stop shows the Wait mark reason of a still Recording under 3 s",
+    () => {
+      // Given: a 2.5 s Recording the 3 s check finds no Still part in, the
+      // short check finds still from 0 to the end, and one Wait mark
+      const warnings: string[] = [];
+      const scripts: string[] = [];
+      return onStoppedMac(
+        "Duration: 00:00:02.50\n",
+        shortWait,
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect({ warnings, ...holdsOf(scripts[0]) }).toEqual({
+              warnings: [],
+              labels: ["» 3 s later · page settles"],
+              holds: ["119"],
+            });
+          }),
+        {
+          shortProbe:
+            "Duration: 00:00:02.50\nlavfi.freezedetect.freeze_start: 0\n",
+          warnings,
+          scripts,
+        },
+      );
+    },
+  );
+
+  effectIt.effect(
+    "record stop keeps the 3 s check for a Recording under 3 s that moved",
+    () => {
+      // Given: as above, but the short check finds a change in the first
+      // 0.5 s
+      const warnings: string[] = [];
+      const scripts: string[] = [];
+      return onStoppedMac(
+        "Duration: 00:00:02.50\n",
+        shortWait,
+        (id, out) =>
+          Effect.gen(function* () {
+            // When
+            yield* stopRecording({ id, out });
+            // Then
+            expect({ warnings, ...holdsOf(scripts[0]) }).toEqual({
+              warnings: [
+                'Wait mark "page settles" found no free Still part before the first Step mark',
+              ],
+              labels: [],
+              holds: ["119"],
+            });
+          }),
+        {
+          shortProbe:
+            "Duration: 00:00:02.50\nlavfi.freezedetect.freeze_start: 0.5\n",
+          warnings,
+          scripts,
+        },
+      );
+    },
   );
 
   effectIt.effect(

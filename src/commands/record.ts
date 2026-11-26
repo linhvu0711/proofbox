@@ -213,6 +213,14 @@ export const stopRecording = Effect.fn("record.stopRecording")(
         }
         check = parseProbe(again.stdout.toString("utf8"));
       }
+      // The 3 s check finds no Still part in a Recording under 3 s, so a
+      // still one would give its Wait mark no part to name (#292).
+      const [first, ...rest] = check.freezes;
+      const allStill =
+        first !== undefined &&
+        rest.length === 0 &&
+        first[0] === 0 &&
+        first[1] === undefined;
       const actionLog = yield* runHelper(
         options.id,
         RECORD_HELPER,
@@ -244,7 +252,10 @@ export const stopRecording = Effect.fn("record.stopRecording")(
       }
       const plan = planEdit({
         duration: probe.duration,
-        freezes: withoutSpans(probe.freezes, events.spans),
+        freezes: withoutSpans(
+          allStill ? check.freezes : probe.freezes,
+          events.spans,
+        ),
         marks: events.marks,
         clicks: events.clicks,
         actions: events.actions,
