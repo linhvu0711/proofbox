@@ -472,7 +472,7 @@ describe("edit-plan", () => {
     // Given
     const input = {
       duration: 3.5,
-      freezes: [[0, undefined]] as ReadonlyArray<
+      freezes: [[0, undefined]] satisfies ReadonlyArray<
         readonly [number, number | undefined]
       >,
       marks: [],
@@ -500,7 +500,7 @@ describe("edit-plan", () => {
     // Given
     const input = {
       duration: 8.5,
-      freezes: [[5, undefined]] as ReadonlyArray<
+      freezes: [[5, undefined]] satisfies ReadonlyArray<
         readonly [number, number | undefined]
       >,
       marks: [5],
@@ -529,7 +529,7 @@ describe("edit-plan", () => {
     // Given: step 1 is still for 3.5 s and ends at a Step mark
     const input = {
       duration: 12,
-      freezes: [[5, 8.5]] as ReadonlyArray<
+      freezes: [[5, 8.5]] satisfies ReadonlyArray<
         readonly [number, number | undefined]
       >,
       marks: [5, 8.5],
