@@ -468,6 +468,84 @@ describe("edit-plan", () => {
     });
   });
 
+  it("a still step under 4 s shows its Wait mark reason on the hold", () => {
+    // Given
+    const input = {
+      duration: 3.5,
+      freezes: [[0, undefined]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [],
+      clicks: [],
+      waits: [{ t: 1.75, reason: "page settles" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect({ clips: plan.clips, unusedWaits: plan.unusedWaits }).toEqual({
+      clips: [
+        {
+          kind: "still",
+          at: 0,
+          seconds: 4,
+          label: "» 4 s later · page settles",
+          step: 0,
+        },
+      ],
+      unusedWaits: [],
+    });
+  });
+
+  it("a still step 1 under 4 s shows its Wait mark reason on the hold", () => {
+    // Given
+    const input = {
+      duration: 8.5,
+      freezes: [[5, undefined]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [5],
+      clicks: [],
+      waits: [{ t: 6, reason: "page settles" }],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect({
+      last: plan.clips.at(-1),
+      unusedWaits: plan.unusedWaits,
+    }).toEqual({
+      last: {
+        kind: "still",
+        at: 5,
+        seconds: 4,
+        label: "» 4 s later · page settles",
+        step: 1,
+      },
+      unusedWaits: [],
+    });
+  });
+
+  it("a still step under 4 s with no Wait mark is held with no label", () => {
+    // Given: step 1 is still for 3.5 s and ends at a Step mark
+    const input = {
+      duration: 12,
+      freezes: [[5, 8.5]] as ReadonlyArray<
+        readonly [number, number | undefined]
+      >,
+      marks: [5, 8.5],
+      clicks: [],
+    };
+    // When
+    const plan = planEdit(input);
+    // Then
+    expect(plan.clips[1]).toEqual({
+      kind: "still",
+      at: 5,
+      seconds: 4,
+      step: 1,
+    });
+  });
+
   it("a last screen still for 3.5 s before the Step mark gets a 1 s hold", () => {
     // Given: the step's action ends 3.5 s before the next Step mark
     const input = {

@@ -233,9 +233,10 @@ export const planEdit = (input: PlanInput): EditPlan => {
       }
     }
 
-    // This step's Still parts of 4 s or more, in order: each gap between
+    // This step's Still parts that get a hold, in order: each gap between
     // spans, which gets a still clip (its screen changes again at a + 1),
-    // then the tail or the empty step, which end at the step's end.
+    // then the tail or the empty step, which end at the step's end; the
+    // empty step's part counts at any length, since its hold always shows.
     const stillParts: {
       from: number;
       to: number;
@@ -332,7 +333,7 @@ export const planEdit = (input: PlanInput): EditPlan => {
           at: start,
           seconds: 4,
           label:
-            end - start >= 4
+            end - start >= 4 || reason !== undefined
               ? reason !== undefined
                 ? `${labelText(end - start)} · ${reason}`
                 : stillLabel(start, end)
